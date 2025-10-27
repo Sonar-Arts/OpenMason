@@ -2,74 +2,57 @@ package com.openmason.ui.components.textureCreator.tools;
 
 import com.openmason.ui.components.textureCreator.canvas.PixelCanvas;
 import com.openmason.ui.components.textureCreator.commands.DrawCommand;
-import com.openmason.ui.components.textureCreator.selection.RectangularSelection;
 import com.openmason.ui.components.textureCreator.selection.SelectionRegion;
+import com.openmason.ui.components.textureCreator.tools.selection.RectanglePreview;
+import com.openmason.ui.components.textureCreator.tools.selection.RectangleSelectionStrategy;
+import com.openmason.ui.components.textureCreator.tools.selection.SelectionPreview;
+import com.openmason.ui.components.textureCreator.tools.selection.SelectionToolController;
 
 /**
  * Rectangle selection tool - creates rectangular selection regions.
  * Click and drag to create a new rectangular selection.
- * Use the Move tool to translate selections.
  *
- * Pattern: Similar to ColorPickerTool - stores results internally,
- * CanvasPanel reads them and updates state.
+ * REFACTORED: Now uses SelectionToolController with RectangleSelectionStrategy.
+ * This is a compatibility wrapper that maintains the existing API.
  *
- * SOLID: Single responsibility - handles selection creation only
- * KISS: Simple rectangular drag selection
+ * Architecture:
+ * - Controller: SelectionToolController (coordinates tool lifecycle)
+ * - Strategy: RectangleSelectionStrategy (implements rectangle drag logic)
+ *
+ * SOLID: Single responsibility - delegates to controller and strategy
+ * KISS: Simple wrapper around controller
+ * DRY: Reuses common selection logic from controller
  *
  * @author Open Mason Team
  */
 public class RectangleSelectionTool implements DrawingTool {
 
-    // Selection creation
-    private int selectionStartX = -1;
-    private int selectionStartY = -1;
-    private int selectionEndX = -1;
-    private int selectionEndY = -1;
+    // Delegate to controller with rectangle strategy
+    private final SelectionToolController controller;
 
-    // Created selection (read by CanvasPanel)
-    private SelectionRegion createdSelection = null;
+    // Tool options
+    private boolean fixedAspectRatio = false; // When true, constrains selection to 1:1 square ratio
 
-    // Flag for CanvasPanel to read
-    private boolean selectionCreatedThisDrag = false;
+    /**
+     * Creates a rectangle selection tool with default strategy.
+     */
+    public RectangleSelectionTool() {
+        this.controller = new SelectionToolController(new RectangleSelectionStrategy());
+    }
 
     @Override
     public void onMouseDown(int x, int y, int color, PixelCanvas canvas, DrawCommand command) {
-        // Start new selection
-        selectionStartX = x;
-        selectionStartY = y;
-        selectionEndX = x;
-        selectionEndY = y;
-        selectionCreatedThisDrag = false;
-        createdSelection = null;
+        controller.onMouseDown(x, y, color, canvas, command);
     }
 
     @Override
     public void onMouseDrag(int x, int y, int color, PixelCanvas canvas, DrawCommand command) {
-        // Update selection bounds
-        selectionEndX = x;
-        selectionEndY = y;
+        controller.onMouseDrag(x, y, color, canvas, command);
     }
 
     @Override
     public void onMouseUp(int color, PixelCanvas canvas, DrawCommand command) {
-        // Finalize selection
-        if (selectionStartX != -1 && selectionStartY != -1) {
-            // Only create selection if there's an actual area (not just a single point)
-            int width = Math.abs(selectionEndX - selectionStartX);
-            int height = Math.abs(selectionEndY - selectionStartY);
-
-            if (width > 0 || height > 0) {
-                createdSelection = new RectangularSelection(
-                        selectionStartX, selectionStartY,
-                        selectionEndX, selectionEndY
-                );
-                selectionCreatedThisDrag = true;
-            } else {
-                // Single point click - clear selection
-                createdSelection = null;
-                selectionCreatedThisDrag = true;
-            }
-        }
+        controller.onMouseUp(color, canvas, command);
     }
 
     /**
@@ -79,8 +62,15 @@ public class RectangleSelectionTool implements DrawingTool {
      * @return array [startX, startY, endX, endY] or null if not selecting
      */
     public int[] getSelectionPreviewBounds() {
-        if (selectionStartX != -1) {
-            return new int[]{selectionStartX, selectionStartY, selectionEndX, selectionEndY};
+        SelectionPreview preview = controller.getPreview();
+        if (preview instanceof RectanglePreview) {
+            RectanglePreview rectPreview = (RectanglePreview) preview;
+            return new int[]{
+                rectPreview.getStartX(),
+                rectPreview.getStartY(),
+                rectPreview.getEndX(),
+                rectPreview.getEndY()
+            };
         }
         return null;
     }
@@ -92,7 +82,7 @@ public class RectangleSelectionTool implements DrawingTool {
      * @return The created selection, or null if no selection was created
      */
     public SelectionRegion getCreatedSelection() {
-        return createdSelection;
+        return controller.getCreatedSelection();
     }
 
     /**
@@ -102,7 +92,7 @@ public class RectangleSelectionTool implements DrawingTool {
      * @return true if selection state changed
      */
     public boolean wasSelectionCreated() {
-        return selectionCreatedThisDrag;
+        return controller.hasSelection();
     }
 
     /**
@@ -110,26 +100,41 @@ public class RectangleSelectionTool implements DrawingTool {
      * Should be called by CanvasPanel after reading the selection.
      */
     public void clearSelectionCreatedFlag() {
-        selectionCreatedThisDrag = false;
+        controller.clearSelectionFlag();
     }
 
     @Override
     public void reset() {
-        selectionStartX = -1;
-        selectionStartY = -1;
-        selectionEndX = -1;
-        selectionEndY = -1;
-        createdSelection = null;
-        selectionCreatedThisDrag = false;
+        controller.reset();
+        fixedAspectRatio = false; // Reset fixed aspect ratio option
+    }
+
+    /**
+     * Sets whether aspect ratio should be fixed (1:1) during selection.
+     * When true, constrains rectangle to a square.
+     *
+     * @param fixed true to fix aspect ratio, false to allow free-form rectangles
+     */
+    public void setFixedAspectRatio(boolean fixed) {
+        this.fixedAspectRatio = fixed;
+    }
+
+    /**
+     * Checks if aspect ratio is fixed for rectangle selection.
+     *
+     * @return true if aspect ratio is fixed, false otherwise
+     */
+    public boolean isFixedAspectRatio() {
+        return fixedAspectRatio;
     }
 
     @Override
     public String getName() {
-        return "Rectangle Selection";
+        return controller.getName();
     }
 
     @Override
     public String getDescription() {
-        return "Select rectangular regions";
+        return controller.getDescription();
     }
 }
