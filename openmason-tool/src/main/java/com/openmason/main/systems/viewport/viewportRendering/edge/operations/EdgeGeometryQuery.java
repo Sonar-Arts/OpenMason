@@ -32,9 +32,6 @@ public class EdgeGeometryQuery {
     /** Number of float values per edge (2 endpoints × 3 coordinates). */
     private static final int FLOATS_PER_EDGE = 6;
 
-    /** Number of float values per endpoint (x, y, z coordinates). */
-    private static final int FLOATS_PER_ENDPOINT = 3;
-
     /**
      * Gets the endpoint positions of an edge.
      * Extracts the 3D coordinates of both endpoints for the specified edge.
