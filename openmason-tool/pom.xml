@@ -276,6 +276,13 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.openmason.main.mainOpenMason</mainClass>
+                                    <!-- Shading drops the dependencies' Multi-Release flag; without it the JVM
+                                         ignores META-INF/versions/ and Skija falls back to its Java 8 classes
+                                         (NoClassDefFoundError: sun.misc.Cleaner), so Skija screens such as the
+                                         Project Hub never render. -->
+                                    <manifestEntries>
+                                        <Multi-Release>true</Multi-Release>
+                                    </manifestEntries>
                                 </transformer>
                                 <!-- Truffle languages (GraalPy) are discovered via
                                      META-INF/services — merging them is required or the

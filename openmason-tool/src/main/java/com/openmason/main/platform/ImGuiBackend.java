@@ -7,7 +7,11 @@ import imgui.flag.ImGuiConfigFlags;
 import imgui.gl3.ImGuiImplGl3;
 import imgui.glfw.ImGuiImplGlfw;
 
-import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 
 import static org.lwjgl.glfw.GLFW.glfwGetCurrentContext;
 import static org.lwjgl.glfw.GLFW.glfwMakeContextCurrent;
@@ -18,7 +22,8 @@ import static org.lwjgl.glfw.GLFW.glfwMakeContextCurrent;
  */
 public final class ImGuiBackend {
 
-    private static final String FONT_PATH = "openmason-tool/src/main/resources/masonFonts/";
+    /** Classpath folder of the bundled fonts (inside the jar; never read from the working directory). */
+    private static final String FONT_RESOURCE_DIR = "/masonFonts/";
     /** ImGui font atlas size (px) — the body size of all ImGui text at density 1.0. */
     public static final float FONT_SIZE = 16.0f;
     private static final String INI_FILE_PATH = "openmason-tool/imgui.ini";
@@ -51,21 +56,46 @@ public final class ImGuiBackend {
     }
 
     /**
-     * Load JetBrains Mono fonts (Regular, Bold, Medium).
+     * Load JetBrains Mono fonts (Regular, Bold, Medium) from the classpath, so the tool starts from any
+     * working directory (shaded jar, plugin launches, IDE runs).
      * Fails fast if fonts are not found - no fallback to defaults.
      */
     private void loadFonts(ImGuiIO io) {
         String[] fontVariants = {"JetBrainsMono-Regular.ttf", "JetBrainsMono-Bold.ttf", "JetBrainsMono-Medium.ttf"};
 
         for (String fontFile : fontVariants) {
-            File font = new File(FONT_PATH + fontFile);
-            if (!font.exists()) {
-                throw new IllegalStateException("Required font not found: " + font.getAbsolutePath());
-            }
-            io.getFonts().addFontFromFileTTF(font.getPath(), FONT_SIZE);
+            addBundledFont(io, FONT_RESOURCE_DIR + fontFile);
         }
 
         io.getFonts().build();
+    }
+
+    /**
+     * Adds a classpath font through a temporary file. Not addFontFromMemoryTTF: imgui-java passes ImGui a
+     * pointer into the Java array (released right after the call) and ImGui keeps it, both to bake glyphs
+     * on demand (1.92 dynamic fonts) and to free it in destroyContext, which crashed the JVM on exit.
+     * AddFontFromFileTTF copies the file into an ImGui-owned buffer, so the file can go right away.
+     */
+    private static void addBundledFont(ImGuiIO io, String resourcePath) {
+        Path tmp = null;
+        try (InputStream in = ImGuiBackend.class.getResourceAsStream(resourcePath)) {
+            if (in == null) {
+                throw new IllegalStateException("Required font not found on the classpath: " + resourcePath);
+            }
+            tmp = Files.createTempFile("openmason-font-", ".ttf");
+            Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+            io.getFonts().addFontFromFileTTF(tmp.toString(), FONT_SIZE);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to load required font: " + resourcePath, e);
+        } finally {
+            if (tmp != null) {
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException ignored) {
+                    // a leftover file in the temp dir is harmless
+                }
+            }
+        }
     }
 
     /** Start a new ImGui frame (backend + core). */
