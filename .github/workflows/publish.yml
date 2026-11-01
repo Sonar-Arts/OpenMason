@@ -105,7 +105,7 @@ jobs:
         with:
           ref: ${{ env.PUBLISH_SHA }}
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: cenda-*
           path: openmason-engine/cenda/build/natives-stage
