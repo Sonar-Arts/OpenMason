@@ -3,9 +3,6 @@
     <option name="ALTERNATIVE_JRE_PATH" value="ms-25" />
     <option name="ALTERNATIVE_JRE_PATH_ENABLED" value="true" />
     <option name="MAIN_CLASS_NAME" value="com.openmason.main.mainOpenMason" />
-    <!-- The one launch config. Game plugins are not wired in here: the tool detects drop-in jars in
-         <data root>/plugins (Linux: ~/.local/share/OpenMason/plugins; -Dopenmason.plugins.dir
-         overrides), so Stonebreak's openmason-plugin-stonebreak-*-dropin.jar loads when present. -->
     <module name="openmason-tool" />
     <method v="2">
       <option name="Make" enabled="true" />
