@@ -2,9 +2,15 @@ package com.openmason.main.plugins;
 
 import com.openmason.api.OpenMasonPlugin;
 import com.openmason.api.PluginInfo;
+import com.openmason.main.AppPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -15,14 +21,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
+import java.util.stream.Stream;
 
 /**
  * Finds, orders and registers the editor's plugins (#379).
  *
  * <ul>
  *   <li><b>Discovery</b>: the built-in plugins, then every {@link OpenMasonPlugin} provider
- *       {@link ServiceLoader} finds on the module path (or class path). A provider that fails to
- *       load is reported and skipped; a second plugin with an id already taken is skipped.</li>
+ *       {@link ServiceLoader} finds on the module path (or class path), then the drop-in jars in
+ *       {@link #pluginDirs()}. A provider that fails to load is reported and skipped; a second
+ *       plugin with an id already taken is skipped.</li>
  *   <li><b>Order</b>: a plugin registers after everything it {@link OpenMasonPlugin#requires()
  *       requires}; otherwise discovery order (built-ins first) is kept.</li>
  *   <li><b>Failure isolation</b>: a plugin whose {@code register} throws is rolled back (all its
@@ -91,6 +99,85 @@ public final class PluginManager {
      */
     public List<OpenMasonPlugin> discover(ModuleLayer layer) {
         return collect(ServiceLoader.load(layer, OpenMasonPlugin.class));
+    }
+
+    /**
+     * Where drop-in plugin jars are read from: {@value #PLUGINS_DIR_PROPERTY} (one or more folders,
+     * separated like a class path) if set, else {@code <data root>/plugins} (see {@link AppPaths}).
+     */
+    public static List<Path> pluginDirs() {
+        String prop = System.getProperty(PLUGINS_DIR_PROPERTY);
+        if (prop == null || prop.isBlank()) {
+            return List.of(AppPaths.dataRoot().resolve("plugins"));
+        }
+        List<Path> dirs = new ArrayList<>();
+        for (String part : prop.split(java.io.File.pathSeparator)) {
+            if (!part.isBlank()) {
+                dirs.add(Path.of(part.trim()));
+            }
+        }
+        return dirs;
+    }
+
+    /** System property naming the drop-in plugin folder(s). */
+    public static final String PLUGINS_DIR_PROPERTY = "openmason.plugins.dir";
+
+    /** Every plugin in the drop-in jars of {@link #pluginDirs()}, folders in order. */
+    public List<OpenMasonPlugin> discoverDropIns() {
+        List<OpenMasonPlugin> found = new ArrayList<>();
+        for (Path dir : pluginDirs()) {
+            found.addAll(discoverJars(dir));
+        }
+        return found;
+    }
+
+    /**
+     * The plugins in the drop-in jars directly inside {@code dir} (a missing folder has none). Each
+     * {@code *.jar} gets its own class loader whose parent is the editor's: a plugin sees the
+     * editor's API and libraries and carries everything else it needs inside its jar (a game's
+     * plugin bundles the game). Classes the editor already has win, so a jar cannot replace them.
+     * Only providers the jar itself defines count; the editor's own are {@link #discover()}'s. The
+     * loaders stay open for the editor's lifetime (a plugin's classes are used until exit).
+     */
+    public List<OpenMasonPlugin> discoverJars(Path dir) {
+        if (dir == null || !Files.isDirectory(dir)) {
+            return List.of();
+        }
+        List<Path> jars;
+        try (Stream<Path> files = Files.list(dir)) {
+            jars = files.filter(p -> p.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".jar"))
+                    .filter(Files::isRegularFile)
+                    .sorted()
+                    .toList();
+        } catch (IOException e) {
+            logger.error("[plugins] Cannot list plugin folder {}", dir, e);
+            return List.of();
+        }
+        List<OpenMasonPlugin> found = new ArrayList<>();
+        ClassLoader parent = PluginManager.class.getClassLoader();
+        for (Path jar : jars) {
+            try {
+                URLClassLoader loader = new URLClassLoader("plugin:" + jar.getFileName(),
+                        new URL[]{jar.toUri().toURL()}, parent);
+                int before = found.size();
+                for (OpenMasonPlugin p : collect(ServiceLoader.load(OpenMasonPlugin.class, loader))) {
+                    if (p.getClass().getClassLoader() == loader) {
+                        found.add(p);
+                    }
+                }
+                if (found.size() == before) {
+                    logger.warn("[plugins] {} provides no Open Mason plugin", jar);
+                    loader.close();
+                } else {
+                    logger.info("[plugins] Loaded {} plugin(s) from {}", found.size() - before, jar);
+                }
+            } catch (IOException | RuntimeException | LinkageError e) {
+                logger.error("[plugins] Cannot load plugin jar {}", jar, e);
+                statuses.add(new PluginStatus(new PluginInfo("?", jar.getFileName().toString(), "?",
+                        java.util.Set.of(), false, jar.toString()), State.UNLOADABLE, String.valueOf(e.getMessage())));
+            }
+        }
+        return found;
     }
 
     private List<OpenMasonPlugin> collect(ServiceLoader<OpenMasonPlugin> serviceLoader) {

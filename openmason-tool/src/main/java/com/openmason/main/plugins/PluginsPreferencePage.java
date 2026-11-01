@@ -47,7 +47,10 @@ public final class PluginsPreferencePage implements PreferencePage {
     public void render() {
         List<PluginManager.PluginStatus> statuses = plugins.statuses();
         ImGui.textWrapped("Plugins add workspaces, menus, file types, MCP tools and more. They are found on "
-                + "the module path at start-up; changes take effect after a restart.");
+                + "the module path and as jars in the plugin folder at start-up; changes take effect after a restart.");
+        for (java.nio.file.Path dir : PluginManager.pluginDirs()) {
+            ImGui.textDisabled("Plugin folder: " + dir);
+        }
         ImGui.textDisabled("Built into Open Mason (always present): " + contributions(PluginManager.CORE_ID));
         ImGui.spacing();
         if (statuses.isEmpty()) {

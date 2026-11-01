@@ -335,8 +335,8 @@ public class mainOpenMason {
     }
 
     /**
-     * Registers the editor's core features, then the built-in plugins and every plugin found on the
-     * module path (#379), then loads
+     * Registers the editor's core features, then the built-in plugins, every plugin found on the
+     * module path (#379) and the drop-in jars in {@code PluginManager.pluginDirs()}, then loads
      * the user's custom keybinds (after every plugin registered its commands, so none is dropped).
      */
     private void registerPlugins() {
@@ -353,8 +353,10 @@ public class mainOpenMason {
         }
         // The editor's own features first, through the same registrars; a failure here stops start-up.
         com.openmason.main.bootstrap.CoreFeatures.register(registries);
-        pluginManager.registerAll(java.util.List.of(),
-                pluginManager.discover());
+        // The module/class path first, then the drop-in jars (a duplicate id keeps the first).
+        java.util.List<com.openmason.api.OpenMasonPlugin> discovered = new java.util.ArrayList<>(pluginManager.discover());
+        discovered.addAll(pluginManager.discoverDropIns());
+        pluginManager.registerAll(java.util.List.of(), discovered);
         new com.openmason.main.systems.menus.preferences.PreferencesManager().loadKeybindsIntoRegistry(keybinds);
     }
 
