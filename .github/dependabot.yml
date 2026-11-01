@@ -1,0 +1,43 @@
+version: 2
+updates:
+  # Root reactor covers the engine modules (openmason-engine/*) and openmason-tool
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "maven"
+    commit-message:
+      prefix: "deps"
+    assignees:
+      - "Cheese_Yacht"
+    # One weekly PR for minor/patch bumps; major versions arrive as separate PRs
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Monitor GitHub Actions used by .github/workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+    assignees:
+      - "Cheese_Yacht"
+    groups:
+      actions:
+        patterns:
+          - "*"

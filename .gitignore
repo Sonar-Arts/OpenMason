@@ -1,0 +1,51 @@
+# Build output
+target/
+!**/src/**/target/
+build/
+out/
+bin/
+*.class
+*.log
+hs_err_pid*
+replay_pid*
+
+# Maven
+.flattened-pom.xml
+dependency-reduced-pom.xml
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+.vscode/
+*.code-workspace
+nbproject/
+
+# OS
+.DS_Store
+Thumbs.db
+*~
+*.bak
+
+# Agent notes (local only)
+CLAUDE.md
+AGENTS.md
+.claude/
+
+# Open Mason per-user state written next to the tool when it runs from source
+imgui.ini
+Theme.ini
+openmason-tool/preferences.properties
+openmason-tool/src/test/resources/test-config.properties

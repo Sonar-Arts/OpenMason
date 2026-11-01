@@ -1,0 +1,146 @@
+# Publishes Open Mason to GitHub Packages (Maven): com.openmason:openmason-parent, openmason-engine-parent,
+# openmason-engine-core (with every platform's Cenda library under natives/<platform>/),
+# openmason-engine-ui, openmason-engine-voxel, openmason-tool (+ the runnable -shaded jar) and the Cenda
+# native SDK (openmason-cenda:<version>:zip:sdk, the shared native build inputs game-owned native
+# libraries compile against).
+#
+#   tag v<X.Y.Z>  -> release X.Y.Z (immutable in GitHub Packages; also a GitHub Release with the tool jar)
+#   push to main  -> the POM's ${revision} snapshot (e.g. 0.1.1-SNAPSHOT)
+#
+# Each platform's library is built on its own runner, then one job stages them all and deploys. The
+# deploy refuses to run unless every platform made it into the engine-core jar.
+name: publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  natives:
+    name: cenda (${{ matrix.platform }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest,    platform: linux-x86_64,   lib: libcenda_kernels.so }
+          - { os: ubuntu-24.04-arm, platform: linux-aarch64,  lib: libcenda_kernels.so }
+          - { os: windows-latest,   platform: windows-x86_64, lib: cenda_kernels.dll }
+          - { os: macos-latest,     platform: macos-aarch64,  lib: libcenda_kernels.dylib }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure Cenda (release)
+        working-directory: openmason-engine/cenda
+        run: cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps"
+
+      - name: Build Cenda
+        working-directory: openmason-engine/cenda
+        run: cmake --build --preset release --parallel
+
+      - name: Native tests
+        working-directory: openmason-engine/cenda
+        timeout-minutes: 10
+        run: ctest --preset release
+
+      - name: Stage the library
+        run: |
+          out="stage/natives/${{ matrix.platform }}"
+          mkdir -p "$out"
+          for dir in openmason-engine/cenda/build/release/native/kernels \
+                     openmason-engine/cenda/build/release/native/kernels/Release; do
+            if [[ -f "$dir/${{ matrix.lib }}" ]]; then cp "$dir/${{ matrix.lib }}" "$out/"; break; fi
+          done
+          [[ -f "$out/${{ matrix.lib }}" ]] || { echo "::error::${{ matrix.lib }} was not built"; exit 1; }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cenda-${{ matrix.platform }}
+          path: stage/
+          if-no-files-found: error
+
+  deploy:
+    needs: natives
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # GitHub Release for tags
+      packages: write   # GitHub Packages
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: cenda-*
+          path: openmason-engine/cenda/build/natives-stage
+          merge-multiple: true
+
+      - name: Every platform staged
+        run: |
+          find openmason-engine/cenda/build/natives-stage -type f | sort
+          for p in linux-x86_64/libcenda_kernels.so linux-aarch64/libcenda_kernels.so \
+                   windows-x86_64/cenda_kernels.dll macos-aarch64/libcenda_kernels.dylib; do
+            [[ -f "openmason-engine/cenda/build/natives-stage/natives/$p" ]] || { echo "::error::missing $p"; exit 1; }
+          done
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          # Writes ~/.m2/settings.xml with server "github" (the POM's distributionManagement id).
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+            [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::release tags look like v1.2.3, got $GITHUB_REF_NAME"; exit 1; }
+          else
+            v="$(sed -n 's:.*<revision>\([^<]*\)</revision>.*:\1:p' pom.xml | head -n 1)"
+            [[ "$v" == *-SNAPSHOT ]] || { echo "::error::main must carry a -SNAPSHOT revision, got $v"; exit 1; }
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Publishing $v"
+
+      - name: Package
+        # The tests run in ci.yml on the same commit.
+        run: mvn -B -ntp package -DskipTests -Drevision=${{ steps.version.outputs.version }}
+
+      - name: engine-core carries every platform
+        run: |
+          jar=openmason-engine/engine-core/target/openmason-engine-core-${{ steps.version.outputs.version }}.jar
+          jar tf "$jar" | grep '^natives/' | sort
+          n=$(jar tf "$jar" | grep -cE '^natives/[^/]+/(lib)?cenda_kernels\.(so|dll|dylib)$')
+          [[ "$n" -eq 4 ]] || { echo "::error::expected 4 platform libraries in $jar, found $n"; exit 1; }
+
+      - name: Deploy to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: mvn -B -ntp deploy -DskipTests -Drevision=${{ steps.version.outputs.version }}
+
+      - name: GitHub Release (tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v=${{ steps.version.outputs.version }}
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Open Mason $v" --generate-notes \
+            "openmason-tool/target/openmason-tool-$v-shaded.jar#Open Mason $v runnable jar (Linux x86_64)" \
+            "openmason-engine/cenda/target/openmason-cenda-$v-sdk.zip#Cenda native SDK $v"

@@ -1,0 +1,53 @@
+# Open Mason test-system registry — single source of truth for `run-tests.sh`.
+#
+# Format (tab-separated):  system<TAB>module<TAB>pattern[,pattern...]
+#   - Patterns are paths relative to <module>/src/test/java, without the .java
+#     extension. `**` crosses directories, `*` stays within one segment.
+#   - A `!` prefix excludes; excludes are scoped to THIS line only.
+#   - A system may span modules (one line per module).
+# Every *Test.java in every module must map to exactly ONE system —
+# harness.py validates this on every run and aborts on drift.
+
+# ---- engine ----
+cenda	openmason-engine/engine-core	com/openmason/engine/cenda/**/*Test
+cenda	openmason-engine/engine-ui	com/openmason/engine/ui/cenda/**/*Test
+formats	openmason-engine/engine-core	com/openmason/engine/format/**/*Test
+formats	openmason-engine/engine-ui	com/openmason/engine/format/**/*Test
+networking	openmason-engine/engine-core	com/openmason/engine/net/**/*Test
+networking	openmason-engine/engine-voxel	com/openmason/engine/net/**/*Test,com/openmason/engine/voxel/net/**/*Test
+mesh-editing	openmason-engine/engine-core	com/openmason/engine/rendering/model/**/*Test
+viewer	openmason-engine/engine-core	com/openmason/engine/rendering/viewer/**/*Test
+cco	openmason-engine/engine-voxel	com/openmason/engine/voxel/cco/**/*Test
+mms	openmason-engine/engine-voxel	com/openmason/engine/voxel/mms/**/*Test
+sbo	openmason-engine/engine-voxel	com/openmason/engine/voxel/sbo/**/*Test
+lighting	openmason-engine/engine-voxel	com/openmason/engine/voxel/lighting/**/*Test
+engine-util	openmason-engine/engine-core	com/openmason/engine/util/**/*Test,com/openmason/engine/rendering/gl/**/*Test,com/openmason/engine/rendering/sprite/**/*Test
+cearl	openmason-engine/engine-core	com/openmason/engine/cearl/**/*Test,com/openmason/engine/vram/**/*Test
+wayfind	openmason-engine/engine-core	com/openmason/engine/wayfind/**/*Test
+wayfind	openmason-engine/engine-voxel	com/openmason/engine/wayfind/**/*Test
+shaders	openmason-engine/engine-core	com/openmason/engine/rendering/shaders/**/*Test,com/openmason/engine/rendering/RenderOriginTest
+shadow	openmason-engine/engine-core	com/openmason/engine/rendering/shadow/**/*Test
+sky	openmason-engine/engine-core	com/openmason/engine/rendering/sky/**/*Test
+ui-program	openmason-engine/engine-ui	com/openmason/engine/ui/**/*Test,!com/openmason/engine/ui/cenda/**,!com/openmason/engine/ui/boundary/**
+audio	openmason-engine/engine-core	com/openmason/engine/audio/**/*Test
+boundaries	openmason-engine/engine-core	com/openmason/engine/boundary/**/*Test
+boundaries	openmason-engine/engine-ui	com/openmason/engine/ui/boundary/**/*Test
+boundaries	openmason-engine/engine-voxel	com/openmason/engine/voxel/boundary/**/*Test
+boundaries	openmason-engine/samples/core-consumer	com/openmason/samples/**/*Test
+
+
+# ---- tool ----
+mcp	openmason-tool	com/openmason/main/systems/mcp/**/*Test
+assets	openmason-tool	com/openmason/main/systems/assets/**/*Test
+tool-io	openmason-tool	com/openmason/main/systems/io/**/*Test
+tool-services	openmason-tool	com/openmason/main/systems/services/**/*Test
+assistant	openmason-tool	com/openmason/main/systems/assistant/**/*Test
+anim-editor	openmason-tool	com/openmason/main/systems/menus/animationEditor/**/*Test
+tool-ui	openmason-tool	com/openmason/main/systems/menus/dialogs/**/*Test,com/openmason/main/systems/menus/textureCreator/**/*Test,com/openmason/main/systems/menus/panes/**/*Test,com/openmason/main/systems/mortar/**/*Test,com/openmason/main/systems/themes/**/*Test,com/openmason/main/systems/menus/preferences/**/*Test,com/openmason/main/systems/uiPreview/**/*Test,com/openmason/main/systems/layout/**/*Test
+ui-editor	openmason-tool	com/openmason/main/systems/uiEditor/**/*Test
+scripting	openmason-tool	com/openmason/main/systems/scripting/**/*Test
+viewport	openmason-tool	com/openmason/main/systems/viewport/**/*Test
+scene	openmason-tool	com/openmason/main/systems/scene/**/*Test,com/openmason/main/systems/project/**/*Test
+tool-model	openmason-tool	com/openmason/main/systems/skeleton/**/*Test,com/openmason/main/systems/rendering/**/*Test
+boundaries	openmason-tool	com/openmason/main/boundary/**/*Test
+plugins	openmason-tool	com/openmason/main/plugins/**/*Test,com/openmason/api/**/*Test,com/openmason/main/systems/target/**/*Test

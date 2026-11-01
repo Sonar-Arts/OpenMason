@@ -1,0 +1,460 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Open Mason: the game-agnostic engine (engine-core, engine-ui, engine-voxel) and the editor tool.
+     Moved out of the Stonebreak monorepo with its history (Stonebreak #388, epic #390 P7).
+
+     Versioning (Maven "CI friendly" versions): the version is ${revision}, 0.1.0-SNAPSHOT by default.
+     Release builds set it from the tag (v0.1.0 -> -Drevision=0.1.0); flatten-maven-plugin writes the
+     resolved version into the published POMs and leaves everything else (the OS profiles above all)
+     untouched (above all the OS profiles at the end of this file), so consumers still pick their platform's LWJGL/Skija natives. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.openmason</groupId>
+    <artifactId>openmason-parent</artifactId>
+    <version>${revision}</version>
+    <packaging>pom</packaging>
+
+    <name>Open Mason</name>
+    <description>Game-agnostic voxel engine and asset editor</description>
+    <url>https://github.com/Sonar-Arts/OpenMason</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+
+    <scm>
+        <url>https://github.com/Sonar-Arts/OpenMason</url>
+        <connection>scm:git:https://github.com/Sonar-Arts/OpenMason.git</connection>
+    </scm>
+
+    <!-- GitHub Packages. Publishing runs in CI (publish.yml) with the workflow token; downloading needs a
+         token with read:packages under server id "github" in ~/.m2/settings.xml, even for public packages
+         (a GitHub Packages rule). Consumers without one build locally instead: see README "Local builds". -->
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages (Sonar-Arts/OpenMason)</name>
+            <url>https://maven.pkg.github.com/Sonar-Arts/OpenMason</url>
+        </repository>
+        <snapshotRepository>
+            <id>github</id>
+            <name>GitHub Packages (Sonar-Arts/OpenMason)</name>
+            <url>https://maven.pkg.github.com/Sonar-Arts/OpenMason</url>
+        </snapshotRepository>
+    </distributionManagement>
+
+    <modules>
+        <module>openmason-engine</module> <!-- aggregator: engine-core, engine-ui, engine-voxel, cenda (glue + native SDK), samples -->
+        <module>openmason-tool</module>
+    </modules>
+
+    <properties>
+        <revision>0.1.0-SNAPSHOT</revision>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <lwjgl.version>3.4.3</lwjgl.version>
+        <joml.version>1.10.9</joml.version>
+        <!-- Default to Windows natives; OS-activated profiles below override
+             these for Linux/macOS so the build is cross-platform. -->
+        <lwjgl.natives>natives-windows</lwjgl.natives>
+        <skija.artifact>skija-windows-x64</skija.artifact>
+        <!-- Classpath folder the built Cenda library is packaged under (natives/<this>/);
+             must match CendaKernels.nativePlatform(). -->
+        <cenda.natives.dir>windows-x86_64</cenda.natives.dir>
+        <!-- Shell that runs cenda/build-kernels.sh for the IDE's before-launch step
+             (exec:exec@cenda-kernels). The Windows profile points it at Git Bash; override
+             with -Dcenda.bash=<path> for a non-default Git install. -->
+        <cenda.bash>bash</cenda.bash>
+        <jackson.version>2.22.4</jackson.version>
+        <jackson.version.annotations>2.22</jackson.version.annotations>
+        <junit.version>6.1.3</junit.version>
+        <mockito.version>5.24.0</mockito.version>
+        <skija.version>0.143.18</skija.version>
+        <netty.version>4.2.19.Final</netty.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- LWJGL core -->
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl</artifactId>
+                <version>${lwjgl.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl</artifactId>
+                <version>${lwjgl.version}</version>
+                <classifier>${lwjgl.natives}</classifier>
+                <scope>runtime</scope>
+            </dependency>
+            
+            <!-- LWJGL OpenGL -->
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-opengl</artifactId>
+                <version>${lwjgl.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-opengl</artifactId>
+                <version>${lwjgl.version}</version>
+                <classifier>${lwjgl.natives}</classifier>
+                <scope>runtime</scope>
+            </dependency>
+            
+            <!-- LWJGL GLFW for window creation -->
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-glfw</artifactId>
+                <version>${lwjgl.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-glfw</artifactId>
+                <version>${lwjgl.version}</version>
+                <classifier>${lwjgl.natives}</classifier>
+                <scope>runtime</scope>
+            </dependency>
+            
+            <!-- LWJGL STB for image loading -->
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-stb</artifactId>
+                <version>${lwjgl.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-stb</artifactId>
+                <version>${lwjgl.version}</version>
+                <classifier>${lwjgl.natives}</classifier>
+                <scope>runtime</scope>
+            </dependency>
+            
+            <!-- Skija (HumbleUI fork) — Skia bindings for next-gen UI rendering.
+                 Platform jar is self-contained; switch classifier when targeting
+                 other OSes (skija-linux-x64, skija-macos-arm64, etc.). -->
+            <dependency>
+                <groupId>io.github.humbleui</groupId>
+                <artifactId>${skija.artifact}</artifactId>
+                <version>${skija.version}</version>
+            </dependency>
+
+            <!-- LWJGL OpenAL for audio -->
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-openal</artifactId>
+                <version>${lwjgl.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-openal</artifactId>
+                <version>${lwjgl.version}</version>
+                <classifier>${lwjgl.natives}</classifier>
+                <scope>runtime</scope>
+            </dependency>
+            
+            <!-- Java OpenGL Math Library -->
+            <dependency>
+                <groupId>org.joml</groupId>
+                <artifactId>joml</artifactId>
+                <version>${joml.version}</version>
+            </dependency>
+            
+            <!-- Jackson JSON library for texture definition parsing -->
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>${jackson.version.annotations}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.datatype</groupId>
+                <artifactId>jackson-datatype-jsr310</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+
+            <!-- Netty 4.1.x (FOSS transport for multiplayer). NIO + Local channels
+                 only — no native epoll/kqueue artifacts, so shading stays simple. -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-buffer</artifactId>
+                <version>${netty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-common</artifactId>
+                <version>${netty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-transport</artifactId>
+                <version>${netty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-codec</artifactId>
+                <version>${netty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-handler</artifactId>
+                <version>${netty.version}</version>
+            </dependency>
+
+            <!-- JUnit 5 (Jupiter) for testing -->
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter-api</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter-engine</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- Mockito for mocking in tests -->
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-core</artifactId>
+                <version>${mockito.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <!-- JUnit Platform Suite for test suites -->
+            <dependency>
+                <groupId>org.junit.platform</groupId>
+                <artifactId>junit-platform-suite-api</artifactId>
+                <version>6.1.3</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.platform</groupId>
+                <artifactId>junit-platform-suite-engine</artifactId>
+                <version>6.1.3</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.16.0</version>
+                    <configuration>
+                        <release>25</release>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-shade-plugin</artifactId>
+                    <version>3.6.2</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>3.6.4</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-clean-plugin</artifactId>
+                    <version>3.5.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-resources-plugin</artifactId>
+                    <version>3.5.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.6.1</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.5.1</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-install-plugin</artifactId>
+                    <version>3.2.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-deploy-plugin</artifactId>
+                    <version>3.2.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>flatten-maven-plugin</artifactId>
+                    <version>1.7.3</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-source-plugin</artifactId>
+                    <version>3.3.1</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-assembly-plugin</artifactId>
+                    <version>3.7.1</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        
+        <plugins>
+            <!-- Enable compilation for all modules -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            
+            <!-- Ensure proper resource handling -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+            </plugin>
+
+            <!-- Resolves ${revision} in the installed/published POMs (CI friendly versions). Only the
+                 version is rewritten: profiles, properties and dependency management stay as written,
+                 so OS activation still picks natives on the consumer's machine. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>flatten-maven-plugin</artifactId>
+                <configuration>
+                    <updatePomFile>true</updatePomFile>
+                    <flattenMode>resolveCiFriendliesOnly</flattenMode>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>flatten</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>flatten</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>flatten-clean</id>
+                        <phase>clean</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Sources jars ride along with every published jar (IDE navigation into the engine). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <!-- OS-activated profiles select the correct LWJGL/Skija native artifacts.
+         The properties block above provides the Windows defaults; these override
+         them when building/running on Linux or macOS. -->
+    <profiles>
+        <profile>
+            <id>natives-windows</id>
+            <activation>
+                <os><family>windows</family></os>
+            </activation>
+            <properties>
+                <lwjgl.natives>natives-windows</lwjgl.natives>
+                <skija.artifact>skija-windows-x64</skija.artifact>
+                <cenda.natives.dir>windows-x86_64</cenda.natives.dir>
+                <!-- Not "bash": on PATH that is often WSL's launcher, which would build Linux libs.
+                     Maven upper-cases environment variable names on Windows. -->
+                <cenda.bash>${env.PROGRAMFILES}/Git/bin/bash.exe</cenda.bash>
+            </properties>
+        </profile>
+        <profile>
+            <id>natives-linux</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <name>linux</name>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <lwjgl.natives>natives-linux</lwjgl.natives>
+                <skija.artifact>skija-linux-x64</skija.artifact>
+                <cenda.natives.dir>linux-x86_64</cenda.natives.dir>
+            </properties>
+        </profile>
+        <profile>
+            <id>natives-linux-arm64</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <name>linux</name>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <lwjgl.natives>natives-linux-arm64</lwjgl.natives>
+                <skija.artifact>skija-linux-arm64</skija.artifact>
+                <cenda.natives.dir>linux-aarch64</cenda.natives.dir>
+            </properties>
+        </profile>
+        <profile>
+            <id>natives-macos</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                    <arch>x86_64</arch>
+                </os>
+            </activation>
+            <properties>
+                <lwjgl.natives>natives-macos</lwjgl.natives>
+                <skija.artifact>skija-macos-x64</skija.artifact>
+                <cenda.natives.dir>macos-x86_64</cenda.natives.dir>
+            </properties>
+        </profile>
+        <profile>
+            <id>natives-macos-arm64</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <lwjgl.natives>natives-macos-arm64</lwjgl.natives>
+                <skija.artifact>skija-macos-arm64</skija.artifact>
+                <cenda.natives.dir>macos-aarch64</cenda.natives.dir>
+            </properties>
+        </profile>
+    </profiles>
+</project>

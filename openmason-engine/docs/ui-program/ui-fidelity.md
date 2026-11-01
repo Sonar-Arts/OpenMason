@@ -120,7 +120,9 @@ drawn controls) are all inside the frozen captures, so the gates keep enforcing 
 
 ## 4. The ledger gate
 
-The summary table's status column is now checked by `UiMigrationLedgerCoverageTest`. The allowed statuses are
+Stonebreak's migration ledger (`docs/ui-program/ui-migration-ledger.md` in Sonar-Arts/Stonebreak since the
+repository split, Stonebreak #388) is a game document, not part of the engine. The summary table's status column
+is checked there by `UiMigrationLedgerCoverageTest`. The allowed statuses are
 `not started`, `baselined`, `in progress`, `migrated`, `blocked`, `retained-bridge` and `n/a`.
 
 - Any row in `baselined`, `in progress` or `migrated` needs a `**Fidelity:**` line naming its baselines

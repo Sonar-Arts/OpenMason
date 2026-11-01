@@ -19,14 +19,14 @@ import java.util.List;
 /**
  * Game targets for tests (#380, #382). The tool no longer sees the Stonebreak plugin, so
  * {@link #stonebreak()} is a file-only stand-in with Stonebreak's layout: same id, namespace,
- * folders, prefix and deploy layout, its tree at this checkout's {@code stonebreak-game} resources,
+ * folders, prefix and deploy layout, its tree at the frozen Stonebreak fixture ({@code test-fixtures/stonebreak}),
  * and an empty synthetic UI host (no game contracts). The real target is tested in
  * {@code openmason-plugin-stonebreak}.
  */
 public final class TestGameTargets {
 
-    /** The game's resource tree, relative to the repository root. */
-    public static final String SOURCE_TREE = "stonebreak-game/src/main/resources";
+    /** The frozen Stonebreak resource fixture, relative to the repository root (see its README). */
+    public static final String SOURCE_TREE = "test-fixtures/stonebreak/resources";
 
     private TestGameTargets() {
     }

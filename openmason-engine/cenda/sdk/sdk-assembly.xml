@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Cenda native SDK (Stonebreak #388): the shared native build inputs game-owned native libraries
+     compile against, laid out exactly like this cenda/ directory so a consumer can point its CMake at
+     either an unpacked SDK or a full checkout (the cross-repo dev loop).
+       cmake/CendaFastNoise2.cmake              the ONE FastNoise2 pin (bit-identical noise)
+       cmake/CendaDepsGuard.cmake               out-of-tree FetchContent guard
+       native/kernels/include/cenda/noise_nodes.hpp   the engine's noise node graphs
+       cenda-sdk.properties                     version + ABI numbers this SDK matches -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 https://maven.apache.org/xsd/assembly-2.2.0.xsd">
+    <id>sdk</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <includeBaseDirectory>false</includeBaseDirectory>
+    <fileSets>
+        <fileSet>
+            <directory>${project.basedir}/cmake</directory>
+            <outputDirectory>cmake</outputDirectory>
+            <includes>
+                <include>CendaFastNoise2.cmake</include>
+                <include>CendaDepsGuard.cmake</include>
+            </includes>
+            <lineEnding>keep</lineEnding>
+        </fileSet>
+        <fileSet>
+            <directory>${project.basedir}/native/kernels/include/cenda</directory>
+            <outputDirectory>native/kernels/include/cenda</outputDirectory>
+            <includes>
+                <include>noise_nodes.hpp</include>
+            </includes>
+            <lineEnding>keep</lineEnding>
+        </fileSet>
+    </fileSets>
+    <files>
+        <file>
+            <source>${project.basedir}/sdk/cenda-sdk.properties</source>
+            <outputDirectory>.</outputDirectory>
+            <filtered>true</filtered>
+        </file>
+    </files>
+</assembly>

@@ -1,0 +1,21 @@
+# Test classes whose skips are environment-gated (JUnit Assumptions), not
+# regressions: they skip on machines without the native Cenda kernels
+# (libcenda_kernels.so) or the game's worldgen natives (libstonebreak_worldgen.so,
+# stonebreak-game/native, #386), without the NATIVE noise backend, or without the
+# manual benchmark gate (-Dcenda.bench=true). The baseline diff in
+# harness.py ignores NEWLY SKIPPED entries for these classes.
+com.openmason.engine.cenda.CendaKernelsTest
+
+# FastLOD ring measurements (-Dstonebreak.bench=true).
+
+# Real-display arena render check (-Dstonebreak.battletest.gl=true).
+
+# UI program spikes (#283): need the Cenda library (Lua host / Yoga) or a display
+# (-Dstonebreak.ui.gl=true).
+com.openmason.engine.cenda.CendaLuaTest
+com.openmason.engine.cenda.CendaLuaBenchmarkTest
+com.openmason.engine.ui.layoutspike.FlexLayoutSpikeTest
+com.openmason.main.systems.scripting.LuaHostToolSmokeTest
+
+# UI budget re-measurement on the machine at hand (#296, -Dui.bench=true).
+com.openmason.engine.ui.script.UiBudgetBenchTest

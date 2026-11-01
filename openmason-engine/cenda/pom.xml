@@ -1,19 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Launch glue for the Cenda native library: the IDE run configurations' before-launch step
+<!-- Two jobs. (1) Publishes the Cenda native SDK, com.openmason:openmason-cenda:<version>:zip:sdk (sdk/), the
+     shared native build inputs game-owned native libraries compile against (Stonebreak #388).
+     (2) Launch glue for the Cenda native library: the IDE run configurations' before-launch step
      (exec:exec@cenda-kernels on this file) rebuilds it from the checked-out sources. Its own POM since the
      engine split (#387): the engine parent is now an aggregator whose modules depend on each other, and
      exec:exec on it would recurse into them and resolve dependencies that are not installed. This POM has
-     no dependencies and no build output; a reactor build runs nothing here. It is a reactor module only
-     so IntelliJ imports it (a Maven before-launch task on an unimported POM stops the launch). -->
+     no dependencies; a reactor build only assembles the SDK zip here. It is a reactor module
+     (published) and so IntelliJ imports it (a Maven before-launch task on an unimported POM stops the launch). -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.stonebreak</groupId>
+        <groupId>com.openmason</groupId>
         <artifactId>openmason-engine-parent</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>openmason-cenda</artifactId>
@@ -22,6 +24,25 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>cenda-sdk</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <descriptors>
+                                <descriptor>${project.basedir}/sdk/sdk-assembly.xml</descriptor>
+                            </descriptors>
+                            <appendAssemblyId>true</appendAssemblyId>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <!-- Picks a bash per OS via ${cenda.bash}. No phase, so package and CI never run it. -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>

@@ -1,0 +1,161 @@
+# Open Mason CI: the whole test suite on Linux, plus a per-platform job that builds the Cenda native
+# library (kernels + the mandatory Lua and Yoga UI hosts), runs its native tests, proves the Java side
+# loads it through the ABI handshake, runs the UI scripting suites against it, and packages the jars.
+#
+# UI scripting and layout have no Java fallback, so a platform that cannot build or load the library
+# turns its job red (the UI suites fail, never skip, without it), and the packaging check refuses an
+# engine-core or tool jar that comes out without natives/<platform>/. Publishing is publish.yml.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  # No paths filter on PRs: these jobs are meant to be required checks, and a skipped workflow never
+  # reports, which would leave docs-only PRs blocked.
+  pull_request:
+  workflow_dispatch:
+
+# Checkout + build + test only: never writes to the repo, issues or packages.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure Cenda (release)
+        working-directory: openmason-engine/cenda
+        # FETCHCONTENT_BASE_DIR overrides the preset's $HOME cache.
+        run: cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps" -DBUILD_TESTING=OFF
+
+      - name: Build Cenda
+        working-directory: openmason-engine/cenda
+        run: cmake --build --preset release --parallel
+
+      - name: Skija runtime libraries
+        # libskija.so links libEGL/libGL even for CPU raster surfaces; the bare runner has neither.
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libegl1 libgl1 libfontconfig1
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Test harness (all systems)
+        # Same runner as local development; --report writes the Markdown summary even on a build failure.
+        run: Testing/run-tests.sh all --report "${{ runner.temp }}/test-report.md"
+
+      - name: Test summary
+        if: always()
+        run: cat "${{ runner.temp }}/test-report.md" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-linux
+          path: |
+            openmason-engine/*/target/surefire-reports/
+            openmason-engine/samples/*/target/surefire-reports/
+            openmason-tool/target/surefire-reports/
+
+  platform:
+    name: natives + package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is Apple Silicon (macos-aarch64); ubuntu-24.04-arm is linux-aarch64.
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure Cenda (release)
+        working-directory: openmason-engine/cenda
+        # FETCHCONTENT_BASE_DIR overrides the preset's $HOME cache, which Windows runners lack.
+        run: cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps"
+
+      - name: Build Cenda
+        working-directory: openmason-engine/cenda
+        run: cmake --build --preset release --parallel
+
+      - name: Native tests (lua_host, flex_host, kernels)
+        working-directory: openmason-engine/cenda
+        timeout-minutes: 10
+        run: ctest --preset release
+
+      - name: Skija runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libegl1 libgl1 libfontconfig1
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Java handshake + UI scripting suites
+        run: >
+          mvn -B -q -ntp -pl openmason-engine/engine-core,openmason-engine/engine-ui -am test
+          -Dtest='CendaKernelsTest,CendaLua*Test,CendaFlexTest,UiNativeHealthTest,Script*Test,MinigameBenchmarkTest,UiApiSurfaceTest'
+          -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Package (engine, Cenda SDK, tool)
+        # -DskipTests still compiles the test sources, so broken tests fail the build.
+        run: mvn -B -ntp package -DskipTests
+
+      - name: Verify natives are packaged
+        # engine-core's copy-resources step skips a missing library silently (tool-only local builds),
+        # so check every jar that ships it. The platform dir must match NativeLibraryExtractor's.
+        run: |
+          case "${{ runner.os }}" in
+            Linux) os=linux; lib=libcenda_kernels.so ;;
+            macOS) os=macos; lib=libcenda_kernels.dylib ;;
+            Windows) os=windows; lib=cenda_kernels.dll ;;
+          esac
+          case "${{ runner.arch }}" in
+            X64) arch=x86_64 ;;
+            ARM64) arch=aarch64 ;;
+            *) echo "::error::unmapped runner arch ${{ runner.arch }}"; exit 1 ;;
+          esac
+          entry="natives/$os-$arch/$lib"
+          status=0
+          for jar in openmason-engine/engine-core/target/openmason-engine-core-*.jar \
+                     openmason-tool/target/openmason-tool-*-shaded.jar; do
+            case "$jar" in *-sources.jar) continue ;; esac
+            if [[ ! -f "$jar" ]]; then
+              echo "::error::expected jar not found: $jar"; status=1
+            elif jar tf "$jar" | grep -qx "$entry"; then
+              echo "$jar: $entry"
+            else
+              echo "::error::$jar is missing $entry"; status=1
+            fi
+          done
+          sdk=$(ls openmason-engine/cenda/target/openmason-cenda-*-sdk.zip)
+          for f in cmake/CendaFastNoise2.cmake cmake/CendaDepsGuard.cmake \
+                   native/kernels/include/cenda/noise_nodes.hpp cenda-sdk.properties; do
+            jar tf "$sdk" | grep -qx "$f" || { echo "::error::$sdk is missing $f"; status=1; }
+          done
+          exit $status
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-${{ matrix.os }}
+          path: |
+            openmason-engine/engine-core/target/surefire-reports/
+            openmason-engine/engine-ui/target/surefire-reports/

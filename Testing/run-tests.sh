@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+HARNESS="$HERE/harness.py"
+
+# ── Argument parsing ────────────────────────────────────────────────
+LIST=0
+UPDATE_BASELINE=0
+VERBOSE=0
+SLOW=0
+REPORT=""
+SCOPE_WORDS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      cat <<'EOF'
+Usage: Testing/run-tests.sh [--list] [--update-baseline] [--verbose] [--slow] [--report FILE]
+                                 all | integration | regression | <system> [<system>...]
+
+  --report FILE   also write the result as Markdown (for a PR comment), even
+                  when the build fails before any test runs
+  --slow          also run tests tagged @Tag("slow") (left out by default; the
+                  baseline is the default run's, so --update-baseline refuses it)
+EOF
+      exit 2
+      ;;
+    --list)           LIST=1; shift ;;
+    --update-baseline) UPDATE_BASELINE=1; shift ;;
+    --verbose)        VERBOSE=1; shift ;;
+    --slow)           SLOW=1; shift ;;
+    --report)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "--report needs a file path" >&2
+        exit 2
+      fi
+      REPORT="$2"; shift 2 ;;
+    --report=*)       REPORT="${1#--report=}"; shift ;;
+    -*)
+      echo "Unknown flag: $1" >&2
+      cat >&2 <<'EOF'
+Usage: Testing/run-tests.sh [--list] [--update-baseline] [--verbose] [--slow] [--report FILE]
+                                 all | integration | regression | <system> [<system>...]
+
+  --report FILE   also write the result as Markdown (for a PR comment), even
+                  when the build fails before any test runs
+  --slow          also run tests tagged @Tag("slow") (left out by default; the
+                  baseline is the default run's, so --update-baseline refuses it)
+EOF
+      exit 2
+      ;;
+    *) SCOPE_WORDS+=("$1"); shift ;;
+  esac
+done
+
+if [[ "$LIST" -eq 0 && ${#SCOPE_WORDS[@]} -eq 0 ]]; then
+  cat <<'EOF'
+Usage: Testing/run-tests.sh [--list] [--update-baseline] [--verbose] [--slow] [--report FILE]
+                                 all | integration | regression | <system> [<system>...]
+
+  --report FILE   also write the result as Markdown (for a PR comment), even
+                  when the build fails before any test runs
+  --slow          also run tests tagged @Tag("slow") (left out by default; the
+                  baseline is the default run's, so --update-baseline refuses it)
+EOF
+  exit 2
+fi
+
+if [[ "$UPDATE_BASELINE" -eq 1 && "$SLOW" -eq 1 ]]; then
+  echo "--update-baseline records the default run; drop --slow" >&2
+  exit 2
+fi
+
+# ── --list short-circuit ────────────────────────────────────────────
+if [[ "$LIST" -eq 1 ]]; then
+  exec python3 "$HARNESS" list
+fi
+
+# Join scope words with commas
+IFS=','
+SCOPE="${SCOPE_WORDS[*]}"
+unset IFS
+
+# Resolve the report path now: the summarizer runs after `cd "$ROOT"`.
+if [[ -n "$REPORT" && "$REPORT" != /* ]]; then
+  REPORT="$PWD/$REPORT"
+fi
+
+# ── JDK resolution ──────────────────────────────────────────────────
+CAND=""
+
+if [[ -n "${STONEBREAK_JDK:-}" ]]; then
+  CAND="$STONEBREAK_JDK"
+elif [[ -d "$HOME/.jdks/ms-25.0.3" ]]; then
+  CAND="$HOME/.jdks/ms-25.0.3"
+elif [[ -n "${JAVA_HOME:-}" ]]; then
+  CAND="$JAVA_HOME"
+fi
+
+if [[ -z "${CAND:-}" ]] || ! "$CAND/bin/java" -version 2>&1 | grep 'version "25' >/dev/null; then
+  echo "No JDK 25 found. Set STONEBREAK_JDK to a JDK 25 installation." >&2
+  exit 2
+fi
+
+export JAVA_HOME="$CAND"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# ── Resolve scope ───────────────────────────────────────────────────
+RESOLVED="$(python3 "$HARNESS" resolve --scope "$SCOPE")"
+# Split with mapfile, not `echo | head`: under pipefail the early-exiting
+# reader SIGPIPEs echo once the TESTS line outgrows a write chunk (exit 141).
+mapfile -t RESOLVED_LINES <<<"$RESOLVED"
+MODULES_LINE="${RESOLVED_LINES[0]:-}"
+SECOND_LINE="${RESOLVED_LINES[1]:-}"
+
+# Strip leading keyword from each line
+MODULES_STR="${MODULES_LINE#MODULES }"
+LINE_KIND="${SECOND_LINE%% *}"
+LINE_VALUE="${SECOND_LINE#* }"
+
+read -r -a MODULES <<<"$MODULES_STR"
+
+# ── Clean stale reports ─────────────────────────────────────────────
+for m in "${MODULES[@]}"; do
+  rm -rf "$ROOT/$m/target/surefire-reports"
+done
+
+# ── Run Maven ───────────────────────────────────────────────────────
+cd "$ROOT"
+# @Tag("slow") tests (timeouts, leak checks) are left out unless --slow is given.
+EXTRA_MVN=()
+if [[ "$SLOW" -eq 0 ]]; then
+  EXTRA_MVN+=("-DexcludedGroups=slow")
+fi
+MVN_LOG="$(mktemp /tmp/openmason-tests-XXXXXX.log)"
+MVN_EXIT=0
+
+# Determine if every module is present (full reactor needed)
+ALL_MODULES=false
+read -r -a ALL_TEST_MODULES <<<"$(python3 "$HARNESS" modules)"
+for required_module in "${ALL_TEST_MODULES[@]}"; do
+  found=false
+  for m in "${MODULES[@]}"; do
+    if [[ "$m" == "$required_module" ]]; then
+      found=true
+      break
+    fi
+  done
+  if [[ "$found" == false ]]; then
+    ALL_MODULES=false
+    break
+  fi
+  ALL_MODULES=true
+done
+
+if [[ "$LINE_KIND" == "GROUPS" ]]; then
+  if [[ "$VERBOSE" -eq 1 ]]; then
+    mvn -q -Dmaven.test.failure.ignore=true test ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"} -Dgroups="$LINE_VALUE" 2>&1 | tee "$MVN_LOG" || MVN_EXIT=$?
+  else
+    mvn -q -Dmaven.test.failure.ignore=true test ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"} -Dgroups="$LINE_VALUE" >"$MVN_LOG" 2>&1 || MVN_EXIT=$?
+  fi
+elif [[ "$LINE_KIND" == "TESTS" ]]; then
+  if [[ "$ALL_MODULES" == true ]]; then
+    # Full reactor — no -pl
+    if [[ "$VERBOSE" -eq 1 ]]; then
+      mvn -q -Dmaven.test.failure.ignore=true test ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"} -Dtest="$LINE_VALUE" -Dsurefire.failIfNoSpecifiedTests=false 2>&1 | tee "$MVN_LOG" || MVN_EXIT=$?
+    else
+      mvn -q -Dmaven.test.failure.ignore=true test ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"} -Dtest="$LINE_VALUE" -Dsurefire.failIfNoSpecifiedTests=false >"$MVN_LOG" 2>&1 || MVN_EXIT=$?
+    fi
+  else
+    # Subset of modules — use -pl -am
+    PL_LIST="$(IFS=','; echo "${MODULES[*]}")"
+    if [[ "$VERBOSE" -eq 1 ]]; then
+      mvn -pl "$PL_LIST" -am -q -Dmaven.test.failure.ignore=true test ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"} -Dtest="$LINE_VALUE" -Dsurefire.failIfNoSpecifiedTests=false 2>&1 | tee "$MVN_LOG" || MVN_EXIT=$?
+    else
+      mvn -pl "$PL_LIST" -am -q -Dmaven.test.failure.ignore=true test ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"} -Dtest="$LINE_VALUE" -Dsurefire.failIfNoSpecifiedTests=false >"$MVN_LOG" 2>&1 || MVN_EXIT=$?
+    fi
+  fi
+fi
+
+# ── Post-Maven: a failed build must never summarize as PASS ─────────
+# Test failures do NOT fail maven (-Dmaven.test.failure.ignore=true), so a
+# non-zero exit here is always a build/infra failure: a compile error or a
+# test JVM that never booted (e.g. a JPMS split package). Continuing would
+# summarize whichever modules DID produce reports — possibly stale ones —
+# and a run missing whole modules can masquerade as green (seen 2026-08-19:
+# the game module's boot layer died and 540 engine tests printed PASS).
+if [[ "$MVN_EXIT" -ne 0 ]]; then
+  tail -n 40 "$MVN_LOG"
+  echo "build/infra failure (mvn exit $MVN_EXIT) — full log: $MVN_LOG"
+  if [[ -n "$REPORT" ]]; then
+    python3 "$HARNESS" infra-report --scope "$SCOPE" --report "$REPORT" --log "$MVN_LOG" --exit "$MVN_EXIT"
+  fi
+  echo "RESULT: FAIL"
+  exit 2
+fi
+
+# ── Hand off to summarizer ──────────────────────────────────────────
+echo "mvn log: $MVN_LOG"
+
+SUMMARIZE_ARGS=(summarize --scope "$SCOPE")
+if [[ "$UPDATE_BASELINE" -eq 1 ]]; then
+  SUMMARIZE_ARGS+=(--update-baseline)
+fi
+if [[ -n "$REPORT" ]]; then
+  SUMMARIZE_ARGS+=(--report "$REPORT")
+fi
+if [[ "$SLOW" -eq 1 ]]; then
+  SUMMARIZE_ARGS+=(--slow)
+fi
+exec python3 "$HARNESS" "${SUMMARIZE_ARGS[@]}"

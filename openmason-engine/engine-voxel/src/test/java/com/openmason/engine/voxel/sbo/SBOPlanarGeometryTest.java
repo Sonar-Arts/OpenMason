@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class SBOPlanarGeometryTest {
 
     private static final float EPS = 1e-3f;
-    private static final Path BLOCKS = Path.of("../../stonebreak-game/src/main/resources/sbo/blocks");
+    private static final Path BLOCKS = Path.of("../../test-fixtures/stonebreak/resources/sbo/blocks");
 
     @Test
     void singlePaneIsPlanar() {

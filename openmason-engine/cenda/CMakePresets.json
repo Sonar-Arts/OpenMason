@@ -8,7 +8,7 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "FETCHCONTENT_BASE_DIR": "$env{HOME}/.cache/cenda-deps"
+        "FETCHCONTENT_BASE_DIR": "$env{HOME}/.cache/openmason-cenda-deps"
       }
     },
     {
@@ -17,7 +17,7 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "FETCHCONTENT_BASE_DIR": "$env{HOME}/.cache/cenda-deps-${presetName}"
+        "FETCHCONTENT_BASE_DIR": "$env{HOME}/.cache/openmason-cenda-deps-${presetName}"
       }
     },
     {

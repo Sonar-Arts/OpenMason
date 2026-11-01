@@ -5,9 +5,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.stonebreak</groupId>
+        <groupId>com.openmason</groupId>
         <artifactId>openmason-engine-parent</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>openmason-engine-core</artifactId>
@@ -182,6 +182,30 @@
                                     <includes>
                                         <include>libcenda_kernels.dylib</include>
                                         <include>cenda_kernels.dll</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                    <!-- Release builds (publish.yml) stage every platform's library under
+                         cenda/build/natives-stage/natives/<platform>/ and package them all, so one
+                         published jar serves Linux, Windows and macOS. Absent locally = skipped. -->
+                    <execution>
+                        <id>package-staged-cenda-natives</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/../cenda/build/natives-stage</directory>
+                                    <filtering>false</filtering>
+                                    <includes>
+                                        <include>natives/*/libcenda_kernels.so</include>
+                                        <include>natives/*/libcenda_kernels.dylib</include>
+                                        <include>natives/*/cenda_kernels.dll</include>
                                     </includes>
                                 </resource>
                             </resources>
