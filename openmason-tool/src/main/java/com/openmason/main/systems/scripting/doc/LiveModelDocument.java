@@ -1,7 +1,7 @@
 package com.openmason.main.systems.scripting.doc;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
 import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
 import com.openmason.main.systems.ViewportController;

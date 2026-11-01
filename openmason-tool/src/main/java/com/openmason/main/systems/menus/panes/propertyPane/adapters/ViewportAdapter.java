@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.panes.propertyPane.adapters;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.main.systems.rendering.model.editable.BlockModel;
 import com.openmason.engine.rendering.model.gmr.extraction.GMRFaceExtractor;
 import com.openmason.engine.rendering.model.gmr.uv.FaceProjectionUtil;

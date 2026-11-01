@@ -1,8 +1,8 @@
 # Publishes Open Mason to GitHub Packages (Maven): com.openmason:openmason-parent, openmason-engine-parent,
 # openmason-engine-core (with every platform's Cenda library under natives/<platform>/),
-# openmason-engine-ui, openmason-engine-voxel, openmason-tool (+ the runnable -shaded jar) and the Cenda
-# native SDK (openmason-cenda:<version>:zip:sdk, the shared native build inputs game-owned native
-# libraries compile against).
+# openmason-engine-ui, openmason-engine-voxel, openmason-engine-modeling, openmason-tool (+ the runnable
+# -shaded jar) and the Cenda native SDK (openmason-cenda:<version>:zip:sdk, the shared native build inputs
+# game-owned native libraries compile against).
 #
 #   tag v<X.Y.Z>  -> release X.Y.Z (immutable in GitHub Packages; also a GitHub Release with the tool jar)
 #   push to main  -> the POM's ${revision} snapshot (e.g. 0.1.1-SNAPSHOT), published only once `ci` has

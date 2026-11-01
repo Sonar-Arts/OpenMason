@@ -6,7 +6,7 @@ import com.openmason.engine.rendering.viewer.ViewerRenderContext;
 import com.openmason.engine.rendering.viewer.ViewerFrame;
 import com.openmason.engine.rendering.viewer.ViewerPass;
 import com.openmason.engine.rendering.viewer.ViewerPassOrder;
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.main.systems.rendering.core.SBTRenderer;
 import com.openmason.engine.rendering.viewer.gizmo.rendering.GizmoRenderer;
 import com.openmason.main.systems.viewport.viewportRendering.bones.BoneGizmoRenderer;
@@ -53,7 +53,7 @@ import static org.lwjgl.opengl.GL11.*;
  * is not: it forces one shared model matrix across all renderers and its five-value
  * enum cannot express the six steps above (note the 2.5 tier).
  *
- * @see com.openmason.engine.rendering.model.GenericModelRenderer
+ * @see com.openmason.engine.rendering.model.gmr.GenericModelRenderer
  */
 public class ViewportRenderPipeline implements ViewerPass {
 

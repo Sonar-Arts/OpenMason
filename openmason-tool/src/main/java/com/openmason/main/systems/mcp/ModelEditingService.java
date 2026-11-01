@@ -1,8 +1,8 @@
 package com.openmason.main.systems.mcp;
 
 import com.fasterxml.jackson.annotation.JsonValue;
-import com.openmason.engine.rendering.model.GenericModelRenderer;
-import com.openmason.engine.rendering.model.ModelPart;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.ModelPart;
 import com.openmason.engine.rendering.model.gmr.parts.MeshRange;
 import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
 import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;

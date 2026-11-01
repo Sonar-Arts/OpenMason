@@ -15,8 +15,9 @@ formats	openmason-engine/engine-core	com/openmason/engine/format/**/*Test
 formats	openmason-engine/engine-ui	com/openmason/engine/format/**/*Test
 networking	openmason-engine/engine-core	com/openmason/engine/net/**/*Test
 networking	openmason-engine/engine-voxel	com/openmason/engine/net/**/*Test,com/openmason/engine/voxel/net/**/*Test
-mesh-editing	openmason-engine/engine-core	com/openmason/engine/rendering/model/**/*Test
-viewer	openmason-engine/engine-core	com/openmason/engine/rendering/viewer/**/*Test
+mesh-editing	openmason-engine/engine-modeling	com/openmason/engine/rendering/model/gmr/**/*Test
+mesh-editing	openmason-engine/engine-core	com/openmason/engine/rendering/model/*Test
+viewer	openmason-engine/engine-modeling	com/openmason/engine/rendering/viewer/**/*Test
 cco	openmason-engine/engine-voxel	com/openmason/engine/voxel/cco/**/*Test
 mms	openmason-engine/engine-voxel	com/openmason/engine/voxel/mms/**/*Test
 sbo	openmason-engine/engine-voxel	com/openmason/engine/voxel/sbo/**/*Test
@@ -33,6 +34,7 @@ audio	openmason-engine/engine-core	com/openmason/engine/audio/**/*Test
 boundaries	openmason-engine/engine-core	com/openmason/engine/boundary/**/*Test
 boundaries	openmason-engine/engine-ui	com/openmason/engine/ui/boundary/**/*Test
 boundaries	openmason-engine/engine-voxel	com/openmason/engine/voxel/boundary/**/*Test
+boundaries	openmason-engine/engine-modeling	com/openmason/engine/modeling/boundary/**/*Test
 boundaries	openmason-engine/samples/core-consumer	com/openmason/samples/**/*Test
 
 

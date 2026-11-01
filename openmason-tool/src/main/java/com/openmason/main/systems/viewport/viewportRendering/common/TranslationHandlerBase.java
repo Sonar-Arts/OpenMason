@@ -1,6 +1,6 @@
 package com.openmason.main.systems.viewport.viewportRendering.common;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.engine.rendering.model.gmr.GMRConstants;
 import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
 import com.openmason.main.systems.viewport.ViewportUIState;

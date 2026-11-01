@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Open Mason: the game-agnostic engine (engine-core, engine-ui, engine-voxel) and the editor tool.
+<!-- Open Mason: the game-agnostic engine (engine-core, engine-ui, engine-voxel, engine-modeling) and the editor tool.
      Moved out of the Stonebreak monorepo with its history (Stonebreak #388, epic #390 P7).
 
      Versioning (Maven "CI friendly" versions): the version is ${revision}, 0.1.0-SNAPSHOT by default.
@@ -49,7 +49,7 @@
     </distributionManagement>
 
     <modules>
-        <module>openmason-engine</module> <!-- aggregator: engine-core, engine-ui, engine-voxel, cenda (glue + native SDK), samples -->
+        <module>openmason-engine</module> <!-- aggregator: engine-core, engine-ui, engine-voxel, engine-modeling, cenda (glue + native SDK), samples -->
         <module>openmason-tool</module>
     </modules>
 

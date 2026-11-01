@@ -23,7 +23,9 @@ class CoreConsumerTest {
     void neitherTheUiNorTheVoxelModuleNorSkijaIsReachable() {
         // Class lookups, not ModuleLayer queries: they hold on the module path and the class path alike.
         for (String cls : new String[]{"com.openmason.engine.ui.runtime.UiDocumentInstance",
-                "com.openmason.engine.voxel.cco.data.CcoBlockStorage", "io.github.humbleui.skija.Canvas"}) {
+                "com.openmason.engine.voxel.cco.data.CcoBlockStorage", "io.github.humbleui.skija.Canvas",
+                "com.openmason.engine.rendering.model.gmr.GenericModelRenderer",
+                "com.openmason.engine.rendering.viewer.ModelViewer"}) {
             assertThrows(ClassNotFoundException.class, () -> Class.forName(cls),
                 cls + " leaked into a core-only consumer");
         }

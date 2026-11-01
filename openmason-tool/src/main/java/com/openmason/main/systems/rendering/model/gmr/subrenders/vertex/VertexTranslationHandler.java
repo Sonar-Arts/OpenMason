@@ -1,6 +1,6 @@
 package com.openmason.main.systems.rendering.model.gmr.subrenders.vertex;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.main.systems.services.commands.MeshSnapshot;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;

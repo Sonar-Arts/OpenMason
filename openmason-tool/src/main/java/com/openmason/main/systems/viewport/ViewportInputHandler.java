@@ -1,7 +1,7 @@
 package com.openmason.main.systems.viewport;
 
 import com.openmason.engine.rendering.viewer.camera.ViewerCamera;
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.KnifePreviewRenderer;
 import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.ToolPreviewRenderer;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;

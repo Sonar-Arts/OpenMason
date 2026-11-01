@@ -1,7 +1,7 @@
 package com.openmason.main.systems.rendering.model.gmr.subrenders.vertex;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
-import com.openmason.engine.rendering.model.MeshChangeListener;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.MeshChangeListener;
 import com.openmason.main.systems.rendering.model.gmr.subrenders.MeshOverlayTheme;
 import com.openmason.main.systems.viewport.state.EditModeManager;
 import com.openmason.engine.rendering.viewer.ViewerRenderContext;

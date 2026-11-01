@@ -3,7 +3,7 @@ package com.openmason.main.systems.menus.textureCreator;
 import com.openmason.main.systems.menus.textureCreator.canvas.CanvasChangeListener;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import com.openmason.main.systems.menus.textureCreator.layers.Layer;
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
 import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
 import org.slf4j.Logger;

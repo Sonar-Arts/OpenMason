@@ -1,6 +1,6 @@
 package com.openmason.main.systems.scene;
 
-import com.openmason.engine.rendering.model.ModelBounds;
+import com.openmason.engine.rendering.model.gmr.ModelBounds;
 import com.openmason.engine.rendering.viewer.gizmo.TransformUndoSink;
 import com.openmason.engine.rendering.viewer.scene.InstanceTransformTarget;
 import com.openmason.engine.rendering.viewer.scene.ModelCache;

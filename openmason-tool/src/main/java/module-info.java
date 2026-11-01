@@ -57,6 +57,10 @@ module com.openmason {
     // OpenMason Engine for shared rendering and format support
     requires openmason.engine.core;
     requires openmason.engine.ui; // no voxel: the tool never reads the voxel stack (#387)
+    // GMR + the model viewer (#91). Transitive: the plugin API exposes GMR types to plugins
+    // (ProjectTemplate.Builder.model(name, PartShapeFactory.Shape)), and the Stonebreak plugin reads
+    // gmr.analysis/gmr.editable through this module.
+    requires transitive openmason.engine.modeling;
 
     // No game module (#382): games plug in through com.openmason.api (Stonebreak: the
     // openmason.plugin.stonebreak module, found on the module path through the `uses` below).

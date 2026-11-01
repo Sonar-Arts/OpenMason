@@ -1,8 +1,9 @@
 /**
- * Open Mason engine core (#387): file formats, rendering (GL, shaders, shadows, sky, postfx, GMR, viewer), audio,
+ * Open Mason engine core (#387): file formats, rendering (GL, shaders, shadows, sky, postfx), audio,
  * the networking core, CEARL/VRAM, diagnostics, utilities and the generic Cenda native kernels (noise, zstd, the
- * library locator). Depends on no other engine module: the UI runtime ({@code openmason.engine.ui}) and the voxel
- * stack ({@code openmason.engine.voxel}) build on it.
+ * library locator). Depends on no other engine module: the UI runtime ({@code openmason.engine.ui}), the voxel
+ * stack ({@code openmason.engine.voxel}) and the modeling stack ({@code openmason.engine.modeling}, GMR + model
+ * viewer, #91) build on it.
  */
 module openmason.engine.core {
 
@@ -13,7 +14,7 @@ module openmason.engine.core {
     requires org.lwjgl.stb;
     requires org.lwjgl.openal;
 
-    // Math (Vector3f/Matrix4f in exported rendering and viewer APIs)
+    // Math (Vector3f/Matrix4f in exported rendering APIs)
     requires transitive org.joml;
 
     // JSON processing (format manifests)
@@ -64,38 +65,12 @@ module openmason.engine.core {
     exports com.openmason.engine.rendering.gl;
     exports com.openmason.engine.rendering.lighting;
     exports com.openmason.engine.rendering.model;
-    exports com.openmason.engine.rendering.model.gmr;
-    exports com.openmason.engine.rendering.model.gmr.analysis;
-    exports com.openmason.engine.rendering.model.gmr.core;
-    exports com.openmason.engine.rendering.model.gmr.editable;
-    exports com.openmason.engine.rendering.model.gmr.editable.ops;
-    exports com.openmason.engine.rendering.model.gmr.extraction;
-    exports com.openmason.engine.rendering.model.gmr.geometry;
-    exports com.openmason.engine.rendering.model.gmr.mapping;
-    exports com.openmason.engine.rendering.model.gmr.mesh.edgeOperations;
-    exports com.openmason.engine.rendering.model.gmr.notification;
-    exports com.openmason.engine.rendering.model.gmr.parts;
-    exports com.openmason.engine.rendering.model.gmr.parts.shapes;
-    exports com.openmason.engine.rendering.model.gmr.topology;
-    exports com.openmason.engine.rendering.model.gmr.uv;
     exports com.openmason.engine.rendering.postfx;
     exports com.openmason.engine.rendering.postfx.effects;
     exports com.openmason.engine.rendering.shaders;
     exports com.openmason.engine.rendering.shadow;
     exports com.openmason.engine.rendering.sky;
     exports com.openmason.engine.rendering.sprite;
-    exports com.openmason.engine.rendering.viewer;
-    exports com.openmason.engine.rendering.viewer.camera;
-    exports com.openmason.engine.rendering.viewer.gizmo;
-    exports com.openmason.engine.rendering.viewer.gizmo.geometry;
-    exports com.openmason.engine.rendering.viewer.gizmo.interaction;
-    exports com.openmason.engine.rendering.viewer.gizmo.modes;
-    exports com.openmason.engine.rendering.viewer.gizmo.rendering;
-    exports com.openmason.engine.rendering.viewer.math;
-    exports com.openmason.engine.rendering.viewer.passes;
-    exports com.openmason.engine.rendering.viewer.picking;
-    exports com.openmason.engine.rendering.viewer.scene;
-    exports com.openmason.engine.rendering.viewer.transform;
     exports com.openmason.engine.util;
     exports com.openmason.engine.util.easing;
     exports com.openmason.engine.vram;

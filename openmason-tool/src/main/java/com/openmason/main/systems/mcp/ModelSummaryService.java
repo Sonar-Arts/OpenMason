@@ -1,7 +1,7 @@
 package com.openmason.main.systems.mcp;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
 import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
 import com.openmason.main.systems.services.EditorServices;
