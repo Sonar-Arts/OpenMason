@@ -1,6 +1,6 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.engine.rendering.model.gmr.topology.MeshFace;
 import com.openmason.engine.rendering.model.gmr.topology.MeshTopology;
 import com.openmason.main.systems.menus.textureCreator.keyboard.KeyCodeTranslator;

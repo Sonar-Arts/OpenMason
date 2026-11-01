@@ -42,6 +42,7 @@ STATE_NAME = "openmason-tests"
 MODULES = ["openmason-engine/engine-core",
            "openmason-engine/engine-ui",
            "openmason-engine/engine-voxel",
+           "openmason-engine/engine-modeling",
            "openmason-engine/samples/core-consumer",
            "openmason-tool"]
 TAG_SCOPES = ("integration", "regression")

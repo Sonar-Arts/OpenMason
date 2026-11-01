@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The engine stays reusable by other games (#378, epic #390), and since the split (#387) the core stands
  * alone: no compiled {@code openmason.engine.core} class may refer to the game ({@code com.stonebreak}), the
- * Open Mason tool ({@code com.openmason.main}), the UI module or the voxel module.
+ * Open Mason tool ({@code com.openmason.main}), the UI module, the voxel module or the modeling module (#91).
  * Scans bytecode, so fully-qualified names and reflection strings count and comments do not. JPMS already
  * stops a source import across these lines; this also catches {@code Class.forName} strings.
  */
@@ -39,11 +39,16 @@ class EngineBoundaryTest {
             "com/openmason/engine/net/replication/", "com.openmason.engine.net.replication.",
             "com/openmason/engine/wayfind/voxel/", "com.openmason.engine.wayfind.voxel.");
 
+    /** Package prefixes owned by the modeling module ({@code openmason.engine.modeling}, #91). */
+    static final List<String> MODELING = List.of(
+            "com/openmason/engine/rendering/model/gmr/", "com.openmason.engine.rendering.model.gmr.",
+            "com/openmason/engine/rendering/viewer/", "com.openmason.engine.rendering.viewer.");
+
     @Test
     void engineCoreNeverReferencesTheGameTheToolOrTheOtherEngineModules() throws Exception {
         Path classes = Path.of(com.openmason.engine.util.EngineProperties.class.getProtectionDomain().getCodeSource().getLocation().toURI());
         assertTrue(Files.isDirectory(classes), "expected the module's compiled classes directory, got " + classes);
-        List<String> forbidden = Stream.of(NOT_ENGINE, UI, VOXEL).flatMap(List::stream).toList();
+        List<String> forbidden = Stream.of(NOT_ENGINE, UI, VOXEL, MODELING).flatMap(List::stream).toList();
         List<String> offenders;
         try (Stream<Path> files = Files.walk(classes)) {
             offenders = files.filter(p -> p.toString().endsWith(".class"))

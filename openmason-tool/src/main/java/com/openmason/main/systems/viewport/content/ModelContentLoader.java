@@ -1,8 +1,8 @@
 package com.openmason.main.systems.viewport.content;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
-import com.openmason.engine.rendering.model.ModelPart;
-import com.openmason.engine.rendering.model.UVMode;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.ModelPart;
+import com.openmason.engine.rendering.model.gmr.UVMode;
 import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
 import com.openmason.main.systems.rendering.model.editable.BlockModel;
 import com.openmason.main.systems.rendering.model.editable.ModelGeometry;

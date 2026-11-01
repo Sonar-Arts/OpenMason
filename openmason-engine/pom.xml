@@ -3,7 +3,9 @@
        engine-core   formats, rendering, audio, net core, CEARL/VRAM, diagnostics, util, generic Cenda
        engine-ui     OMUI/SBUI runtime + Masonry + the Cenda Lua/Flex hosts      (requires core)
        engine-voxel  CCO, MMS, voxel lighting, SBO stamps, Wayfind voxel, replication (requires core)
-     JPMS enforces the boundaries: core reads neither ui nor voxel, and ui and voxel never read each other.
+       engine-modeling  GMR (editable mesh, edit ops, topology, UV) + the model viewer   (requires core, #91)
+     JPMS enforces the boundaries: core reads no other engine module, and ui, voxel and modeling never read
+     each other. modeling is authoring code for the tool; no game ships it.
      cenda/ holds the native sources plus the launch glue POM (exec:exec@cenda-kernels);
      samples/core-consumer proves engine-core stands alone. -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -27,6 +29,7 @@
         <module>engine-core</module>
         <module>engine-ui</module>
         <module>engine-voxel</module>
+        <module>engine-modeling</module>
         <module>cenda</module>
         <module>samples/core-consumer</module>
     </modules>

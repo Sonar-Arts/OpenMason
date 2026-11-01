@@ -1,6 +1,6 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.main.systems.menus.textureCreator.keyboard.KeyCodeTranslator;
 import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
 import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;

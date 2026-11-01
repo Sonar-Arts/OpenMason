@@ -13,8 +13,8 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * #387: no compiled {@code openmason.engine.ui} class may refer to the game, the Open Mason tool or the
- * voxel module (the UI runtime builds on the core only).
+ * #387: no compiled {@code openmason.engine.ui} class may refer to the game, the Open Mason tool, the
+ * voxel module or the modeling module (the UI runtime builds on the core only).
  * Scans bytecode, so fully-qualified names and reflection strings count and comments do not. JPMS already
  * stops a source import across these lines; this also catches {@code Class.forName} strings.
  */
@@ -38,11 +38,16 @@ class UiBoundaryTest {
             "com/openmason/engine/net/replication/", "com.openmason.engine.net.replication.",
             "com/openmason/engine/wayfind/voxel/", "com.openmason.engine.wayfind.voxel.");
 
+    /** Package prefixes owned by the modeling module ({@code openmason.engine.modeling}, #91). */
+    static final List<String> MODELING = List.of(
+            "com/openmason/engine/rendering/model/gmr/", "com.openmason.engine.rendering.model.gmr.",
+            "com/openmason/engine/rendering/viewer/", "com.openmason.engine.rendering.viewer.");
+
     @Test
     void engineUiNeverReferencesTheGameTheToolOrTheVoxelModule() throws Exception {
         Path classes = Path.of(com.openmason.engine.ui.runtime.UiDocumentInstance.class.getProtectionDomain().getCodeSource().getLocation().toURI());
         assertTrue(Files.isDirectory(classes), "expected the module's compiled classes directory, got " + classes);
-        List<String> forbidden = Stream.of(NOT_ENGINE, VOXEL).flatMap(List::stream).toList();
+        List<String> forbidden = Stream.of(NOT_ENGINE, VOXEL, MODELING).flatMap(List::stream).toList();
         List<String> offenders;
         try (Stream<Path> files = Files.walk(classes)) {
             offenders = files.filter(p -> p.toString().endsWith(".class"))

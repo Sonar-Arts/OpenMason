@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.openmason</groupId>
+        <artifactId>openmason-engine-parent</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>openmason-engine-modeling</artifactId>
+    <packaging>jar</packaging>
+
+    <name>OpenMason Engine Modeling</name>
+    <description>GMR (the Generic Model Renderer and its editable mesh document: edit ops, topology, parts,
+        UV regions, analysis) and the model viewer (camera, gizmo, passes, picking, scene). Authoring code no game
+        ships; used by the Open Mason tool (#91).</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.openmason</groupId>
+            <artifactId>openmason-engine-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- JUnit 5 for testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Mockito for mocking in tests -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

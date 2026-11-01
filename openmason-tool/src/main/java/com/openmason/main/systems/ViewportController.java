@@ -3,7 +3,7 @@ package com.openmason.main.systems;
 import com.openmason.main.systems.rendering.model.editable.BlockModel;
 import com.openmason.engine.format.omo.OMOFormat;
 import com.openmason.main.omConfig;
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.main.systems.rendering.model.miscComponents.OMTTextureLoader;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;

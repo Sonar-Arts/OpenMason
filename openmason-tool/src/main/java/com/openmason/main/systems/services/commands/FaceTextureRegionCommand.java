@@ -1,6 +1,6 @@
 package com.openmason.main.systems.services.commands;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 
 /**
  * Undoable command for a rectangular GPU texture region update.

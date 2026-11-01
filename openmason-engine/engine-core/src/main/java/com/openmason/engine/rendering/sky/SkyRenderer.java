@@ -20,7 +20,7 @@ import static org.lwjgl.opengl.GL30.*;
 // Project Imports
 import com.openmason.engine.rendering.RenderOrigin;
 import com.openmason.engine.rendering.shaders.ShaderProgram;
-import com.openmason.engine.rendering.viewer.scene.PngTextureUploader;
+import com.openmason.engine.rendering.gl.PngTextureUploader;
 
 /**
  * Renderer for procedural sky with sun and moon.

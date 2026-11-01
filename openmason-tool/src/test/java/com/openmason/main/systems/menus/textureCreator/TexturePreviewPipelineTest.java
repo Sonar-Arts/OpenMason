@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.textureCreator;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
 import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;

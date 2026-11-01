@@ -1,6 +1,6 @@
 package com.openmason.main.systems.scripting.live;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
 import com.openmason.main.systems.services.commands.MeshSnapshot;
 import com.openmason.main.systems.services.commands.ModelCommand;

@@ -2,7 +2,7 @@ package com.openmason.main.systems.scene;
 
 import com.openmason.engine.rendering.viewer.scene.ModelCache;
 import com.openmason.engine.rendering.viewer.scene.OmoModelLoader;
-import com.openmason.engine.rendering.viewer.scene.PngTextureUploader;
+import com.openmason.engine.rendering.gl.PngTextureUploader;
 import com.openmason.main.systems.scene.dnd.SceneDropResolver;
 import com.openmason.main.systems.scene.views.SceneInspectorImGui;
 import com.openmason.main.systems.scene.views.SceneOutlinerImGui;

@@ -174,7 +174,7 @@ public class SceneViewerController {
         // back to a fixed scale and reads as tiny beside a large model.
         gizmoRenderer.updateModelBounds(primary != null
                 ? primary.worldBounds()
-                : com.openmason.engine.rendering.model.ModelBounds.EMPTY);
+                : com.openmason.engine.rendering.model.gmr.ModelBounds.EMPTY);
     }
 
     /** Supplies the instances the outline pass highlights, primary first. */
@@ -203,10 +203,10 @@ public class SceneViewerController {
         }
         Vector3f center = new Vector3f(min).add(max).mul(0.5f);
         Vector3f size = new Vector3f(max).sub(min);
-        focusOnBounds(new com.openmason.engine.rendering.model.ModelBounds(min, max, center, size));
+        focusOnBounds(new com.openmason.engine.rendering.model.gmr.ModelBounds(min, max, center, size));
     }
 
-    private void focusOnBounds(com.openmason.engine.rendering.model.ModelBounds bounds) {
+    private void focusOnBounds(com.openmason.engine.rendering.model.gmr.ModelBounds bounds) {
         camera().setTarget(bounds.center());
         float extent = Math.max(bounds.maxExtent(), 0.5f);
         camera().setDistance(extent * 3.0f);

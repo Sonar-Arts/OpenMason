@@ -1,6 +1,6 @@
 package com.openmason.main.systems.rendering.model.gmr.subrenders.edge.operations;
 
-import com.openmason.engine.rendering.model.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
 import com.openmason.engine.rendering.model.gmr.topology.MeshEdge;
 import com.openmason.engine.rendering.model.gmr.topology.MeshTopology;
 import com.openmason.main.systems.services.commands.MeshSnapshot;

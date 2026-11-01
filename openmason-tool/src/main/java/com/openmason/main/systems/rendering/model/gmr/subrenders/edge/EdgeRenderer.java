@@ -1,8 +1,8 @@
 package com.openmason.main.systems.rendering.model.gmr.subrenders.edge;
 
 import com.openmason.engine.rendering.shaders.ShaderProgram;
-import com.openmason.engine.rendering.model.GenericModelRenderer;
-import com.openmason.engine.rendering.model.MeshChangeListener;
+import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.rendering.model.gmr.MeshChangeListener;
 import com.openmason.main.systems.rendering.model.gmr.subrenders.MeshOverlayTheme;
 import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
 import com.openmason.engine.rendering.model.gmr.topology.MeshEdge;
