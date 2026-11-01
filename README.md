@@ -2,7 +2,8 @@
 
 Open Mason is a game-agnostic engine and toolset, developed in tandem with [Stonebreak](https://github.com/Sonar-Arts/Stonebreak). Our intention is to make it close to what the Aurora engine toolset does for Neverwinter Nights, so that players and developers alike can have access to modding and asset creation tools. Games plug into the editor through plugins (Stonebreak's lives in the Stonebreak repository).
 
-<img width="2498" height="1088" alt="image" src="https://github.com/user-attachments/assets/5c02327e-790f-4bef-9761-4c19ea3f299d" />
+<img width="2910" height="1340" alt="image" src="https://github.com/user-attachments/assets/8b808cbc-7a01-42a0-b13c-c41445ccb0fc" />
+
 
 ## Running Open Mason
 
