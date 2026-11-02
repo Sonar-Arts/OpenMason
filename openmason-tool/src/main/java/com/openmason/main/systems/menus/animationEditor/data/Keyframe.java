@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.animationEditor.data;
 
-import com.openmason.engine.rendering.model.gmr.parts.PartTransform;
+import com.openmason.engine.modeling.parts.PartTransform;
 import org.joml.Vector3f;
 
 /**

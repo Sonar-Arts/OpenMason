@@ -5,7 +5,7 @@ package com.openmason.engine.voxel.sbo.sboRenderer;
  *
  * <p>Three coordinate systems interact in the SBO rendering pipeline:
  * <ul>
- *   <li><b>GMR</b> (Generic Model Renderer) — used by Open Mason during editing and in SBO file face mappings</li>
+ *   <li><b>EditableModel</b> (editable model) — used by Open Mason during editing and in SBO file face mappings</li>
  *   <li><b>MMS</b> (Mighty Mesh System) — used at runtime for chunk mesh generation and face culling</li>
  *   <li><b>Atlas</b> — string-based face names used by the texture atlas metadata</li>
  * </ul>
@@ -17,19 +17,19 @@ public final class SBOFaceConventions {
 
     private SBOFaceConventions() {}
 
-    // ── GMR Face IDs (Open Mason / SBO file format) ──
+    // ── EditableModel Face IDs (Open Mason / SBO file format) ──
 
-    /** GMR face 0: Front face (+Z direction) */
+    /** EditableModel face 0: Front face (+Z direction) */
     public static final int GMR_FRONT = 0;
-    /** GMR face 1: Back face (-Z direction) */
+    /** EditableModel face 1: Back face (-Z direction) */
     public static final int GMR_BACK = 1;
-    /** GMR face 2: Left face (-X direction) */
+    /** EditableModel face 2: Left face (-X direction) */
     public static final int GMR_LEFT = 2;
-    /** GMR face 3: Right face (+X direction) */
+    /** EditableModel face 3: Right face (+X direction) */
     public static final int GMR_RIGHT = 3;
-    /** GMR face 4: Top face (+Y direction) */
+    /** EditableModel face 4: Top face (+Y direction) */
     public static final int GMR_TOP = 4;
-    /** GMR face 5: Bottom face (-Y direction) */
+    /** EditableModel face 5: Bottom face (-Y direction) */
     public static final int GMR_BOTTOM = 5;
 
     // ── MMS Face IDs (Runtime chunk mesh generation) ──
@@ -94,25 +94,25 @@ public final class SBOFaceConventions {
     public static final String ATLAS_EAST = "east";
     public static final String ATLAS_WEST = "west";
 
-    // ── GMR → MMS conversion ──
+    // ── EditableModel → MMS conversion ──
 
     /**
-     * Static mapping table: GMR face index → MMS face index.
-     * Index by GMR face ID to get corresponding MMS face ID.
+     * Static mapping table: EditableModel face index → MMS face index.
+     * Index by EditableModel face ID to get corresponding MMS face ID.
      */
     private static final int[] GMR_TO_MMS = {
-            MMS_SOUTH,   // GMR 0 (FRONT +Z)  → MMS 3 (SOUTH +Z)
-            MMS_NORTH,   // GMR 1 (BACK -Z)   → MMS 2 (NORTH -Z)
-            MMS_WEST,    // GMR 2 (LEFT -X)    → MMS 5 (WEST -X)
-            MMS_EAST,    // GMR 3 (RIGHT +X)   → MMS 4 (EAST +X)
-            MMS_TOP,     // GMR 4 (TOP +Y)     → MMS 0 (TOP +Y)
-            MMS_BOTTOM   // GMR 5 (BOTTOM -Y)  → MMS 1 (BOTTOM -Y)
+            MMS_SOUTH,   // EditableModel 0 (FRONT +Z)  → MMS 3 (SOUTH +Z)
+            MMS_NORTH,   // EditableModel 1 (BACK -Z)   → MMS 2 (NORTH -Z)
+            MMS_WEST,    // EditableModel 2 (LEFT -X)    → MMS 5 (WEST -X)
+            MMS_EAST,    // EditableModel 3 (RIGHT +X)   → MMS 4 (EAST +X)
+            MMS_TOP,     // EditableModel 4 (TOP +Y)     → MMS 0 (TOP +Y)
+            MMS_BOTTOM   // EditableModel 5 (BOTTOM -Y)  → MMS 1 (BOTTOM -Y)
     };
 
     /**
-     * Convert a GMR face ID to the equivalent MMS face ID.
+     * Convert an editable-model face ID to the equivalent MMS face ID.
      *
-     * @param gmrFaceId GMR face index (0-5)
+     * @param gmrFaceId EditableModel face index (0-5)
      * @return MMS face index (0-5)
      */
     public static int gmrToMms(int gmrFaceId) {
@@ -141,13 +141,13 @@ public final class SBOFaceConventions {
         return MMS_TO_ATLAS_NAME[Math.clamp(mmsFaceId, 0, 5)];
     }
 
-    // ── Atlas name → GMR conversion ──
+    // ── Atlas name → EditableModel conversion ──
 
     /**
-     * Convert an atlas face name to the equivalent GMR face ID.
+     * Convert an atlas face name to the equivalent EditableModel face ID.
      *
      * @param atlasName atlas face name
-     * @return GMR face index (0-5), or -1 if the name is not recognized
+     * @return EditableModel face index (0-5), or -1 if the name is not recognized
      */
     public static int atlasNameToGmr(String atlasName) {
         return switch (atlasName) {

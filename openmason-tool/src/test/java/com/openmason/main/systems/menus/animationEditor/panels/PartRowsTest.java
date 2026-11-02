@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.animationEditor.panels;
 
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.menus.animationEditor.AnimTestModels;
 import com.openmason.main.systems.menus.animationEditor.data.Track;
 import org.junit.jupiter.api.Test;

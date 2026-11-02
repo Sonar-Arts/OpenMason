@@ -1,8 +1,8 @@
 package com.openmason.main.systems.menus.animationEditor;
 
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartShapeFactory;
 import com.openmason.main.systems.menus.animationEditor.data.Easing;
 import com.openmason.main.systems.menus.animationEditor.data.Keyframe;
 import org.joml.Vector3f;

@@ -1,6 +1,6 @@
 package com.openmason.engine.rendering.viewer.gizmo.rendering;
 
-import com.openmason.engine.rendering.model.gmr.ModelBounds;
+import com.openmason.engine.modeling.ModelBounds;
 import com.openmason.engine.rendering.viewer.gizmo.GizmoState;
 import com.openmason.engine.rendering.viewer.gizmo.interaction.GizmoInteractionHandler;
 import com.openmason.engine.rendering.viewer.gizmo.interaction.GizmoPart;

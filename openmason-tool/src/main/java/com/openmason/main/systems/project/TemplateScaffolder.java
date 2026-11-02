@@ -5,7 +5,7 @@ import com.openmason.api.target.GameTarget;
 import com.openmason.engine.format.mesh.ParsedMeshData;
 import com.openmason.engine.format.omo.OMOReader;
 import com.openmason.engine.format.sbo.SBOFormat;
-import com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder;
+import com.openmason.engine.modeling.parts.PartMeshRebuilder;
 import com.openmason.main.systems.menus.mainHub.model.ProjectTemplate;
 import com.openmason.main.systems.menus.mainHub.model.ProjectTemplate.TemplateModel;
 import com.openmason.main.systems.menus.mainHub.model.ProjectTemplate.TemplatePart;

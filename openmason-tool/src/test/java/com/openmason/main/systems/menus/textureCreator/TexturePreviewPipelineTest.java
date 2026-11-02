@@ -1,8 +1,8 @@
 package com.openmason.main.systems.menus.textureCreator;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -33,7 +33,7 @@ class TexturePreviewPipelineTest {
     private static final int RED = 0xFF0000FF;
 
     /** Records texture uploads instead of calling glTexSubImage2D. */
-    private static final class RecordingRenderer extends GenericModelRenderer {
+    private static final class RecordingRenderer extends EditableModel {
         record Upload(int textureId, int x, int y, int width, int height, byte[] rgba) { }
 
         final List<Upload> uploads = new ArrayList<>();

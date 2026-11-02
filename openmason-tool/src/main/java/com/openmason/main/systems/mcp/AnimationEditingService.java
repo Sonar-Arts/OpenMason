@@ -1,8 +1,8 @@
 package com.openmason.main.systems.mcp;
 
 import com.fasterxml.jackson.annotation.JsonValue;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.services.EditorServices;
 import com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui;
 import com.openmason.main.systems.menus.animationEditor.controller.AnimationEditorController;

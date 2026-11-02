@@ -1,11 +1,11 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.topology.MeshFace;
-import com.openmason.engine.rendering.model.gmr.topology.MeshTopology;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.topology.MeshFace;
+import com.openmason.engine.modeling.topology.MeshTopology;
 import com.openmason.main.systems.menus.textureCreator.keyboard.KeyCodeTranslator;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.ToolPreviewRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.ToolPreviewRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
 import com.openmason.main.systems.services.commands.MeshSnapshot;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
@@ -35,7 +35,7 @@ import java.util.TreeSet;
  * amount convention, preview geometry and engine op differ.
  *
  * <p>Face edit mode with a non-empty face selection required. The engine op
- * ({@link GenericModelRenderer#insetFaces} / {@link GenericModelRenderer#extrudeFaces})
+ * ({@link EditableModel#insetFaces} / {@link EditableModel#extrudeFaces})
  * is called exactly ONCE on confirm with the final amount; the live preview is
  * tool-side overlay lines only ({@link ToolPreviewRenderer}), so cancel is free
  * and undo is a single snapshot command. Multi-face selections are handled
@@ -81,7 +81,7 @@ public class FaceModalToolController {
     }
 
     // Dependencies (set via setters, same pattern as other input controllers)
-    private GenericModelRenderer modelRenderer;
+    private EditableModel modelRenderer;
     private FaceRenderer faceRenderer;
     private FaceSelectionState faceSelectionState;
     private TransformState transformState;
@@ -156,7 +156,7 @@ public class FaceModalToolController {
     // DEPENDENCY SETTERS
     // =========================================================================
 
-    public void setModelRenderer(GenericModelRenderer modelRenderer) {
+    public void setModelRenderer(EditableModel modelRenderer) {
         this.modelRenderer = modelRenderer;
     }
 

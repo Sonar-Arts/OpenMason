@@ -41,7 +41,7 @@ class EngineBoundaryTest {
 
     /** Package prefixes owned by the modeling module ({@code openmason.engine.modeling}, #91). */
     static final List<String> MODELING = List.of(
-            "com/openmason/engine/rendering/model/gmr/", "com.openmason.engine.rendering.model.gmr.",
+            "com/openmason/engine/modeling/", "com.openmason.engine.modeling.",
             "com/openmason/engine/rendering/viewer/", "com.openmason.engine.rendering.viewer.");
 
     @Test

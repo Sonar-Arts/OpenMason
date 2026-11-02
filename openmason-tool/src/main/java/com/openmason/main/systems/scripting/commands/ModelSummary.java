@@ -1,8 +1,8 @@
 package com.openmason.main.systems.scripting.commands;
 
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartMeshRebuilder;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 

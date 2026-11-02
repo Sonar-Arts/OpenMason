@@ -1,6 +1,6 @@
 package com.openmason.main.systems.services.commands;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 
 /**
  * Snapshot-based command for topology-changing operations.
@@ -17,13 +17,13 @@ public final class SnapshotCommand implements ModelCommand {
     private final MeshSnapshot before;
     private final MeshSnapshot after;
     private final String description;
-    private final GenericModelRenderer gmr;
+    private final EditableModel gmr;
     private final RendererSynchronizer synchronizer;
 
     private SnapshotCommand(MeshSnapshot before,
                             MeshSnapshot after,
                             String description,
-                            GenericModelRenderer gmr,
+                            EditableModel gmr,
                             RendererSynchronizer synchronizer) {
         this.before = before;
         this.after = after;
@@ -62,32 +62,32 @@ public final class SnapshotCommand implements ModelCommand {
     // ── Factory methods ─────────────────────────────────────────────────
 
     public static SnapshotCommand subdivision(MeshSnapshot before, MeshSnapshot after,
-                                              GenericModelRenderer gmr, RendererSynchronizer sync) {
+                                              EditableModel gmr, RendererSynchronizer sync) {
         return new SnapshotCommand(before, after, "Subdivide Edge", gmr, sync);
     }
 
     public static SnapshotCommand knifeCut(MeshSnapshot before, MeshSnapshot after,
-                                           GenericModelRenderer gmr, RendererSynchronizer sync) {
+                                           EditableModel gmr, RendererSynchronizer sync) {
         return new SnapshotCommand(before, after, "Knife Cut", gmr, sync);
     }
 
     public static SnapshotCommand edgeInsertion(MeshSnapshot before, MeshSnapshot after,
-                                                GenericModelRenderer gmr, RendererSynchronizer sync) {
+                                                EditableModel gmr, RendererSynchronizer sync) {
         return new SnapshotCommand(before, after, "Insert Edge", gmr, sync);
     }
 
     public static SnapshotCommand faceDeletion(MeshSnapshot before, MeshSnapshot after,
-                                               GenericModelRenderer gmr, RendererSynchronizer sync) {
+                                               EditableModel gmr, RendererSynchronizer sync) {
         return new SnapshotCommand(before, after, "Delete Face", gmr, sync);
     }
 
     public static SnapshotCommand faceCreation(MeshSnapshot before, MeshSnapshot after,
-                                               GenericModelRenderer gmr, RendererSynchronizer sync) {
+                                               EditableModel gmr, RendererSynchronizer sync) {
         return new SnapshotCommand(before, after, "Create Face", gmr, sync);
     }
 
     public static SnapshotCommand vertexMerge(MeshSnapshot before, MeshSnapshot after,
-                                              GenericModelRenderer gmr, RendererSynchronizer sync) {
+                                              EditableModel gmr, RendererSynchronizer sync) {
         return new SnapshotCommand(before, after, "Move + Merge Vertices", gmr, sync);
     }
 
@@ -98,7 +98,7 @@ public final class SnapshotCommand implements ModelCommand {
      */
     public static SnapshotCommand custom(String description,
                                           MeshSnapshot before, MeshSnapshot after,
-                                          GenericModelRenderer gmr, RendererSynchronizer sync) {
+                                          EditableModel gmr, RendererSynchronizer sync) {
         return new SnapshotCommand(before, after, description, gmr, sync);
     }
 }

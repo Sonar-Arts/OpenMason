@@ -1,10 +1,10 @@
 package com.openmason.main.systems.menus.textureCreator;
 
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping.UVRegion;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping.UVRotation;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.FaceTextureMapping.UVRegion;
+import com.openmason.engine.modeling.uv.FaceTextureMapping.UVRotation;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import com.openmason.main.systems.menus.textureCreator.commands.DrawCommand;
 import org.junit.jupiter.api.BeforeEach;

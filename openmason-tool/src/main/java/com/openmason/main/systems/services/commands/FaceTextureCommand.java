@@ -1,8 +1,8 @@
 package com.openmason.main.systems.services.commands;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
 
 /**
  * Command for per-face texture/material assignment changes.
@@ -16,13 +16,13 @@ public final class FaceTextureCommand implements ModelCommand {
     private final FaceTextureMapping oldMapping; // null if face had no mapping before
     private final FaceTextureMapping newMapping;
     private final FaceTextureManager faceTextureManager;
-    private final GenericModelRenderer gmr;
+    private final EditableModel gmr;
 
     public FaceTextureCommand(int faceId,
                               FaceTextureMapping oldMapping,
                               FaceTextureMapping newMapping,
                               FaceTextureManager faceTextureManager,
-                              GenericModelRenderer gmr) {
+                              EditableModel gmr) {
         this.faceId = faceId;
         this.oldMapping = oldMapping;
         this.newMapping = newMapping;

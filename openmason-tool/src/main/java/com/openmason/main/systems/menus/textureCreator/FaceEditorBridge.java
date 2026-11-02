@@ -1,10 +1,10 @@
 package com.openmason.main.systems.menus.textureCreator;
 
 import com.openmason.main.systems.menus.textureCreator.canvas.PolygonShapeMask;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping.UVRegion;
-import com.openmason.engine.rendering.model.gmr.uv.IFaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.FaceTextureMapping.UVRegion;
+import com.openmason.engine.modeling.uv.IFaceTextureManager;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

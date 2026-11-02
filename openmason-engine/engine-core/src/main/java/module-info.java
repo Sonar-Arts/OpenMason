@@ -2,7 +2,7 @@
  * Open Mason engine core (#387): file formats, rendering (GL, shaders, shadows, sky, postfx), audio,
  * the networking core, CEARL/VRAM, diagnostics, utilities and the generic Cenda native kernels (noise, zstd, the
  * library locator). Depends on no other engine module: the UI runtime ({@code openmason.engine.ui}), the voxel
- * stack ({@code openmason.engine.voxel}) and the modeling stack ({@code openmason.engine.modeling}, GMR + model
+ * stack ({@code openmason.engine.voxel}) and the modeling stack ({@code openmason.engine.modeling}, EditableModel + model
  * viewer, #91) build on it.
  */
 module openmason.engine.core {
@@ -65,6 +65,7 @@ module openmason.engine.core {
     exports com.openmason.engine.rendering.gl;
     exports com.openmason.engine.rendering.lighting;
     exports com.openmason.engine.rendering.model;
+    exports com.openmason.engine.rendering.model.draw;
     exports com.openmason.engine.rendering.postfx;
     exports com.openmason.engine.rendering.postfx.effects;
     exports com.openmason.engine.rendering.shaders;

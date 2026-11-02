@@ -7,7 +7,7 @@ import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelPaintOps;
 import com.openmason.main.systems.menus.textureCreator.commands.CommandHistory;
 import com.openmason.main.systems.menus.textureCreator.commands.DrawCommand;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping.UVRegion;
+import com.openmason.engine.modeling.uv.FaceTextureMapping.UVRegion;
 import com.openmason.main.systems.menus.textureCreator.SymmetryState;
 import com.openmason.main.systems.menus.textureCreator.TextureCreatorState;
 import com.openmason.main.systems.menus.textureCreator.TextureDocument;

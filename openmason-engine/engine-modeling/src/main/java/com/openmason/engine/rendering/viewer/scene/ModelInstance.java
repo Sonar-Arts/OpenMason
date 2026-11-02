@@ -1,6 +1,6 @@
 package com.openmason.engine.rendering.viewer.scene;
 
-import com.openmason.engine.rendering.model.gmr.ModelBounds;
+import com.openmason.engine.modeling.ModelBounds;
 import com.openmason.engine.rendering.viewer.transform.TransformLimits;
 import com.openmason.engine.rendering.viewer.transform.TransformState;
 import org.joml.Matrix4f;

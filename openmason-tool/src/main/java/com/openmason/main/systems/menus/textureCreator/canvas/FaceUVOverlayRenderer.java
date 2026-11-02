@@ -1,8 +1,8 @@
 package com.openmason.main.systems.menus.textureCreator.canvas;
 
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping.UVRegion;
-import com.openmason.engine.rendering.model.gmr.uv.IFaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.FaceTextureMapping.UVRegion;
+import com.openmason.engine.modeling.uv.IFaceTextureManager;
 import com.openmason.main.systems.mortar.theme.Argb;
 import com.openmason.main.systems.mortar.theme.MortarTheme;
 import com.openmason.main.systems.themes.utils.ThemeColors;

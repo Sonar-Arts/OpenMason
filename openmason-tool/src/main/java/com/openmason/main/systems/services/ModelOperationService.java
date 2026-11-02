@@ -1,12 +1,12 @@
 package com.openmason.main.systems.services;
 
 import com.openmason.main.systems.menus.textureCreator.io.OMTSerializer;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.rendering.model.editable.BlockModel;
 import com.openmason.main.systems.rendering.model.factory.BlankModelFactory;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import com.openmason.main.systems.rendering.model.io.omo.OMODeserializer;
 import com.openmason.engine.format.omo.OMOFormat;
 import com.openmason.main.systems.rendering.model.io.omo.OMOSerializer;
@@ -282,7 +282,7 @@ public class ModelOperationService {
 
             // Extract and set face texture data (v1.2+)
             if (viewport != null) {
-                GenericModelRenderer renderer = viewport.getModelRenderer();
+                EditableModel renderer = viewport.getModelRenderer();
                 if (renderer != null) {
                     FaceTextureManager ftm = renderer.getFaceTextureManager();
                     OMOFormat.FaceTextureData faceTextureData = OmoExportAssembler.extractFaceTextureData(ftm);
@@ -599,7 +599,7 @@ public class ModelOperationService {
      * @return map of materialId → PNG bytes
      */
     private Map<Integer, byte[]> extractMaterialTexturePNGs(FaceTextureManager ftm,
-                                                             GenericModelRenderer renderer) {
+                                                             EditableModel renderer) {
         Map<Integer, byte[]> result = new HashMap<>();
 
         for (MaterialDefinition mat : ftm.getAllMaterials()) {
@@ -656,7 +656,7 @@ public class ModelOperationService {
             return;
         }
 
-        GenericModelRenderer renderer = viewport.getModelRenderer();
+        EditableModel renderer = viewport.getModelRenderer();
         if (renderer == null) {
             return;
         }

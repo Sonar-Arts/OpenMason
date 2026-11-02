@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.animationEditor;
 
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.menus.animationEditor.controller.AnimationEditorController;
 import com.openmason.main.systems.menus.animationEditor.panels.FileBarPanel;
 import com.openmason.main.systems.menus.animationEditor.panels.KeyframeInspectorPanel;

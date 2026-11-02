@@ -146,7 +146,7 @@ public class SBOMeshProcessor {
                                    ITextureCoordProvider uvProvider, ILayerIndexProvider layerProvider) {
         if (meshData == null || !meshData.hasGeometry()) return null;
 
-        // Face assignment comes from the geometry, not the authored GMR face id:
+        // Face assignment comes from the geometry, not the authored EditableModel face id:
         // that id only spans 0..5 and cannot describe a model with more faces
         // (a stair has ten), so anything past the sixth face used to be clamped
         // into the bottom bucket and culled away by the block underneath.

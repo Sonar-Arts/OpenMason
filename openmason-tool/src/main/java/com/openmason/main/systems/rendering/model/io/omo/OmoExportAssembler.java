@@ -1,13 +1,13 @@
 package com.openmason.main.systems.rendering.model.io.omo;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.gmr.parts.MeshRange;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartTransform;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.parts.MeshRange;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartTransform;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 
 import java.util.ArrayList;
 import java.util.Collection;

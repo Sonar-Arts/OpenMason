@@ -2,11 +2,11 @@ package com.openmason.main.systems.scripting.commands;
 
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.openmason.engine.rendering.model.gmr.parts.MeshRange;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.parts.MeshRange;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelPaintOps;
 import com.openmason.main.systems.menus.textureCreator.filters.noise.NoiseConfig;

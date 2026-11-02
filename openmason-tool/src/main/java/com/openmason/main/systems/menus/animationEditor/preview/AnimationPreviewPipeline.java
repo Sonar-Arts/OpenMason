@@ -2,10 +2,10 @@ package com.openmason.main.systems.menus.animationEditor.preview;
 
 import com.openmason.engine.format.oma.AnimLayerMeta;
 import com.openmason.engine.format.oma.AnimSampler;
-import com.openmason.engine.rendering.model.gmr.parts.IPartChangeListener;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartTransform;
+import com.openmason.engine.modeling.parts.IPartChangeListener;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartTransform;
 import com.openmason.main.systems.menus.animationEditor.data.AnimationClip;
 import com.openmason.main.systems.menus.animationEditor.data.Track;
 import org.joml.Vector3f;

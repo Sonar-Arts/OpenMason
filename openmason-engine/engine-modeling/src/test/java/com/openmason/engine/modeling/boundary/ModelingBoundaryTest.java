@@ -13,7 +13,7 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * #91: no compiled {@code openmason.engine.modeling} class (GMR, the model viewer) may refer to the game, the
+ * #91: no compiled {@code openmason.engine.modeling} class (EditableModel, the model viewer) may refer to the game, the
  * Open Mason tool, the UI module or the voxel module. Modeling builds on the core only, so it stays usable
  * headless (MCP, tests) and by any future host, not just the editor.
  * Scans bytecode, so fully-qualified names and reflection strings count and comments do not. JPMS already
@@ -41,7 +41,7 @@ class ModelingBoundaryTest {
 
     @Test
     void engineModelingNeverReferencesTheGameTheToolOrTheOtherEngineModules() throws Exception {
-        Path classes = Path.of(com.openmason.engine.rendering.model.gmr.GenericModelRenderer.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        Path classes = Path.of(com.openmason.engine.modeling.EditableModel.class.getProtectionDomain().getCodeSource().getLocation().toURI());
         assertTrue(Files.isDirectory(classes), "expected the module's compiled classes directory, got " + classes);
         List<String> forbidden = Stream.of(NOT_ENGINE, UI, VOXEL).flatMap(List::stream).toList();
         List<String> offenders;

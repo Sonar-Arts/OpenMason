@@ -1,7 +1,7 @@
 package com.openmason.engine.rendering.viewer.scene;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.ModelBounds;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.ModelBounds;
 
 import java.nio.file.Path;
 
@@ -9,7 +9,7 @@ import java.nio.file.Path;
  * One loaded model, shared by every instance that places it.
  *
  * <p>Holds the GPU-resident renderer plus the texture ids that were uploaded for it, so
- * releasing the handle can free both. {@code GenericModelRenderer.cleanup()} only frees
+ * releasing the handle can free both. {@code EditableModel.cleanup()} only frees
  * VAO/VBO/EBO — material textures were previously never deleted at all, which is why the
  * ids are tracked here.
  */
@@ -18,14 +18,14 @@ public final class ModelHandle {
     private final String key;
     private final Path source;
     private final String name;
-    private final GenericModelRenderer renderer;
+    private final EditableModel renderer;
     private final int[] ownedTextureIds;
 
     private ModelBounds cachedBounds;
     private int refCount;
 
     ModelHandle(String key, Path source, String name,
-                GenericModelRenderer renderer, int[] ownedTextureIds) {
+                EditableModel renderer, int[] ownedTextureIds) {
         this(key, source, name, renderer, ownedTextureIds, null);
     }
 
@@ -35,7 +35,7 @@ public final class ModelHandle {
      *               reasoned about (picking, framing) without a GL context.
      */
     public ModelHandle(String key, Path source, String name,
-                       GenericModelRenderer renderer, int[] ownedTextureIds, ModelBounds bounds) {
+                       EditableModel renderer, int[] ownedTextureIds, ModelBounds bounds) {
         this.key = key;
         this.source = source;
         this.name = name;
@@ -53,7 +53,7 @@ public final class ModelHandle {
 
     public String name() { return name; }
 
-    public GenericModelRenderer renderer() { return renderer; }
+    public EditableModel renderer() { return renderer; }
 
     /** Model-space bounds, computed once on first request. */
     public ModelBounds bounds() {

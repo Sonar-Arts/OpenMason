@@ -1,7 +1,7 @@
 package com.openmason.main.systems.scripting.commands;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import com.openmason.main.systems.scripting.doc.FakeFacePixelStore;
 import com.openmason.main.systems.scripting.doc.HeadlessModelDocument;
 import org.joml.Vector3f;

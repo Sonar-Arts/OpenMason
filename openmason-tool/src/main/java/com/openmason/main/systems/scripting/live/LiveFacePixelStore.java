@@ -1,6 +1,6 @@
 package com.openmason.main.systems.scripting.live;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import com.openmason.main.systems.rendering.model.miscComponents.OMTTextureLoader;
 import com.openmason.main.systems.scripting.doc.FacePixelStore;
@@ -13,10 +13,10 @@ import org.lwjgl.opengl.GL11;
  */
 public final class LiveFacePixelStore implements FacePixelStore {
 
-    private final GenericModelRenderer gmr;
+    private final EditableModel gmr;
     private final OMTTextureLoader textureLoader = new OMTTextureLoader();
 
-    public LiveFacePixelStore(GenericModelRenderer gmr) {
+    public LiveFacePixelStore(EditableModel gmr) {
         this.gmr = gmr;
     }
 

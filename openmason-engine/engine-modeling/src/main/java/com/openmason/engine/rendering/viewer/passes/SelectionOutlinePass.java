@@ -1,6 +1,6 @@
 package com.openmason.engine.rendering.viewer.passes;
 
-import com.openmason.engine.rendering.model.gmr.ModelBounds;
+import com.openmason.engine.modeling.ModelBounds;
 import com.openmason.engine.rendering.shaders.ShaderProgram;
 import com.openmason.engine.rendering.shaders.ShaderType;
 import com.openmason.engine.rendering.viewer.ViewerFrame;

@@ -1,7 +1,7 @@
 package com.openmason.main.systems.menus.panes.propertyPane.interfaces;
 
 import com.openmason.main.systems.rendering.model.editable.BlockModel;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
 import com.openmason.main.systems.viewport.state.FaceSelectionState;
 
 /**
@@ -241,7 +241,7 @@ public interface IViewportConnector {
      *
      * @return face extraction result, or null if unavailable
      */
-    com.openmason.engine.rendering.model.gmr.extraction.GMRFaceExtractor.FaceExtractionResult extractFaceData();
+    com.openmason.engine.modeling.extraction.FaceExtractor.FaceExtractionResult extractFaceData();
 
     /**
      * Resolve which model part a face belongs to, by name.

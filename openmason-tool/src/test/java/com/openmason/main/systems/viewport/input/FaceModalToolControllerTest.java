@@ -1,6 +1,6 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
 import com.openmason.main.systems.viewport.input.FaceModalToolController.Kind;
@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Headless state-machine tests for {@link FaceModalToolController} (I inset /
  * E extrude).
  *
- * <p>Uses a stub {@link GenericModelRenderer} (CPU-only, constructor performs
+ * <p>Uses a stub {@link EditableModel} (CPU-only, constructor performs
  * no GL) that records inset/extrude calls, an overridden face-loop seam so no
  * topology or face renderer is required, identity camera matrices and a
  * 200×100 viewport: the selection centroid (0,0,0) projects to screen
@@ -67,7 +67,7 @@ class FaceModalToolControllerTest {
     }
 
     /** CPU-only model renderer stub recording the topology op calls. */
-    private static class StubModelRenderer extends GenericModelRenderer {
+    private static class StubModelRenderer extends EditableModel {
         int insetCalls;
         int extrudeCalls;
         int[] lastFaceIds;

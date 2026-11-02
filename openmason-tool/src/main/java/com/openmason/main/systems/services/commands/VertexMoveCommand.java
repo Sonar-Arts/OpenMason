@@ -1,7 +1,7 @@
 package com.openmason.main.systems.services.commands;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import org.joml.Vector3f;
 
 import java.util.Map;
@@ -25,12 +25,12 @@ public final class VertexMoveCommand implements ModelCommand {
 
     private final Map<Integer, VertexDelta> deltas;
     private final String description;
-    private final GenericModelRenderer gmr;
+    private final EditableModel gmr;
     private final RendererSynchronizer synchronizer;
 
     public VertexMoveCommand(Map<Integer, VertexDelta> deltas,
                              String description,
-                             GenericModelRenderer gmr,
+                             EditableModel gmr,
                              RendererSynchronizer synchronizer) {
         this.deltas = Map.copyOf(deltas);
         this.description = description;

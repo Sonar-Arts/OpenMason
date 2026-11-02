@@ -1,7 +1,7 @@
 package com.openmason.main.systems.scripting.commands;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder;
+import com.openmason.engine.modeling.parts.PartMeshRebuilder;
 import com.openmason.main.systems.scripting.doc.HeadlessModelDocument;
 import org.joml.Vector3f;
 import org.junit.jupiter.api.BeforeEach;

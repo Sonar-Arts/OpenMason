@@ -9,8 +9,8 @@ import com.openmason.main.systems.menus.animationEditor.data.Track;
 import com.openmason.main.systems.menus.animationEditor.io.OMAFormat;
 import com.openmason.main.systems.menus.animationEditor.io.OMASerializer;
 import com.openmason.main.systems.scripting.doc.ModelDocument;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.PartTransform;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.PartTransform;
 import org.joml.Vector3f;
 
 import java.nio.file.Path;

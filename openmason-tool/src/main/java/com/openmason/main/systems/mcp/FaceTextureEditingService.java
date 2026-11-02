@@ -1,10 +1,10 @@
 package com.openmason.main.systems.mcp;
 
-import com.openmason.engine.rendering.model.gmr.extraction.GMRFaceExtractor;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureSizer;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.extraction.FaceExtractor;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.FaceTextureSizer;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import com.openmason.main.systems.services.EditorServices;
 import com.openmason.main.systems.ViewportController;
 import com.openmason.main.systems.menus.panes.propertyPane.interfaces.IViewportConnector;
@@ -55,7 +55,7 @@ public final class FaceTextureEditingService {
         return await(MainThreadExecutor.submit(() -> {
             IViewportConnector connector = requireConnector();
             FaceTextureManager ftm = requireFtm(connector);
-            GMRFaceExtractor.FaceExtractionResult faceData = connector.extractFaceData();
+            FaceExtractor.FaceExtractionResult faceData = connector.extractFaceData();
 
             List<FaceTextureInfo> out = new ArrayList<>();
             if (faceData != null) {
@@ -101,7 +101,7 @@ public final class FaceTextureEditingService {
                 () -> {
             IViewportConnector connector = requireConnector();
             FaceTextureManager ftm = requireFtm(connector);
-            GMRFaceExtractor.FaceExtractionResult faceData = connector.extractFaceData();
+            FaceExtractor.FaceExtractionResult faceData = connector.extractFaceData();
             if (faceData == null) {
                 throw new IllegalStateException("Model has no face geometry");
             }
@@ -469,7 +469,7 @@ public final class FaceTextureEditingService {
 
     private FaceTextureInfo buildInfo(IViewportConnector connector,
                                        FaceTextureManager ftm,
-                                       GMRFaceExtractor.FaceExtractionResult faceData,
+                                       FaceExtractor.FaceExtractionResult faceData,
                                        int faceId) {
         FaceTextureMapping mapping = ftm.getFaceMapping(faceId);
         if (mapping != null) {
@@ -500,7 +500,7 @@ public final class FaceTextureEditingService {
 
     private FaceTextureInfo buildInfoFromMapping(IViewportConnector connector,
                                                   FaceTextureManager ftm,
-                                                  GMRFaceExtractor.FaceExtractionResult faceData,
+                                                  FaceExtractor.FaceExtractionResult faceData,
                                                   FaceTextureMapping mapping) {
         MaterialDefinition material = ftm.getMaterial(mapping.materialId());
         String materialName = material != null ? material.name() : null;
@@ -538,7 +538,7 @@ public final class FaceTextureEditingService {
                 mapping.autoResize());
     }
 
-    private static float[] computeFaceNormal(GMRFaceExtractor.FaceExtractionResult faceData, int faceId) {
+    private static float[] computeFaceNormal(FaceExtractor.FaceExtractionResult faceData, int faceId) {
         if (faceData == null || faceId < 0 || faceId >= faceData.faceCount()) {
             return new float[]{0, 0, 0};
         }
@@ -570,7 +570,7 @@ public final class FaceTextureEditingService {
         return n[2] > 0 ? "+Z" : "-Z";
     }
 
-    private static int vertexCountFor(GMRFaceExtractor.FaceExtractionResult faceData, int faceId) {
+    private static int vertexCountFor(FaceExtractor.FaceExtractionResult faceData, int faceId) {
         if (faceData == null || faceId < 0 || faceId >= faceData.faceCount()) return 0;
         return faceData.verticesPerFace()[faceId];
     }

@@ -1,10 +1,10 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexRenderer;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
 import com.openmason.main.systems.services.commands.VertexMoveCommand;
@@ -31,8 +31,8 @@ import java.util.function.UnaryOperator;
  * committing with undo support ({@link #commit}).
  *
  * <p>The live-move recipe mirrors {@link
- * com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceTranslationHandler}
- * exactly: GenericModelRenderer per mesh index, VertexRenderer + EdgeRenderer per
+ * com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceTranslationHandler}
+ * exactly: EditableModel per mesh index, VertexRenderer + EdgeRenderer per
  * unique index, then a FaceRenderer overlay rebuild. The commit path mirrors its
  * part-geometry sync + {@link VertexMoveCommand} push.
  *
@@ -47,7 +47,7 @@ public class MeshVertexEditSession {
     /** Squared distance below which a commit is considered a no-op (no undo entry). */
     private static final float NO_OP_EPSILON_SQ = 1e-12f;
 
-    private final GenericModelRenderer modelRenderer;
+    private final EditableModel modelRenderer;
     private final VertexRenderer vertexRenderer;
     private final EdgeRenderer edgeRenderer;
     private final FaceRenderer faceRenderer;
@@ -60,7 +60,7 @@ public class MeshVertexEditSession {
     // Unique vertex index → original position at session start (insertion-ordered)
     private final Map<Integer, Vector3f> originalPositions = new LinkedHashMap<>();
 
-    public MeshVertexEditSession(GenericModelRenderer modelRenderer,
+    public MeshVertexEditSession(EditableModel modelRenderer,
                                  VertexRenderer vertexRenderer,
                                  EdgeRenderer edgeRenderer,
                                  FaceRenderer faceRenderer,
@@ -160,9 +160,9 @@ public class MeshVertexEditSession {
             }
         }
 
-        // Rebuild face overlay from GenericModelRenderer
+        // Rebuild face overlay from EditableModel
         if (faceRenderer != null) {
-            faceRenderer.rebuildFromGenericModelRenderer();
+            faceRenderer.rebuildFromEditableModel();
         }
     }
 

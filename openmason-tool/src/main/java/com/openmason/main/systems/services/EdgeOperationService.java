@@ -6,10 +6,10 @@ import com.openmason.main.systems.services.commands.RendererSynchronizer;
 import com.openmason.main.systems.services.commands.SnapshotCommand;
 import com.openmason.main.systems.viewport.state.EdgeSelectionState;
 import com.openmason.main.systems.viewport.viewportRendering.ViewportRenderPipeline;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,7 +21,7 @@ import java.util.Set;
 /**
  * Service for edge-related operations in the viewport.
  * Follows Single Responsibility Principle - only handles edge operations.
- * Delegates geometric subdivision logic to SubdivisionProcessor (via GenericModelRenderer).
+ * Delegates geometric subdivision logic to SubdivisionProcessor (via EditableModel).
  */
 public class EdgeOperationService {
 
@@ -61,7 +61,7 @@ public class EdgeOperationService {
 
         EdgeRenderer edgeRenderer = viewportRenderPipeline.getEdgeRenderer();
         VertexRenderer vertexRenderer = viewportRenderPipeline.getVertexRenderer();
-        GenericModelRenderer modelRenderer = viewportRenderPipeline.getBlockModelRenderer();
+        EditableModel modelRenderer = viewportRenderPipeline.getBlockModelRenderer();
 
         if (edgeRenderer == null || vertexRenderer == null || modelRenderer == null) {
             logger.warn("Cannot subdivide edge: renderers not available");
@@ -101,7 +101,7 @@ public class EdgeOperationService {
         MeshSnapshot before = (commandHistory != null && synchronizer != null)
             ? MeshSnapshot.capture(modelRenderer) : null;
 
-        // Delegate subdivision to GenericModelRenderer (which uses SubdivisionProcessor)
+        // Delegate subdivision to EditableModel (which uses SubdivisionProcessor)
         int meshVertexIndex = modelRenderer.applyEdgeSubdivisionByPosition(
             midpoint, endpoint1, endpoint2
         );
@@ -120,7 +120,7 @@ public class EdgeOperationService {
             logger.info("Subdivided edge {}, created mesh vertex {}", hoveredEdgeIndex, meshVertexIndex);
             return meshVertexIndex;
         } else {
-            logger.warn("Failed to apply subdivision to GenericModelRenderer");
+            logger.warn("Failed to apply subdivision to EditableModel");
             return -1;
         }
     }
@@ -139,7 +139,7 @@ public class EdgeOperationService {
 
         EdgeRenderer edgeRenderer = viewportRenderPipeline.getEdgeRenderer();
         VertexRenderer vertexRenderer = viewportRenderPipeline.getVertexRenderer();
-        GenericModelRenderer modelRenderer = viewportRenderPipeline.getBlockModelRenderer();
+        EditableModel modelRenderer = viewportRenderPipeline.getBlockModelRenderer();
 
         if (edgeRenderer == null || vertexRenderer == null || modelRenderer == null) {
             logger.warn("Cannot subdivide edges: renderers not available");
@@ -188,7 +188,7 @@ public class EdgeOperationService {
         for (EdgeEndpoints endpoints : edgeEndpointsList) {
             Vector3f midpoint = calculateMidpoint(endpoints.endpoint1, endpoints.endpoint2);
 
-            // Delegate to GenericModelRenderer (which uses SubdivisionProcessor)
+            // Delegate to EditableModel (which uses SubdivisionProcessor)
             int meshVertexIndex = modelRenderer.applyEdgeSubdivisionByPosition(
                 midpoint, endpoints.endpoint1, endpoints.endpoint2
             );
@@ -234,13 +234,13 @@ public class EdgeOperationService {
     /**
      * Synchronize the FaceRenderer with updated model geometry.
      */
-    private void synchronizeRenderersAfterSubdivision(GenericModelRenderer modelRenderer) {
-        // Rebuild FaceRenderer data from GenericModelRenderer's triangles
+    private void synchronizeRenderersAfterSubdivision(EditableModel modelRenderer) {
+        // Rebuild FaceRenderer data from EditableModel's triangles
         FaceRenderer faceRenderer = viewportRenderPipeline.getFaceRenderer();
         if (faceRenderer != null) {
-            faceRenderer.setGenericModelRenderer(modelRenderer);
-            faceRenderer.rebuildFromGenericModelRenderer();
-            logger.debug("Rebuilt FaceRenderer from GenericModelRenderer triangles");
+            faceRenderer.setEditableModel(modelRenderer);
+            faceRenderer.rebuildFromEditableModel();
+            logger.debug("Rebuilt FaceRenderer from EditableModel triangles");
         }
     }
 

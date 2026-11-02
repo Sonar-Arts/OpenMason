@@ -33,8 +33,8 @@
     <logger name="com.openmason.main.systems.menus.textureCreator.layers.LayerManager" level="INFO" />
 
     <!-- Rendering system - reduce initialization noise -->
-    <logger name="com.openmason.main.systems.rendering.model.GenericModelRenderer" level="INFO" />
-    <logger name="com.openmason.main.systems.rendering.model.gmr" level="INFO" />
+    <logger name="com.openmason.main.systems.rendering.model.EditableModel" level="INFO" />
+    <logger name="com.openmason.main.systems.rendering.model.editing" level="INFO" />
     <logger name="com.openmason.main.systems.rendering.model.miscComponents.OMTTextureLoader" level="INFO" />
 
     <!-- Viewport system - reduce state change noise -->

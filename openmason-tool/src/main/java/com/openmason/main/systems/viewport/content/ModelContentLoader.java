@@ -1,9 +1,9 @@
 package com.openmason.main.systems.viewport.content;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.ModelPart;
-import com.openmason.engine.rendering.model.gmr.UVMode;
-import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.ModelPart;
+import com.openmason.engine.modeling.UVMode;
+import com.openmason.engine.modeling.parts.PartShapeFactory;
 import com.openmason.main.systems.rendering.model.editable.BlockModel;
 import com.openmason.main.systems.rendering.model.editable.ModelGeometry;
 import com.openmason.engine.format.omo.OMOFormat;
@@ -32,7 +32,7 @@ import java.nio.file.Path;
  * </ul>
  *
  * @see BlockModel
- * @see GenericModelRenderer
+ * @see EditableModel
  * @see OMTTextureLoader
  */
 public class ModelContentLoader {
@@ -41,7 +41,7 @@ public class ModelContentLoader {
 
     // Dependencies (injected)
     private final OMTTextureLoader textureLoader;
-    private final GenericModelRenderer modelRenderer;
+    private final EditableModel modelRenderer;
 
     // Current state
     private BlockModel currentModel;
@@ -53,7 +53,7 @@ public class ModelContentLoader {
      * @param textureLoader The texture loader for handling .omt files
      * @param modelRenderer The renderer to load geometry into
      */
-    public ModelContentLoader(OMTTextureLoader textureLoader, GenericModelRenderer modelRenderer) {
+    public ModelContentLoader(OMTTextureLoader textureLoader, EditableModel modelRenderer) {
         if (textureLoader == null || modelRenderer == null) {
             throw new IllegalArgumentException("Dependencies cannot be null");
         }

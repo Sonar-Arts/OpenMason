@@ -1,7 +1,7 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
 import com.openmason.main.systems.viewport.state.EdgeSelectionState;
@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Headless state-machine tests for {@link ScaleToolController}.
  *
- * <p>Uses a stub {@link GenericModelRenderer} (CPU-only, constructor performs no GL)
+ * <p>Uses a stub {@link EditableModel} (CPU-only, constructor performs no GL)
  * with mesh index == unique index, identity camera matrices and a 200×100 viewport:
  * model (0,0,0) projects to screen (100, 50). Keyboard/right-mouse probes are
  * overridden so no ImGui context is required.
@@ -56,7 +56,7 @@ class ScaleToolControllerTest {
     }
 
     /** CPU-only model renderer stub: mesh index == unique index, positions in a map. */
-    private static class StubModelRenderer extends GenericModelRenderer {
+    private static class StubModelRenderer extends EditableModel {
         final Map<Integer, Vector3f> positions = new HashMap<>();
 
         @Override

@@ -1,6 +1,6 @@
 package com.openmason.main.systems.mcp;
 
-import com.openmason.engine.rendering.model.gmr.analysis.WindingAnalyzer;
+import com.openmason.engine.modeling.analysis.WindingAnalyzer;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

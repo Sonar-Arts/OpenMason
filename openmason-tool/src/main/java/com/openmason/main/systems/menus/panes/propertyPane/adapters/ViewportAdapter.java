@@ -1,12 +1,12 @@
 package com.openmason.main.systems.menus.panes.propertyPane.adapters;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.rendering.model.editable.BlockModel;
-import com.openmason.engine.rendering.model.gmr.extraction.GMRFaceExtractor;
-import com.openmason.engine.rendering.model.gmr.uv.FaceProjectionUtil;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureSizer;
+import com.openmason.engine.modeling.extraction.FaceExtractor;
+import com.openmason.engine.modeling.uv.FaceProjectionUtil;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.FaceTextureSizer;
 import com.openmason.main.systems.menus.panes.propertyPane.interfaces.IViewportConnector;
 import com.openmason.main.systems.services.commands.FaceTextureCommand;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
@@ -165,7 +165,7 @@ public class ViewportAdapter implements IViewportConnector {
         if (viewport == null) {
             return;
         }
-        GenericModelRenderer renderer = viewport.getModelRenderer();
+        EditableModel renderer = viewport.getModelRenderer();
         if (renderer == null) {
             return;
         }
@@ -193,7 +193,7 @@ public class ViewportAdapter implements IViewportConnector {
         if (viewport == null) {
             return;
         }
-        GenericModelRenderer renderer = viewport.getModelRenderer();
+        EditableModel renderer = viewport.getModelRenderer();
         if (renderer == null) {
             return;
         }
@@ -207,7 +207,7 @@ public class ViewportAdapter implements IViewportConnector {
         if (viewport == null) {
             return -1;
         }
-        GenericModelRenderer renderer = viewport.getModelRenderer();
+        EditableModel renderer = viewport.getModelRenderer();
         return renderer != null ? renderer.allocateMaterialId() : -1;
     }
 
@@ -250,12 +250,12 @@ public class ViewportAdapter implements IViewportConnector {
         if (viewport == null) {
             return null;
         }
-        GenericModelRenderer renderer = viewport.getModelRenderer();
+        EditableModel renderer = viewport.getModelRenderer();
         if (renderer == null) {
             return null;
         }
 
-        GMRFaceExtractor.FaceExtractionResult faceData = renderer.extractFaceData();
+        FaceExtractor.FaceExtractionResult faceData = renderer.extractFaceData();
         if (faceData == null) {
             return null;
         }
@@ -279,7 +279,7 @@ public class ViewportAdapter implements IViewportConnector {
     }
 
     @Override
-    public com.openmason.engine.rendering.model.gmr.extraction.GMRFaceExtractor.FaceExtractionResult extractFaceData() {
+    public com.openmason.engine.modeling.extraction.FaceExtractor.FaceExtractionResult extractFaceData() {
         if (viewport == null) return null;
         var renderer = viewport.getModelRenderer();
         return renderer != null ? renderer.extractFaceData() : null;
@@ -293,7 +293,7 @@ public class ViewportAdapter implements IViewportConnector {
         var partManager = renderer.getPartManager();
         if (partManager == null) return null;
         return partManager.getPartForFace(faceId)
-                .map(com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor::name)
+                .map(com.openmason.engine.modeling.parts.ModelPartDescriptor::name)
                 .orElse(null);
     }
 
@@ -305,7 +305,7 @@ public class ViewportAdapter implements IViewportConnector {
         var partManager = renderer.getPartManager();
         if (partManager == null) return null;
         return partManager.getPartForFace(faceId)
-                .map(com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor::id)
+                .map(com.openmason.engine.modeling.parts.ModelPartDescriptor::id)
                 .orElse(null);
     }
 
@@ -326,7 +326,7 @@ public class ViewportAdapter implements IViewportConnector {
         if (viewport == null) {
             return null;
         }
-        GenericModelRenderer renderer = viewport.getModelRenderer();
+        EditableModel renderer = viewport.getModelRenderer();
         if (renderer == null) {
             return null;
         }
@@ -340,7 +340,7 @@ public class ViewportAdapter implements IViewportConnector {
         }
 
         // Fallback: project 3D positions to 2D (for faces without UV mappings)
-        GMRFaceExtractor.FaceExtractionResult faceData = renderer.extractFaceData();
+        FaceExtractor.FaceExtractionResult faceData = renderer.extractFaceData();
         if (faceData == null || faceId < 0 || faceId >= faceData.faceCount()) {
             return null;
         }

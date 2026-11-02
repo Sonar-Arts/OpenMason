@@ -12,9 +12,9 @@ import com.openmason.engine.format.sbe.SBEFormat;
 import com.openmason.engine.format.sbe.SBEParser;
 import com.openmason.engine.format.sbo.SBOFormat;
 import com.openmason.engine.format.sbo.SBOParser;
-import com.openmason.engine.rendering.model.gmr.analysis.WindingAnalyzer;
-import com.openmason.engine.rendering.model.gmr.editable.EditableMesh;
-import com.openmason.engine.rendering.model.gmr.editable.MeshImporter;
+import com.openmason.engine.modeling.analysis.WindingAnalyzer;
+import com.openmason.engine.modeling.editable.EditableMesh;
+import com.openmason.engine.modeling.editable.MeshImporter;
 import org.joml.Vector3f;
 
 import javax.imageio.ImageIO;

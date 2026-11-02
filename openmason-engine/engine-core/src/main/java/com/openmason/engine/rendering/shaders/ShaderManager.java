@@ -23,6 +23,9 @@ public class ShaderManager {
     private final Map<ShaderType, ShaderProgram> shaderPrograms = new EnumMap<>(ShaderType.class);
     private boolean initialized = false;
 
+    /** The shared engine model renderer, created on first use (GL thread). */
+    private com.openmason.engine.rendering.model.draw.ModelRenderer modelRenderer;
+
     /**
      * Initialize all shader programs.
      */
@@ -496,8 +499,25 @@ public class ShaderManager {
     /**
      * Clean up all shader resources.
      */
+    /**
+     * The engine model renderer shared by every model this manager's viewers draw
+     * (the same draw path games use for entities). Compiled on first call, which
+     * must be on the GL thread; released by {@link #cleanup()}.
+     */
+    public com.openmason.engine.rendering.model.draw.ModelRenderer modelRenderer() {
+        if (modelRenderer == null) {
+            modelRenderer = new com.openmason.engine.rendering.model.draw.ModelRenderer();
+        }
+        modelRenderer.initialize();
+        return modelRenderer;
+    }
+
     public void cleanup() {
         logger.debug("Cleaning up shader manager");
+        if (modelRenderer != null) {
+            modelRenderer.cleanup();
+            modelRenderer = null;
+        }
         for (ShaderProgram program : shaderPrograms.values()) {
             if (program != null) {
                 program.cleanup();

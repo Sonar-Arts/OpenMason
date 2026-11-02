@@ -1,14 +1,14 @@
 package com.openmason.main.systems.mcp;
 
 import com.fasterxml.jackson.annotation.JsonValue;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.ModelPart;
-import com.openmason.engine.rendering.model.gmr.parts.MeshRange;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder;
-import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
-import com.openmason.engine.rendering.model.gmr.parts.PartTransform;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.ModelPart;
+import com.openmason.engine.modeling.parts.MeshRange;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartMeshRebuilder;
+import com.openmason.engine.modeling.parts.PartShapeFactory;
+import com.openmason.engine.modeling.parts.PartTransform;
 import org.joml.Matrix4f;
 import com.openmason.main.systems.services.EditorServices;
 import com.openmason.main.systems.ViewportController;
@@ -406,7 +406,7 @@ public final class ModelEditingService {
      * Insert a vertex on a part-local edge at parametric position {@code t}
      * (exclusive 0..1). The edge index comes from {@code part_mesh};
      * its part-local vertex pair is resolved to unique vertex indices and the
-     * subdivision runs through the GMR topology op.
+     * subdivision runs through the model topology op.
      */
     public Optional<SubdivideEdgeResult> subdivideEdge(String idOrName, int edgeIndex, float t) {
         if (!(t > 0.0f && t < 1.0f)) {
@@ -417,7 +417,7 @@ public final class ModelEditingService {
                     Optional<ModelPartDescriptor> p = resolve(idOrName);
                     if (p.isEmpty()) return Optional.<SubdivideEdgeResult>empty();
                     int[] localVerts = edgeVertexIndices(p.get(), edgeIndex);
-                    GenericModelRenderer gmr = requireModelRenderer();
+                    EditableModel gmr = requireModelRenderer();
                     MeshRange range = requireMeshRange(p.get());
                     int uniqueA = toUniqueVertex(gmr, range, localVerts[0]);
                     int uniqueB = toUniqueVertex(gmr, range, localVerts[1]);
@@ -496,7 +496,7 @@ public final class ModelEditingService {
 
     @FunctionalInterface
     private interface FacesOp {
-        int[] apply(GenericModelRenderer gmr, int[] globalFaceIds);
+        int[] apply(EditableModel gmr, int[] globalFaceIds);
     }
 
     private void applyVertexMove(ModelPartDescriptor part, int[] localIndices, Vector3f vec, boolean absolute) {
@@ -579,9 +579,9 @@ public final class ModelEditingService {
         return ((long) lo << 32) | (hi & 0xFFFFFFFFL);
     }
 
-    private GenericModelRenderer requireModelRenderer() {
+    private EditableModel requireModelRenderer() {
         ViewportController vp = editorServices.getViewport3D();
-        GenericModelRenderer gmr = vp != null ? vp.getModelRenderer() : null;
+        EditableModel gmr = vp != null ? vp.getModelRenderer() : null;
         if (gmr == null) throw new IllegalStateException("Model renderer not available");
         return gmr;
     }
@@ -592,8 +592,8 @@ public final class ModelEditingService {
         return range;
     }
 
-    /** Resolve a part-local vertex index to its GMR unique vertex index. */
-    private static int toUniqueVertex(GenericModelRenderer gmr, MeshRange range, int localVertex) {
+    /** Resolve a part-local vertex index to its EditableModel unique vertex index. */
+    private static int toUniqueVertex(EditableModel gmr, MeshRange range, int localVertex) {
         int unique = gmr.getUniqueIndexForMeshVertex(range.toGlobalVertex(localVertex));
         if (unique < 0) {
             throw new IllegalStateException("No unique vertex for part-local vertex " + localVertex);
@@ -641,7 +641,7 @@ public final class ModelEditingService {
      * Best-effort part-local vertex index for a unique vertex against the
      * part's refreshed (post-op) mesh range; -1 when it cannot be mapped.
      */
-    private static int localVertexForUnique(GenericModelRenderer gmr,
+    private static int localVertexForUnique(EditableModel gmr,
                                             ModelPartDescriptor refreshedPart, int uniqueVertex) {
         MeshRange range = refreshedPart != null ? refreshedPart.meshRange() : null;
         if (range == null) return -1;
@@ -807,7 +807,7 @@ public final class ModelEditingService {
     public record FaceView(int faceId, int[] vertices) {}
 
     /**
-     * Result of subdivide_edge: the new vertex's GMR unique index plus a
+     * Result of subdivide_edge: the new vertex's EditableModel unique index plus a
      * best-effort part-local index (-1 when it could not be mapped back).
      */
     public record SubdivideEdgeResult(int newUniqueVertexId, int newLocalVertexIndex, PartView part) {}

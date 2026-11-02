@@ -1,8 +1,8 @@
 package com.openmason.main.systems.scripting.doc;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
 
 /**
  * The model a script edits — the seam between the scripting command layer and

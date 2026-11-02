@@ -3,9 +3,9 @@ package com.openmason.main.systems.menus.textureCreator;
 import com.openmason.main.systems.menus.textureCreator.canvas.CanvasChangeListener;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import com.openmason.main.systems.menus.textureCreator.layers.Layer;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,7 +30,7 @@ public class TexturePreviewPipeline implements CanvasChangeListener, TextureCrea
     private static final Logger logger = LoggerFactory.getLogger(TexturePreviewPipeline.class);
 
     private final TextureCreatorController controller;
-    private final GenericModelRenderer modelRenderer;
+    private final EditableModel modelRenderer;
 
     // Dirty region accumulator
     private int dirtyMinX;
@@ -52,7 +52,7 @@ public class TexturePreviewPipeline implements CanvasChangeListener, TextureCrea
      * @param modelRenderer 3D model renderer for GPU texture updates
      */
     public TexturePreviewPipeline(TextureCreatorController controller,
-                                  GenericModelRenderer modelRenderer) {
+                                  EditableModel modelRenderer) {
         this.controller = controller;
         this.modelRenderer = modelRenderer;
         resetDirtyRegion();

@@ -1,8 +1,8 @@
 package com.openmason.main.systems.menus.panes.riggingPane.sections;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.skeleton.AttachmentStore;
 import com.openmason.main.systems.themes.utils.ImGuiComponents;
 import com.openmason.main.systems.themes.utils.TransformGroupWidget;

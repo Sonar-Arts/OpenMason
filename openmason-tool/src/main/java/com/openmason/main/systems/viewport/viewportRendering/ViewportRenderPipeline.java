@@ -6,7 +6,7 @@ import com.openmason.engine.rendering.viewer.ViewerRenderContext;
 import com.openmason.engine.rendering.viewer.ViewerFrame;
 import com.openmason.engine.rendering.viewer.ViewerPass;
 import com.openmason.engine.rendering.viewer.ViewerPassOrder;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.rendering.core.SBTRenderer;
 import com.openmason.engine.rendering.viewer.gizmo.rendering.GizmoRenderer;
 import com.openmason.main.systems.viewport.viewportRendering.bones.BoneGizmoRenderer;
@@ -20,11 +20,11 @@ import com.openmason.main.systems.viewport.state.RenderingMode;
 import com.openmason.main.systems.viewport.state.RenderingState;
 import com.openmason.engine.rendering.viewer.transform.TransformState;
 import com.openmason.main.systems.viewport.ViewportUIState;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.KnifePreviewRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.ToolPreviewRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.KnifePreviewRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.ToolPreviewRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
 import org.joml.Matrix4f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,7 +43,7 @@ import static org.lwjgl.opengl.GL11.*;
  * <p>The pipeline executes in ordered passes:
  * <ol>
  *   <li><b>Grid Pass</b> - Infinite grid background ({@link GridRenderer})</li>
- *   <li><b>Content Pass</b> - Block/Item/Model rendering ({@link GenericModelRenderer})</li>
+ *   <li><b>Content Pass</b> - Block/Item/Model rendering ({@link EditableModel})</li>
  *   <li><b>Mesh Pass</b> - Vertices, edges, faces ({@link VertexRenderer}, {@link EdgeRenderer}, {@link FaceRenderer})</li>
  *   <li><b>UI Pass</b> - Gizmo overlays ({@link GizmoRenderer})</li>
  * </ol>
@@ -53,7 +53,7 @@ import static org.lwjgl.opengl.GL11.*;
  * is not: it forces one shared model matrix across all renderers and its five-value
  * enum cannot express the six steps above (note the 2.5 tier).
  *
- * @see com.openmason.engine.rendering.model.gmr.GenericModelRenderer
+ * @see com.openmason.engine.modeling.EditableModel
  */
 public class ViewportRenderPipeline implements ViewerPass {
 
@@ -80,8 +80,8 @@ public class ViewportRenderPipeline implements ViewerPass {
     private final List<ViewportContentProvider> builtinContent;
     private Supplier<List<ViewportContentProvider>> contentProviders = this::builtinContentProviders;
 
-    // Generic Model renderer (.OMO editable models)
-    private final GenericModelRenderer modelRenderer;
+    // editable model (.OMO editable models)
+    private final EditableModel modelRenderer;
 
     // Gizmo renderer
     private final GizmoRenderer gizmoRenderer;
@@ -125,7 +125,7 @@ public class ViewportRenderPipeline implements ViewerPass {
      * Create render pipeline with all required dependencies.
      */
     public ViewportRenderPipeline(ShaderManager shaderManager,
-                                  GenericModelRenderer modelRenderer,
+                                  EditableModel modelRenderer,
                                   GizmoRenderer gizmoRenderer,
                                   ViewportUIState viewportState,
                                   RenderingState renderingState,
@@ -375,48 +375,34 @@ public class ViewportRenderPipeline implements ViewerPass {
     }
 
     /**
-     * Render editable block model (.OMO file).
-     * Minimal implementation - pipeline state is configured once per frame.
-     * Shader handles transparency via discard statement.
+     * Render the editable model (.OMO) through the engine model renderer — the
+     * draw path and preview lighting games use for entity models — so the viewport
+     * shows the model as it will look in game.
      */
     private void renderBlockModel(ViewportUIState viewportState, TransformState transformState) {
         try {
             if (!modelRenderer.isInitialized()) {
-                logger.warn("BlockModelRenderer not initialized");
+                logger.warn("Editable model GPU mesh not initialized");
                 return;
             }
 
-            // Get shader and bind it
-            ShaderProgram matrixShader = shaderManager.getShaderProgram(ShaderType.MATRIX);
-            matrixShader.use();
-
-            // Compute view-projection matrix
-            org.joml.Matrix4f viewProjectionMatrix = new org.joml.Matrix4f(context.getCamera().getProjectionMatrix());
-            viewProjectionMatrix.mul(context.getCamera().getViewMatrix());
-
-            // Set up MVP matrix
-            matrixShader.setMat4("uMVPMatrix", viewProjectionMatrix);
-
-            // Apply transform matrix (includes position, rotation, scale from gizmo)
-            org.joml.Matrix4f modelMatrix = transformState.getTransformMatrix();
-            matrixShader.setMat4("uModelMatrix", modelMatrix);
+            org.joml.Matrix4f view = context.getCamera().getViewMatrix();
+            org.joml.Matrix4f projection = context.getCamera().getProjectionMatrix();
 
             // Unrendered mode: flat gray like Blender solid view
             boolean unrendered = viewportState.getUnrenderedMode().get();
             modelRenderer.setForceUnrendered(unrendered);
-            if (unrendered) {
-                matrixShader.setVec3("uColor", new org.joml.Vector3f(0.53f, 0.53f, 0.53f));
-            }
+            com.openmason.engine.rendering.model.draw.ModelLighting lighting = unrendered
+                    ? com.openmason.engine.rendering.model.draw.ModelLighting.preview(view,
+                            com.openmason.engine.rendering.viewer.passes.ModelInstancePass.UNRENDERED_GRAY)
+                    : com.openmason.engine.rendering.model.draw.ModelLighting.preview(view);
 
-            // Enable texturing (renderer may override based on forceUnrendered)
-            matrixShader.setInt("uTexture", 0);
-            matrixShader.setBool("uUseTexture", !unrendered);
-
-            // Render (no state management needed - pipeline handles it)
-            modelRenderer.render(matrixShader, context, modelMatrix);
+            // Transform matrix includes position, rotation, scale from the gizmo
+            modelRenderer.render(shaderManager.modelRenderer(), transformState.getTransformMatrix(),
+                    view, projection, lighting);
 
         } catch (Exception e) {
-            logger.error("Error rendering BlockModel", e);
+            logger.error("Error rendering editable model", e);
         }
     }
 
@@ -481,7 +467,8 @@ public class ViewportRenderPipeline implements ViewerPass {
                 Matrix4f model = new Matrix4f(transformState.getTransformMatrix()).mul(socketFrame);
                 var geometry = entry.getValue().asset()
                         .geometryFor(com.openmason.engine.entity.sbe.SbeEntityAsset.DEFAULT_VARIANT);
-                attachmentPreviewRenderer.render(geometry, model, viewMatrix, projectionMatrix);
+                attachmentPreviewRenderer.render(shaderManager.modelRenderer(), geometry, model,
+                        viewMatrix, projectionMatrix);
             }
         } catch (Exception e) {
             logger.error("Error rendering socket test models", e);
@@ -557,7 +544,7 @@ public class ViewportRenderPipeline implements ViewerPass {
                     // Only extract vertex data ONCE (in MODEL SPACE, no transform)
                     // Vertices will be transformed by model matrix in shader (like BlockModelRenderer)
                     if (vertexDataNeedsUpdate) {
-                        vertexRenderer.updateVertexDataFromGMR();
+                        vertexRenderer.updateVertexDataFromModel();
 
                         if (modelRenderer != null && modelRenderer.isInitialized()
                                 && modelRenderer.getAllMeshVertexPositions() != null) {
@@ -570,12 +557,12 @@ public class ViewportRenderPipeline implements ViewerPass {
                                 faceRenderer.initialize();
                             }
 
-                            // Wire all renderers to GenericModelRenderer as MeshChangeListeners
+                            // Wire all renderers to EditableModel as MeshChangeListeners
                             // This enables index-based updates (Observer pattern) instead of position matching
-                            // GenericModelRenderer owns the unique-to-mesh mapping
+                            // EditableModel owns the unique-to-mesh mapping
                             vertexRenderer.setModelRenderer(modelRenderer);
                             edgeRenderer.setModelRenderer(modelRenderer);
-                            faceRenderer.setGenericModelRenderer(modelRenderer);
+                            faceRenderer.setEditableModel(modelRenderer);
                         }
 
                         vertexDataNeedsUpdate = false;
@@ -618,15 +605,15 @@ public class ViewportRenderPipeline implements ViewerPass {
                     // Only extract edge data ONCE (in MODEL SPACE, no transform)
                     // Edges will be transformed by model matrix in shader (like BlockModelRenderer)
                     if (edgeDataNeedsUpdate) {
-                        // Check if edge renderer already has data from GenericModelRenderer
+                        // Check if edge renderer already has data from EditableModel
                         // (set up by setModelRenderer -> rebuildFromModel)
                         if (edgeRenderer.getModelRenderer() == null) {
                             // Standard cube - use cube parts (topology handles edge mapping)
-                            edgeRenderer.updateEdgeDataFromGMR();
+                            edgeRenderer.updateEdgeDataFromModel();
                             logger.trace("Edge data extracted from cube parts in model space");
                         } else {
-                            // Already has data from GenericModelRenderer - don't overwrite
-                            logger.trace("Edge data already set from GenericModelRenderer");
+                            // Already has data from EditableModel - don't overwrite
+                            logger.trace("Edge data already set from EditableModel");
                         }
 
                         edgeDataNeedsUpdate = false;
@@ -667,7 +654,7 @@ public class ViewportRenderPipeline implements ViewerPass {
                     // Only extract face data ONCE (in MODEL SPACE, no transform)
                     // Faces will be transformed by model matrix in shader (like BlockModelRenderer)
                     if (faceDataNeedsUpdate) {
-                        // Face data managed by GenericModelRenderer via rebuildFromGenericModelRenderer()
+                        // Face data managed by EditableModel via rebuildFromEditableModel()
                         logger.trace("Face data managed by topology-backed triangle rendering");
                         faceDataNeedsUpdate = false;
                     }
@@ -789,7 +776,7 @@ public class ViewportRenderPipeline implements ViewerPass {
     /**
      * Gets the block model renderer for external access (vertex editing, etc.).
      */
-    public GenericModelRenderer getBlockModelRenderer() {
+    public EditableModel getBlockModelRenderer() {
         return modelRenderer;
     }
 

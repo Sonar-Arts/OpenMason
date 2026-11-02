@@ -1,11 +1,11 @@
 package com.openmason.main.systems.scripting.commands;
 
-import com.openmason.engine.rendering.model.gmr.editable.EditableMesh;
-import com.openmason.engine.rendering.model.gmr.editable.MeshImporter;
-import com.openmason.engine.rendering.model.gmr.editable.RenderMesh;
-import com.openmason.engine.rendering.model.gmr.editable.RenderMeshBuilder;
-import com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
+import com.openmason.engine.modeling.editable.EditableMesh;
+import com.openmason.engine.modeling.editable.MeshImporter;
+import com.openmason.engine.modeling.editable.RenderMesh;
+import com.openmason.engine.modeling.editable.RenderMeshBuilder;
+import com.openmason.engine.modeling.parts.PartMeshRebuilder;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

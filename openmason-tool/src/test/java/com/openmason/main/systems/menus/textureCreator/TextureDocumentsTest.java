@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.textureCreator;
 
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import com.openmason.main.systems.menus.textureCreator.commands.DrawCommand;
 import com.openmason.main.systems.menus.textureCreator.selection.RectangularSelection;

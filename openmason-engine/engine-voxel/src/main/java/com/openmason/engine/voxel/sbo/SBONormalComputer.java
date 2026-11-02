@@ -6,7 +6,7 @@ import com.openmason.engine.voxel.sbo.sboRenderer.SBOFaceConventions;
  * Computes flat normals for SBO mesh data and classifies every triangle
  * against the block cell it lives in.
  *
- * <p>SBO meshes parsed from GMR have no normals (GMR computes them
+ * <p>SBO meshes parsed from EditableModel have no normals (EditableModel computes them
  * procedurally in the shader via dFdx/dFdy). The MMS vertex format
  * requires per-vertex normals, so we compute flat normals from the
  * triangle geometry.
@@ -40,7 +40,7 @@ import com.openmason.engine.voxel.sbo.sboRenderer.SBOFaceConventions;
  *
  * <p>The classification is reused by {@link SBOMeshProcessor} to bucket
  * triangles per face, so face culling and per-face textures follow the shape
- * the artist actually modelled rather than the authored GMR face id — which
+ * the artist actually modelled rather than the authored EditableModel face id — which
  * only spans 0..5 and therefore cannot describe a model with more than six
  * faces.
  */

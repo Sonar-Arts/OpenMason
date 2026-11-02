@@ -1,6 +1,6 @@
 package com.openmason.main.systems.mcp;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.services.EditorServices;
 import com.openmason.main.systems.ViewportController;
 import com.openmason.main.systems.services.commands.MeshSnapshot;
@@ -20,7 +20,7 @@ import java.util.function.Supplier;
  * <p>Usage:
  * <pre>{@code
  * McpUndoCapture.runRecorded(editorServices, "Create Part", () -> {
- *     // … mutation that touches the GMR / FaceTextureManager …
+ *     // … mutation that touches the model / FaceTextureManager …
  *     return someResult;
  * });
  * }</pre>
@@ -44,7 +44,7 @@ public final class McpUndoCapture {
                                      String description,
                                      Supplier<T> mutation) {
         ViewportController vp = editorServices.getViewport3D();
-        GenericModelRenderer gmr = vp != null ? vp.getModelRenderer() : null;
+        EditableModel gmr = vp != null ? vp.getModelRenderer() : null;
         ModelCommandHistory history = vp != null ? vp.getCommandHistory() : null;
         RendererSynchronizer sync = vp != null ? vp.getRendererSynchronizer() : null;
 

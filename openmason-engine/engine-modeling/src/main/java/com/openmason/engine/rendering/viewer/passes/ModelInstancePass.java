@@ -1,8 +1,8 @@
 package com.openmason.engine.rendering.viewer.passes;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.shaders.ShaderProgram;
-import com.openmason.engine.rendering.shaders.ShaderType;
+import com.openmason.engine.rendering.model.draw.ModelLighting;
+import com.openmason.engine.rendering.model.draw.ModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.engine.rendering.viewer.ViewerFrame;
 import com.openmason.engine.rendering.viewer.ViewerPass;
 import com.openmason.engine.rendering.viewer.ViewerPassOrder;
@@ -12,19 +12,18 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 /**
- * Draws every visible instance in a {@link ModelScene}.
+ * Draws every visible instance in a {@link ModelScene} through the engine
+ * {@link ModelRenderer} — the same draw path and preview lighting games use for
+ * entity models, so a scene looks as it will in game.
  *
- * <p>One {@link GenericModelRenderer} per distinct model, drawn once per instance with
- * that instance's matrix — the renderer's draw call already takes a model matrix and is
- * stateless per call, so placing the same model twenty times costs twenty draws and one
- * upload rather than twenty of each.
+ * <p>One {@link EditableModel} per distinct model, drawn once per instance with
+ * that instance's matrix, so placing the same model twenty times costs twenty draws
+ * and one upload rather than twenty of each.
  */
 public final class ModelInstancePass implements ViewerPass {
 
-    private static final Vector3f UNRENDERED_GRAY = new Vector3f(0.53f, 0.53f, 0.53f);
-
-    /** Untextured fallback tint; white so a bound texture is passed through unmodified. */
-    private static final Vector3f DEFAULT_TINT = new Vector3f(1.0f, 1.0f, 1.0f);
+    /** Solid-view grey for unrendered mode. */
+    public static final Vector3f UNRENDERED_GRAY = new Vector3f(0.53f, 0.53f, 0.53f);
 
     private final ModelScene scene;
 
@@ -48,47 +47,25 @@ public final class ModelInstancePass implements ViewerPass {
             return;
         }
 
-        ShaderProgram shader = frame.shaders().getShaderProgram(ShaderType.MATRIX);
-        shader.use();
-
+        ModelRenderer modelRenderer = frame.shaders().modelRenderer();
         Matrix4f view = frame.context().getCamera().getViewMatrix();
-        Matrix4f viewProjection = new Matrix4f(frame.context().getCamera().getProjectionMatrix()).mul(view);
-
-        // REQUIRED: the MATRIX shader derives its flat-shading normal from view-space
-        // position derivatives, so an unset uViewMatrix leaves fragPosView at the origin
-        // for every vertex. The derivatives are then zero, normalize(cross(0,0)) is NaN,
-        // and the lit colour comes out black — with a perfectly valid texture bound.
-        shader.setMat4("uViewMatrix", view);
+        Matrix4f projection = frame.context().getCamera().getProjectionMatrix();
 
         boolean unrendered = frame.settings().isUnrendered();
-
-        // The shader multiplies by uColor on the untextured path; without a sane default
-        // an untextured model would render black for the same reason.
-        if (!unrendered) {
-            shader.setVec3("uColor", DEFAULT_TINT);
-        }
+        ModelLighting lighting = unrendered
+                ? ModelLighting.preview(view, UNRENDERED_GRAY)
+                : ModelLighting.preview(view);
 
         for (ModelInstance instance : scene.instances()) {
             if (!instance.isVisible()) {
                 continue;
             }
-            GenericModelRenderer renderer = instance.model().renderer();
+            EditableModel renderer = instance.model().renderer();
             if (renderer == null || !renderer.isInitialized()) {
                 continue;
             }
-
-            Matrix4f modelMatrix = instance.modelMatrix();
-            shader.setMat4("uMVPMatrix", viewProjection);
-            shader.setMat4("uModelMatrix", modelMatrix);
-
             renderer.setForceUnrendered(unrendered);
-            if (unrendered) {
-                shader.setVec3("uColor", UNRENDERED_GRAY);
-            }
-            shader.setInt("uTexture", 0);
-            shader.setBool("uUseTexture", !unrendered);
-
-            renderer.render(shader, frame.context(), modelMatrix);
+            renderer.render(modelRenderer, instance.modelMatrix(), view, projection, lighting);
         }
     }
 }

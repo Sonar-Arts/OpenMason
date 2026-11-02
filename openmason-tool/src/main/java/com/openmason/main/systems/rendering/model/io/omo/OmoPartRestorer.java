@@ -1,10 +1,10 @@
 package com.openmason.main.systems.rendering.model.io.omo;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder;
-import com.openmason.engine.rendering.model.gmr.parts.PartTransform;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartMeshRebuilder;
+import com.openmason.engine.modeling.parts.PartTransform;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

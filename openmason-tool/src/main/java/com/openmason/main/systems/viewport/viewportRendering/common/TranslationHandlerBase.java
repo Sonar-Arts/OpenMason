@@ -1,8 +1,8 @@
 package com.openmason.main.systems.viewport.viewportRendering.common;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.GMRConstants;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.ModelingConstants;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
 import com.openmason.main.systems.viewport.ViewportUIState;
 import com.openmason.engine.rendering.viewer.math.CoordinateSystem;
 import com.openmason.engine.rendering.viewer.math.RaycastUtil;
@@ -328,17 +328,17 @@ public abstract class TranslationHandlerBase implements ITranslationHandler {
     }
 
     /**
-     * Push a set of moved unique-vertex positions into the GenericModelRenderer
+     * Push a set of moved unique-vertex positions into the EditableModel
      * (the single source of truth) as one bulk update, then rebuild the face
      * overlay. Shared commit path for vertex/edge drags: the current corner
-     * array is fetched fresh from the GMR, the dragged vertices' corners are
+     * array is fetched fresh from the model, the dragged vertices' corners are
      * overwritten, and the whole array is pushed back.
      *
      * @param gmr          The model renderer (single source of truth)
      * @param faceRenderer The face overlay renderer to rebuild afterwards
      * @param newPositions Moved unique vertex id → new model-space position
      */
-    protected static void pushVertexPositionsToModel(GenericModelRenderer gmr,
+    protected static void pushVertexPositionsToModel(EditableModel gmr,
                                                      FaceRenderer faceRenderer,
                                                      Map<Integer, Vector3f> newPositions) {
         if (gmr == null || newPositions == null || newPositions.isEmpty()) {
@@ -365,27 +365,27 @@ public abstract class TranslationHandlerBase implements ITranslationHandler {
         }
         gmr.updateVertexPositions(meshVertices);
         if (faceRenderer != null) {
-            faceRenderer.rebuildFromGenericModelRenderer();
+            faceRenderer.rebuildFromEditableModel();
         }
     }
 
     /**
      * Commit a drag-vertex-onto-vertex merge: every dragged vertex resting
-     * within {@link GMRConstants#POSITION_MATCH_EPSILON} of a stationary
+     * within {@link ModelingConstants#POSITION_MATCH_EPSILON} of a stationary
      * vertex is TOPOLOGICALLY merged into that vertex via
-     * {@link GenericModelRenderer#mergeVertices} — faces genuinely share the
+     * {@link EditableModel#mergeVertices} — faces genuinely share the
      * kept vertex afterward. Positions are untouched (the drag already moved
      * them together); orphan vertices (no render corners) are never targets.
      *
-     * <p>Call after the final positions are committed to the GMR. A merge is
-     * a structural change: the GMR fires a geometry rebuild, so callers must
+     * <p>Call after the final positions are committed to the model. A merge is
+     * a structural change: the model fires a geometry rebuild, so callers must
      * clear stale selections afterwards.
      *
      * @param gmr              The model renderer (single source of truth)
      * @param draggedVertexIds Unique vertex ids that were dragged
      * @return true if at least one merge was applied
      */
-    protected static boolean mergeCoincidentDraggedVertices(GenericModelRenderer gmr,
+    protected static boolean mergeCoincidentDraggedVertices(EditableModel gmr,
                                                             Set<Integer> draggedVertexIds) {
         if (gmr == null || draggedVertexIds == null || draggedVertexIds.isEmpty()) {
             return false;
@@ -395,7 +395,7 @@ public abstract class TranslationHandlerBase implements ITranslationHandler {
             return false;
         }
         int vertexCount = positions.length / 3;
-        float epsilonSq = GMRConstants.POSITION_MATCH_EPSILON * GMRConstants.POSITION_MATCH_EPSILON;
+        float epsilonSq = ModelingConstants.POSITION_MATCH_EPSILON * ModelingConstants.POSITION_MATCH_EPSILON;
 
         // Dragged vertex → nearest coincident stationary vertex, grouped by target.
         Map<Integer, List<Integer>> mergedByTarget = new LinkedHashMap<>();
@@ -441,7 +441,7 @@ public abstract class TranslationHandlerBase implements ITranslationHandler {
     }
 
     /** A vertex still referenced by faces (orphans have no render corners). */
-    private static boolean isLiveVertex(GenericModelRenderer gmr, int uniqueVertexId) {
+    private static boolean isLiveVertex(EditableModel gmr, int uniqueVertexId) {
         int[] corners = gmr.getMeshIndicesForUniqueVertex(uniqueVertexId);
         return corners != null && corners.length > 0;
     }

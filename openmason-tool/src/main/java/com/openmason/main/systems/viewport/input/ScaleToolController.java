@@ -1,10 +1,10 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.menus.textureCreator.keyboard.KeyCodeTranslator;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexRenderer;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
 import com.openmason.main.systems.viewport.state.EdgeSelectionState;
@@ -49,7 +49,7 @@ public class ScaleToolController {
     }
 
     // Dependencies (set via setters, same pattern as other input controllers)
-    private GenericModelRenderer modelRenderer;
+    private EditableModel modelRenderer;
     private VertexRenderer vertexRenderer;
     private EdgeRenderer edgeRenderer;
     private FaceRenderer faceRenderer;
@@ -108,7 +108,7 @@ public class ScaleToolController {
     // DEPENDENCY SETTERS
     // =========================================================================
 
-    public void setModelRenderer(GenericModelRenderer modelRenderer) {
+    public void setModelRenderer(EditableModel modelRenderer) {
         this.modelRenderer = modelRenderer;
     }
 

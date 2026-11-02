@@ -1,7 +1,7 @@
 package com.openmason.main.systems.menus.dialogs.icons;
 
-import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
-import com.openmason.engine.rendering.model.gmr.parts.shapes.PartShape;
+import com.openmason.engine.modeling.parts.PartShapeFactory;
+import com.openmason.engine.modeling.parts.shapes.PartShape;
 import org.apache.batik.transcoder.TranscoderException;
 import org.apache.batik.transcoder.TranscoderInput;
 import org.apache.batik.transcoder.TranscoderOutput;

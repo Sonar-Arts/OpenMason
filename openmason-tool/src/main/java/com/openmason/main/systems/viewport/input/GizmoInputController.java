@@ -1,9 +1,9 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
 import com.openmason.engine.rendering.viewer.gizmo.rendering.GizmoRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -1,9 +1,9 @@
 package com.openmason.main.systems.scripting.doc;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartMeshRebuilder;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
 
 /**
  * A model document with no GL context: a {@link ModelPartManager} whose

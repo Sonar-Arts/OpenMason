@@ -1,6 +1,6 @@
 package com.openmason.main.systems.scene;
 
-import com.openmason.engine.rendering.model.gmr.ModelBounds;
+import com.openmason.engine.modeling.ModelBounds;
 import com.openmason.engine.rendering.viewer.scene.ModelHandle;
 import com.openmason.engine.rendering.viewer.scene.ModelInstance;
 import com.openmason.engine.rendering.viewer.scene.ModelScene;

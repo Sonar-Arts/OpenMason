@@ -1,8 +1,8 @@
 package com.openmason.main.systems.menus.textureCreator;
 
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import com.openmason.main.systems.menus.dialogs.ModalDialogs;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
 import imgui.ImGui;

@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.mainHub.model;
 
-import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
+import com.openmason.engine.modeling.parts.PartShapeFactory;
 import org.joml.Vector3f;
 import org.joml.Vector3fc;
 

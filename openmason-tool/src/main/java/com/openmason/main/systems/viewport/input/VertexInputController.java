@@ -1,12 +1,12 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.services.commands.MeshSnapshot;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
 import com.openmason.main.systems.services.commands.SnapshotCommand;
 import com.openmason.main.systems.viewport.state.VertexSelectionState;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexRenderer;
 import com.openmason.main.systems.viewport.viewportRendering.TranslationCoordinator;
 import com.openmason.main.systems.menus.textureCreator.keyboard.KeyCodeTranslator;
 import imgui.ImGui;
@@ -43,7 +43,7 @@ public class VertexInputController {
     private VertexSelectionState vertexSelectionState = null;
     private TranslationCoordinator translationCoordinator = null;
     private com.openmason.engine.rendering.viewer.transform.TransformState transformState = null;
-    private GenericModelRenderer modelRenderer = null;
+    private EditableModel modelRenderer = null;
 
     // Undo/redo support
     private ModelCommandHistory commandHistory;
@@ -83,9 +83,9 @@ public class VertexInputController {
     }
 
     /**
-     * Set the generic model renderer for edge insertion operations.
+     * Set the editable model for edge insertion operations.
      */
-    public void setModelRenderer(GenericModelRenderer modelRenderer) {
+    public void setModelRenderer(EditableModel modelRenderer) {
         this.modelRenderer = modelRenderer;
         logger.debug("Model renderer set in VertexInputController");
     }

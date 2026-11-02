@@ -42,7 +42,7 @@ public final class ModelCache implements AutoCloseable {
     /**
      * The default disposer: cleans up the renderer and deletes the textures it owns.
      *
-     * <p>The texture deletion matters — {@code GenericModelRenderer.cleanup()} only frees
+     * <p>The texture deletion matters — {@code EditableModel.cleanup()} only frees
      * VAO/VBO/EBO, so material textures would otherwise leak for every model a scene ever
      * opened.
      */

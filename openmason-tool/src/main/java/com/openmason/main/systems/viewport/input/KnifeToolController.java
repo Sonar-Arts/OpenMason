@@ -1,11 +1,11 @@
 package com.openmason.main.systems.viewport.input;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeHoverDetector;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.KnifePreviewRenderer;
-import com.openmason.engine.rendering.model.gmr.topology.MeshEdge;
-import com.openmason.engine.rendering.model.gmr.topology.MeshTopology;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeHoverDetector;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.KnifePreviewRenderer;
+import com.openmason.engine.modeling.topology.MeshEdge;
+import com.openmason.engine.modeling.topology.MeshTopology;
 import com.openmason.main.systems.services.commands.MeshSnapshot;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
@@ -44,7 +44,7 @@ public class KnifeToolController {
 
     // Dependencies (set via setters, same pattern as other input controllers)
     private EdgeRenderer edgeRenderer;
-    private GenericModelRenderer modelRenderer;
+    private EditableModel modelRenderer;
     private TransformState transformState;
     private KnifePreviewRenderer previewRenderer;
     private com.openmason.main.systems.viewport.ViewportUIState viewportState;
@@ -110,7 +110,7 @@ public class KnifeToolController {
         this.edgeRenderer = edgeRenderer;
     }
 
-    public void setModelRenderer(GenericModelRenderer modelRenderer) {
+    public void setModelRenderer(EditableModel modelRenderer) {
         this.modelRenderer = modelRenderer;
     }
 

@@ -1,9 +1,9 @@
 package com.openmason.main.systems.scripting.doc;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
 import com.openmason.main.systems.ViewportController;
 
 /**
@@ -34,7 +34,7 @@ public final class LiveModelDocument implements ModelDocument {
 
     @Override
     public FaceTextureManager faceTextures() {
-        GenericModelRenderer gmr = viewport.getModelRenderer();
+        EditableModel gmr = viewport.getModelRenderer();
         if (gmr == null) {
             throw new IllegalStateException("Model renderer not available");
         }
@@ -49,7 +49,7 @@ public final class LiveModelDocument implements ModelDocument {
     @Override
     public FacePixelStore pixels() {
         if (pixelStore == null) {
-            GenericModelRenderer gmr = viewport.getModelRenderer();
+            EditableModel gmr = viewport.getModelRenderer();
             if (gmr == null) {
                 throw new IllegalStateException("Model renderer not available");
             }

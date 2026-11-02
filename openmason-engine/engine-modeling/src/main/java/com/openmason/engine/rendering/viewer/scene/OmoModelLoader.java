@@ -7,10 +7,10 @@ import com.openmason.engine.format.mesh.ParsedMeshData;
 import com.openmason.engine.format.omo.OMOFormat;
 import com.openmason.engine.format.omo.OMOReader;
 import com.openmason.engine.format.omt.OMTReader;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,7 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Loads an {@code .omo} into a display-ready {@link GenericModelRenderer}.
+ * Loads an {@code .omo} into a display-ready {@link EditableModel}.
  *
  * <p><b>Display-only.</b> It deliberately skips rebuilding the part hierarchy: the OMO's
  * combined vertex buffer already has each part's effective transform baked in, which is
@@ -49,7 +49,7 @@ public final class OmoModelLoader implements ModelSource {
     }
 
     /** Result of a load: the renderer plus the texture ids it now owns. */
-    public record Loaded(GenericModelRenderer renderer, String modelName, int[] textureIds) {}
+    public record Loaded(EditableModel renderer, String modelName, int[] textureIds) {}
 
     @Override
     public Loaded load(Path omoPath) throws IOException {
@@ -69,7 +69,7 @@ public final class OmoModelLoader implements ModelSource {
             throw new IOException("OMO contained no mesh data: " + displayName);
         }
 
-        GenericModelRenderer renderer = new GenericModelRenderer();
+        EditableModel renderer = new EditableModel();
 
         ParsedMeshData mesh = result.meshData();
         String modelName = result.document() != null && result.document().objectName() != null

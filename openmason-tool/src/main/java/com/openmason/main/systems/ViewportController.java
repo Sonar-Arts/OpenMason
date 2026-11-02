@@ -3,7 +3,7 @@ package com.openmason.main.systems;
 import com.openmason.main.systems.rendering.model.editable.BlockModel;
 import com.openmason.engine.format.omo.OMOFormat;
 import com.openmason.main.omConfig;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.rendering.model.miscComponents.OMTTextureLoader;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
@@ -22,13 +22,13 @@ import com.openmason.main.systems.viewport.state.FaceSelectionState;
 import com.openmason.main.systems.viewport.state.EditMode;
 import com.openmason.main.systems.viewport.state.EditModeManager;
 import com.openmason.main.systems.viewport.ViewportUIState;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexTranslationHandler;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeTranslationHandler;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceTranslationHandler;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexTranslationHandler;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeTranslationHandler;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceTranslationHandler;
 import com.openmason.main.systems.viewport.viewportRendering.TranslationCoordinator;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,7 +62,7 @@ public class ViewportController {
     private final FaceSelectionState faceSelectionState;
 
     // ========== Renderers ==========
-    private final GenericModelRenderer modelRenderer;
+    private final EditableModel modelRenderer;
 
     // ========== Gizmo ==========
     private final GizmoState gizmoState;
@@ -165,7 +165,7 @@ public class ViewportController {
 
         this.commandHistory = new ModelCommandHistory();
 
-        this.modelRenderer = new GenericModelRenderer();
+        this.modelRenderer = new EditableModel();
 
         // Content loading (SOLID refactored)
         // ========== Content Loading (SOLID refactored) ==========
@@ -199,15 +199,15 @@ public class ViewportController {
         // Wire auto-show gizmo on part selection change, and invalidate the bone
         // skeleton cache whenever parts move (bones nested under parts inherit their world transform).
         modelRenderer.getPartManager().addPartChangeListener(
-                new com.openmason.engine.rendering.model.gmr.parts.IPartChangeListener() {
-                    @Override public void onPartAdded(com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor part) {
+                new com.openmason.engine.modeling.parts.IPartChangeListener() {
+                    @Override public void onPartAdded(com.openmason.engine.modeling.parts.ModelPartDescriptor part) {
                         boneStore.invalidate();
                     }
                     @Override public void onPartRemoved(String partId) { boneStore.invalidate(); }
-                    @Override public void onPartTransformChanged(String partId, com.openmason.engine.rendering.model.gmr.parts.PartTransform t) {
+                    @Override public void onPartTransformChanged(String partId, com.openmason.engine.modeling.parts.PartTransform t) {
                         boneStore.invalidate();
                     }
-                    @Override public void onPartsMerged(java.util.List<String> sourceIds, com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor merged) {
+                    @Override public void onPartsMerged(java.util.List<String> sourceIds, com.openmason.engine.modeling.parts.ModelPartDescriptor merged) {
                         boneStore.invalidate();
                     }
                     @Override public void onPartsRebuilt() { boneStore.invalidate(); }
@@ -583,7 +583,7 @@ public class ViewportController {
 
     /**
      * Load mesh state as a named model part.
-     * Routes through GenericModelRenderer.loadMeshDataAsPart() which imports
+     * Routes through EditableModel.loadMeshDataAsPart() which imports
      * the geometry into the ModelPartManager as a single root part.
      *
      * @param meshData the mesh data to load
@@ -629,7 +629,7 @@ public class ViewportController {
                 edgeRenderer.setModelRenderer(modelRenderer);
             }
             if (faceRenderer != null) {
-                faceRenderer.setGenericModelRenderer(modelRenderer);
+                faceRenderer.setEditableModel(modelRenderer);
             }
         }
     }
@@ -777,8 +777,8 @@ public class ViewportController {
     public ViewerCamera getCamera() { return viewportCamera; }
     public ViewportInputHandler getInputHandler() { return inputHandler; }
     public FaceSelectionState getFaceSelectionState() { return faceSelectionState; }
-    public GenericModelRenderer getModelRenderer() { return modelRenderer; }
-    public com.openmason.engine.rendering.model.gmr.parts.ModelPartManager getPartManager() {
+    public EditableModel getModelRenderer() { return modelRenderer; }
+    public com.openmason.engine.modeling.parts.ModelPartManager getPartManager() {
         return modelRenderer.getPartManager();
     }
 
@@ -789,7 +789,7 @@ public class ViewportController {
      * @param part The part descriptor with a valid meshRange
      */
     public void assignDefaultMaterialToPartFaces(
-            com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor part) {
+            com.openmason.engine.modeling.parts.ModelPartDescriptor part) {
         modelRenderer.assignDefaultMaterialToPartFaces(part);
     }
     public ViewportUIState getViewportUIState() { return viewportState; }

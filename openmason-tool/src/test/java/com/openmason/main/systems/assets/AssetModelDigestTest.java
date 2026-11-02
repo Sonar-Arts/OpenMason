@@ -1,6 +1,6 @@
 package com.openmason.main.systems.assets;
 
-import com.openmason.engine.rendering.model.gmr.analysis.WindingAnalyzer;
+import com.openmason.engine.modeling.analysis.WindingAnalyzer;
 import com.openmason.main.systems.target.TestGameTargets;
 import org.junit.jupiter.api.Test;
 

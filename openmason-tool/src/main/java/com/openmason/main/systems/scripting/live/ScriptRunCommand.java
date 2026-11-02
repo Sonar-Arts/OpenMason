@@ -1,7 +1,7 @@
 package com.openmason.main.systems.scripting.live;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.services.commands.MeshSnapshot;
 import com.openmason.main.systems.services.commands.ModelCommand;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
@@ -33,7 +33,7 @@ public final class ScriptRunCommand implements ModelCommand {
     private final MeshSnapshot meshAfter;
     private final List<TexturePixelDelta> pixelDeltas;
     private final ModelPartManager partManager;
-    private final GenericModelRenderer gmr;
+    private final EditableModel gmr;
     private final RendererSynchronizer synchronizer;
 
     public ScriptRunCommand(String description,
@@ -41,7 +41,7 @@ public final class ScriptRunCommand implements ModelCommand {
                             PartManagerSnapshot partsAfter, MeshSnapshot meshAfter,
                             List<TexturePixelDelta> pixelDeltas,
                             ModelPartManager partManager,
-                            GenericModelRenderer gmr,
+                            EditableModel gmr,
                             RendererSynchronizer synchronizer) {
         this.description = description;
         this.partsBefore = partsBefore;

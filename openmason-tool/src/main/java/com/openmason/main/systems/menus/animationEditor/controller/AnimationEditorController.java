@@ -1,8 +1,8 @@
 package com.openmason.main.systems.menus.animationEditor.controller;
 
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartTransform;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartTransform;
 import com.openmason.main.systems.menus.animationEditor.commands.AutoKeyCommand;
 import com.openmason.main.systems.menus.animationEditor.commands.ClipMetaCommands;
 import com.openmason.main.systems.menus.animationEditor.commands.CompositeCommand;

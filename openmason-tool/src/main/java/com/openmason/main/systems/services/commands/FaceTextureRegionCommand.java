@@ -1,6 +1,6 @@
 package com.openmason.main.systems.services.commands;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
+import com.openmason.engine.modeling.EditableModel;
 
 /**
  * Undoable command for a rectangular GPU texture region update.
@@ -23,9 +23,9 @@ public final class FaceTextureRegionCommand implements ModelCommand {
     private final byte[] before;
     private final byte[] after;
     private final String description;
-    private final GenericModelRenderer renderer;
+    private final EditableModel renderer;
 
-    public FaceTextureRegionCommand(GenericModelRenderer renderer,
+    public FaceTextureRegionCommand(EditableModel renderer,
                                      int gpuTextureId,
                                      int x, int y, int width, int height,
                                      byte[] before, byte[] after,

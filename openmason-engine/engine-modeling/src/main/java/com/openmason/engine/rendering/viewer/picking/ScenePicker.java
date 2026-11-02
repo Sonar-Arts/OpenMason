@@ -1,6 +1,6 @@
 package com.openmason.engine.rendering.viewer.picking;
 
-import com.openmason.engine.rendering.model.gmr.ModelBounds;
+import com.openmason.engine.modeling.ModelBounds;
 import com.openmason.engine.rendering.viewer.math.CoordinateSystem;
 import com.openmason.engine.rendering.viewer.math.RaycastUtil;
 import com.openmason.engine.rendering.viewer.scene.ModelInstance;

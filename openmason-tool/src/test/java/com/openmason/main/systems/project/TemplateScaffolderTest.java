@@ -6,7 +6,7 @@ import com.openmason.main.systems.menus.mainHub.model.ProjectTemplate;
 import com.openmason.main.systems.menus.mainHub.services.TemplateService;
 import com.openmason.main.systems.rendering.model.io.omo.OMODeserializer;
 import com.openmason.main.systems.target.TestGameTargets;
-import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
+import com.openmason.engine.modeling.parts.PartShapeFactory;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

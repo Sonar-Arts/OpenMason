@@ -1,6 +1,6 @@
 package com.openmason.engine.rendering.viewer.scene;
 
-import com.openmason.engine.rendering.model.gmr.ModelBounds;
+import com.openmason.engine.modeling.ModelBounds;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;

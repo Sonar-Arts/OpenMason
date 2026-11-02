@@ -1,30 +1,29 @@
 /**
- * Open Mason engine modeling (#91): the authoring side of the engine that no game ships. GMR, the Generic
- * Model Renderer ({@code rendering.model.gmr}: {@code GenericModelRenderer}, the editable mesh document, edit
- * ops, topology, parts/shapes, UV regions, analysis), and the model viewer ({@code rendering.viewer}: camera,
+ * Open Mason engine modeling (#91): the authoring side of the engine that no game ships. The editable model
+ * ({@code modeling}: {@code EditableModel}, the editable mesh document, edit ops, topology, parts/shapes, UV
+ * regions, analysis — it draws through the engine model renderer, #90), and the model viewer ({@code rendering.viewer}: camera,
  * gizmo, passes, picking, scene, transform). Used by the Open Mason tool and, through it, its plugins; stays
- * headless-testable (MCP, tests) and is where a native GMR core (Cenda C4) lands.
+ * headless-testable (MCP, tests) and is where a native EditableModel core (Cenda C4) lands.
  * Builds on {@code openmason.engine.core} only.
  */
 module openmason.engine.modeling {
 
-    // Transitive: engine formats, GL, JOML and SLF4J types appear in the exported GMR/viewer APIs.
+    // Transitive: engine formats, GL, JOML and SLF4J types appear in the exported EditableModel/viewer APIs.
     requires transitive openmason.engine.core;
 
-    exports com.openmason.engine.rendering.model.gmr;
-    exports com.openmason.engine.rendering.model.gmr.analysis;
-    exports com.openmason.engine.rendering.model.gmr.core;
-    exports com.openmason.engine.rendering.model.gmr.editable;
-    exports com.openmason.engine.rendering.model.gmr.editable.ops;
-    exports com.openmason.engine.rendering.model.gmr.extraction;
-    exports com.openmason.engine.rendering.model.gmr.geometry;
-    exports com.openmason.engine.rendering.model.gmr.mapping;
-    exports com.openmason.engine.rendering.model.gmr.mesh.edgeOperations;
-    exports com.openmason.engine.rendering.model.gmr.notification;
-    exports com.openmason.engine.rendering.model.gmr.parts;
-    exports com.openmason.engine.rendering.model.gmr.parts.shapes;
-    exports com.openmason.engine.rendering.model.gmr.topology;
-    exports com.openmason.engine.rendering.model.gmr.uv;
+    exports com.openmason.engine.modeling;
+    exports com.openmason.engine.modeling.analysis;
+    exports com.openmason.engine.modeling.core;
+    exports com.openmason.engine.modeling.editable;
+    exports com.openmason.engine.modeling.editable.ops;
+    exports com.openmason.engine.modeling.extraction;
+    exports com.openmason.engine.modeling.mapping;
+    exports com.openmason.engine.modeling.mesh.edgeOperations;
+    exports com.openmason.engine.modeling.notification;
+    exports com.openmason.engine.modeling.parts;
+    exports com.openmason.engine.modeling.parts.shapes;
+    exports com.openmason.engine.modeling.topology;
+    exports com.openmason.engine.modeling.uv;
     exports com.openmason.engine.rendering.viewer;
     exports com.openmason.engine.rendering.viewer.camera;
     exports com.openmason.engine.rendering.viewer.gizmo;

@@ -1,13 +1,13 @@
 package com.openmason.main.systems.mcp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.openmason.engine.rendering.model.gmr.analysis.WindingAnalyzer;
-import com.openmason.engine.rendering.model.gmr.editable.EditableFace;
-import com.openmason.engine.rendering.model.gmr.editable.EditableMesh;
-import com.openmason.engine.rendering.model.gmr.editable.MeshImporter;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
-import com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder;
+import com.openmason.engine.modeling.analysis.WindingAnalyzer;
+import com.openmason.engine.modeling.editable.EditableFace;
+import com.openmason.engine.modeling.editable.EditableMesh;
+import com.openmason.engine.modeling.editable.MeshImporter;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.PartMeshRebuilder;
 import com.openmason.main.systems.services.EditorServices;
 import com.openmason.main.systems.ViewportController;
 import com.openmason.main.systems.threading.MainThreadExecutor;

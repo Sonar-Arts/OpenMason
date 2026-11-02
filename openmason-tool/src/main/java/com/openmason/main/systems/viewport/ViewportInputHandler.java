@@ -1,9 +1,9 @@
 package com.openmason.main.systems.viewport;
 
 import com.openmason.engine.rendering.viewer.camera.ViewerCamera;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.KnifePreviewRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.ToolPreviewRenderer;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.KnifePreviewRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.ToolPreviewRenderer;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
 import com.openmason.main.systems.services.commands.RendererSynchronizer;
 import com.openmason.engine.rendering.viewer.gizmo.rendering.GizmoRenderer;
@@ -13,11 +13,11 @@ import com.openmason.main.systems.viewport.state.EditModeManager;
 import com.openmason.main.systems.viewport.state.FaceSelectionState;
 import com.openmason.engine.rendering.viewer.transform.TransformState;
 import com.openmason.main.systems.viewport.state.VertexSelectionState;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.EdgeRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.edge.operations.EdgeInputController;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.FaceRenderer;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.face.operations.FaceInputController;
-import com.openmason.main.systems.rendering.model.gmr.subrenders.vertex.VertexRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.edge.operations.EdgeInputController;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
+import com.openmason.main.systems.rendering.model.editing.subrenders.face.operations.FaceInputController;
+import com.openmason.main.systems.rendering.model.editing.subrenders.vertex.VertexRenderer;
 import com.openmason.main.systems.viewport.viewportRendering.TranslationCoordinator;
 import imgui.ImGui;
 import imgui.ImVec2;
@@ -185,9 +185,9 @@ public class ViewportInputHandler {
     }
 
     /**
-     * Set the generic model renderer for mesh operations (J key edge insert, F key face create, X key face delete, K knife tool, Ctrl+Click vertex insert, S scale, B box select, I inset, E extrude).
+     * Set the editable model for mesh operations (J key edge insert, F key face create, X key face delete, K knife tool, Ctrl+Click vertex insert, S scale, B box select, I inset, E extrude).
      */
-    public void setModelRenderer(GenericModelRenderer modelRenderer) {
+    public void setModelRenderer(EditableModel modelRenderer) {
         vertexController.setModelRenderer(modelRenderer);
         edgeController.setModelRenderer(modelRenderer);
         faceController.setModelRenderer(modelRenderer);

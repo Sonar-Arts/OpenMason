@@ -1,7 +1,7 @@
 package com.openmason.main.systems.menus.animationEditor.panels;
 
 import com.openmason.engine.format.oma.AnimLayerMeta;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.menus.animationEditor.controller.AnimationEditorController;
 import com.openmason.main.systems.menus.animationEditor.data.AnimationClip;
 import com.openmason.main.systems.menus.animationEditor.data.Track;

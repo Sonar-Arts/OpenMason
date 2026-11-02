@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.textureCreator;
 
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping.UVRegion;
+import com.openmason.engine.modeling.uv.FaceTextureMapping.UVRegion;
 import com.openmason.main.systems.menus.textureCreator.canvas.CanvasShapeMask;
 import com.openmason.main.systems.menus.textureCreator.canvas.CanvasState;
 import com.openmason.main.systems.menus.textureCreator.commands.CommandHistory;

@@ -5,10 +5,10 @@ import com.openmason.main.systems.menus.panes.propertyPane.interfaces.IPanelSect
 import com.openmason.main.systems.menus.panes.propertyPane.interfaces.IViewportConnector;
 import com.openmason.main.systems.menus.textureCreator.FaceEditorBridge;
 import com.openmason.main.systems.menus.textureCreator.canvas.PixelCanvas;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureManager;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureMapping;
-import com.openmason.engine.rendering.model.gmr.uv.FaceTextureSizer;
-import com.openmason.engine.rendering.model.gmr.uv.MaterialDefinition;
+import com.openmason.engine.modeling.uv.FaceTextureManager;
+import com.openmason.engine.modeling.uv.FaceTextureMapping;
+import com.openmason.engine.modeling.uv.FaceTextureSizer;
+import com.openmason.engine.modeling.uv.MaterialDefinition;
 import com.openmason.main.systems.rendering.model.miscComponents.OMTTextureLoader;
 import com.openmason.main.systems.rendering.model.miscComponents.TextureLoadResult;
 import com.openmason.main.systems.menus.panes.propertyPane.inspector.InspectorRow;
@@ -226,7 +226,7 @@ public class FaceMaterialSection implements IPanelSection {
         // Roll-free Euler XYZ rotation aligning the socket's local +Z (its
         // forward tick, the axis an attached model faces along) with the face
         // normal n: rotX = atan2(-n.y, n.z), rotY = atan2(n.x, sqrt(n.y²+n.z²)).
-        org.joml.Vector3f n = com.openmason.engine.rendering.model.gmr.uv.FaceProjectionUtil
+        org.joml.Vector3f n = com.openmason.engine.modeling.uv.FaceProjectionUtil
                 .computeRobustFaceNormal(facePositions, vertexCount);
         float rotX = (float) Math.toDegrees(Math.atan2(-n.y, n.z));
         float rotY = (float) Math.toDegrees(Math.atan2(n.x, Math.sqrt(n.y * n.y + n.z * n.z)));

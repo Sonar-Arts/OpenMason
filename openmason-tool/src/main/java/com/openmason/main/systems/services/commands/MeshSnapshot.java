@@ -1,7 +1,7 @@
 package com.openmason.main.systems.services.commands;
 
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.editable.EditableMeshSnapshot;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.editable.EditableMeshSnapshot;
 
 /**
  * Tool-side handle on the engine's exact mesh snapshot
@@ -18,12 +18,12 @@ import com.openmason.engine.rendering.model.gmr.editable.EditableMeshSnapshot;
 public record MeshSnapshot(EditableMeshSnapshot snapshot) {
 
     /**
-     * Capture the current state of a GenericModelRenderer.
+     * Capture the current state of an EditableModel.
      *
      * @param gmr The renderer to snapshot
      * @return An independent snapshot of all mesh + face texture state
      */
-    public static MeshSnapshot capture(GenericModelRenderer gmr) {
+    public static MeshSnapshot capture(EditableModel gmr) {
         return new MeshSnapshot(gmr.captureSnapshot());
     }
 
@@ -32,7 +32,7 @@ public record MeshSnapshot(EditableMeshSnapshot snapshot) {
      *
      * @param gmr The renderer to restore into
      */
-    public void restore(GenericModelRenderer gmr) {
+    public void restore(EditableModel gmr) {
         gmr.restoreSnapshot(snapshot);
     }
 }

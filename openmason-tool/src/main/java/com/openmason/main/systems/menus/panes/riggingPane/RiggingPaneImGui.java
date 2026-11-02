@@ -1,6 +1,6 @@
 package com.openmason.main.systems.menus.panes.riggingPane;
 
-import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
+import com.openmason.engine.modeling.parts.PartShapeFactory;
 import com.openmason.main.systems.ViewportController;
 import com.openmason.main.systems.menus.panes.riggingPane.sections.AttachmentEditorSection;
 import com.openmason.main.systems.menus.panes.riggingPane.sections.BoneEditorSection;

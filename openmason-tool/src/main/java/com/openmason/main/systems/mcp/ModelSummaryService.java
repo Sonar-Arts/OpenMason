@@ -1,9 +1,9 @@
 package com.openmason.main.systems.mcp;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.gmr.GenericModelRenderer;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartManager;
+import com.openmason.engine.modeling.EditableModel;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.services.EditorServices;
 import com.openmason.main.systems.ViewportController;
 import com.openmason.main.systems.scripting.commands.ModelSummary;
@@ -50,7 +50,7 @@ public final class ModelSummaryService {
                 return new Summary(false, null, null, null, null, null, null);
             }
 
-            GenericModelRenderer gmr = vp.getModelRenderer();
+            EditableModel gmr = vp.getModelRenderer();
             int materials = gmr != null
                     ? Math.max(0, gmr.getFaceTextureManager().getMaterialCount() - 1)
                     : 0;

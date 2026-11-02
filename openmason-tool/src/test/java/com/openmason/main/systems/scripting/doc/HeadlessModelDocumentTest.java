@@ -1,8 +1,8 @@
 package com.openmason.main.systems.scripting.doc;
 
 import com.openmason.engine.format.omo.OMOFormat;
-import com.openmason.engine.rendering.model.gmr.parts.ModelPartDescriptor;
-import com.openmason.engine.rendering.model.gmr.parts.PartShapeFactory;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.PartShapeFactory;
 import org.joml.Vector3f;
 import org.junit.jupiter.api.Test;
 
@@ -44,7 +44,7 @@ class HeadlessModelDocumentTest {
         // once registered, such a part poisons every later combined rebuild
         // (out-of-bounds deep in MeshImporter, long after the bad data entered).
         HeadlessModelDocument doc = new HeadlessModelDocument();
-        var badGeo = com.openmason.engine.rendering.model.gmr.parts.PartMeshRebuilder.PartGeometry.of(
+        var badGeo = com.openmason.engine.modeling.parts.PartMeshRebuilder.PartGeometry.of(
                 new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, // 3 vertices
                 new float[6],
                 new int[]{0, 1, 3},                       // index 3 out of range
