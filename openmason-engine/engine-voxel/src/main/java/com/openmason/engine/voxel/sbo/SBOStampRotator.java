@@ -39,14 +39,19 @@ public final class SBOStampRotator {
         FaceStamp[] faces = new FaceStamp[SBOFaceConventions.FACE_COUNT];
         FaceStamp[] interior = new FaceStamp[SBOFaceConventions.FACE_COUNT];
         boolean[] occludes = new boolean[SBOFaceConventions.FACE_COUNT];
+        FaceStamp[][] protruding = new FaceStamp[SBOFaceConventions.FACE_COUNT][SBOFaceConventions.FACE_COUNT];
 
         for (int face = 0; face < SBOFaceConventions.FACE_COUNT; face++) {
             int rotated = rotateFace(face, turns);
             faces[rotated] = rotateGeometry(stamp.faces()[face], turns);
             interior[rotated] = rotateGeometry(stamp.interior()[face], turns);
             occludes[rotated] = stamp.occludesFace()[face];
+            for (int along = 0; along < SBOFaceConventions.FACE_COUNT; along++) {
+                protruding[rotated][rotateFace(along, turns)] =
+                        rotateGeometry(stamp.protruding()[face][along], turns);
+            }
         }
-        return new BlockStamp(faces, interior, occludes);
+        return new BlockStamp(faces, interior, occludes, protruding);
     }
 
     /**
@@ -62,13 +67,17 @@ public final class SBOStampRotator {
         FaceStamp[] faces = new FaceStamp[SBOFaceConventions.FACE_COUNT];
         FaceStamp[] interior = new FaceStamp[SBOFaceConventions.FACE_COUNT];
         boolean[] occludes = new boolean[SBOFaceConventions.FACE_COUNT];
+        FaceStamp[][] protruding = new FaceStamp[SBOFaceConventions.FACE_COUNT][SBOFaceConventions.FACE_COUNT];
         for (int face = 0; face < SBOFaceConventions.FACE_COUNT; face++) {
             int flipped = flipFace(face);
             faces[flipped] = flipGeometry(stamp.faces()[face]);
             interior[flipped] = flipGeometry(stamp.interior()[face]);
             occludes[flipped] = stamp.occludesFace()[face];
+            for (int along = 0; along < SBOFaceConventions.FACE_COUNT; along++) {
+                protruding[flipped][flipFace(along)] = flipGeometry(stamp.protruding()[face][along]);
+            }
         }
-        return new BlockStamp(faces, interior, occludes);
+        return new BlockStamp(faces, interior, occludes, protruding);
     }
 
     /** The MMS face a face points at after a top-to-bottom mirror. */

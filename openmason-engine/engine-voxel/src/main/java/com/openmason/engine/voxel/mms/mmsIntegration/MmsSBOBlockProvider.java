@@ -165,13 +165,16 @@ public class MmsSBOBlockProvider implements MmsBlockGeometryProvider {
         if (stamp == null) return;
 
         // Boundary-flush geometry culls against neighbours; interior geometry
-        // (stair treads and the like) is always drawn. Bucket index mirrors
-        // SBOStampEmitter: 0 = flush, 1 = interior.
-        for (int bucket = 0; bucket < 2; bucket++) {
+        // (stair treads and the like) is always drawn; geometry protruding
+        // through a side culls with that side. Bucket index mirrors
+        // SBOMeshProcessor: 0 = flush, 1 = interior, 2 + side = protruding.
+        for (int bucket = 0; bucket < 8; bucket++) {
         for (int face = 0; face < 6; face++) {
-            SBOMeshProcessor.FaceStamp faceStamp =
-                    bucket == 0 ? stamp.faces()[face] : stamp.interior()[face];
+            SBOMeshProcessor.FaceStamp faceStamp = bucket == 0 ? stamp.faces()[face]
+                    : bucket == 1 ? stamp.interior()[face]
+                    : stamp.protruding()[bucket - 2][face];
             if (faceStamp.vertexCount() == 0) continue;
+            int cullFace = bucket == 0 ? face : bucket - 2; // bucket 1 never culls
 
             float[] pos = faceStamp.positions();
             float[] nrm = faceStamp.normals();
@@ -185,8 +188,8 @@ public class MmsSBOBlockProvider implements MmsBlockGeometryProvider {
                 int ly = blocks.data[base + 1];
                 int lz = blocks.data[base + 2];
 
-                if (bucket == 0 && cullingService != null &&
-                    !cullingService.shouldRenderFace(blockType, lx, ly, lz, face, chunkData)) {
+                if (bucket != 1 && cullingService != null &&
+                    !cullingService.shouldRenderFace(blockType, lx, ly, lz, cullFace, chunkData)) {
                     continue;
                 }
 
