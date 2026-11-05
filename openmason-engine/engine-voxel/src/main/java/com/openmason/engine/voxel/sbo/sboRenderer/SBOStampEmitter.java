@@ -189,6 +189,15 @@ public class SBOStampEmitter {
 
             emitFaceStamp(builder, stamp.faces()[face], worldX, worldY, worldZ,
                     alphaFlag, translucentFlag, blockHeight, face, chunkData);
+
+            // Geometry poking out through this side (ore nuggets) lives in the
+            // neighbour's cell: whatever hides the side's face hides it too.
+            // Each slot keeps the face it points along for its light sampling.
+            FaceStamp[] protruding = stamp.protruding()[face];
+            for (int along = 0; along < SBOFaceConventions.FACE_COUNT; along++) {
+                emitFaceStamp(builder, protruding[along], worldX, worldY, worldZ,
+                        alphaFlag, translucentFlag, blockHeight, along, chunkData);
+            }
         }
     }
 

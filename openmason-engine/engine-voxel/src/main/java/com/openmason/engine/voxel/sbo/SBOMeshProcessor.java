@@ -66,8 +66,39 @@ public class SBOMeshProcessor {
      * @param occludesFace per MMS face, true when the flush geometry fully covers
      *                     that boundary plane — i.e. the block can hide a
      *                     neighbour's facing side
+     * @param protruding   off-plane geometry that pokes out through exactly one
+     *                     boundary plane (an ore's nuggets), indexed
+     *                     {@code [side][face]}: {@code side} is the MMS face it
+     *                     pokes through and culls with — it sits inside that
+     *                     neighbour's cell, so a neighbour that hides the side's
+     *                     flush face hides it too; {@code face} is the MMS face it
+     *                     points along, as for {@code interior}
      */
-    public record BlockStamp(FaceStamp[] faces, FaceStamp[] interior, boolean[] occludesFace) {}
+    public record BlockStamp(FaceStamp[] faces, FaceStamp[] interior, boolean[] occludesFace,
+                             FaceStamp[][] protruding) {
+
+        /** A stamp without protruding geometry (cubes, stairs, slabs). */
+        public BlockStamp(FaceStamp[] faces, FaceStamp[] interior, boolean[] occludesFace) {
+            this(faces, interior, occludesFace, noProtrusions());
+        }
+
+        /** True when any geometry pokes out of the cell (see {@code protruding}). */
+        public boolean hasProtrusions() {
+            for (FaceStamp[] side : protruding) {
+                for (FaceStamp stamp : side) {
+                    if (stamp.vertexCount() != 0) return true;
+                }
+            }
+            return false;
+        }
+
+        private static FaceStamp[][] noProtrusions() {
+            FaceStamp empty = new FaceStamp(new float[0], new float[0], new float[0], new float[0], 0);
+            FaceStamp[][] none = new FaceStamp[6][6];
+            for (FaceStamp[] side : none) java.util.Arrays.fill(side, empty);
+            return none;
+        }
+    }
 
     /** Cached block stamps keyed by block type ID. */
     private final Map<Integer, BlockStamp> stampCache = new HashMap<>();
@@ -134,8 +165,12 @@ public class SBOMeshProcessor {
         int interiorVerts = 0;
         for (FaceStamp face : defaultStamp.faces()) totalVerts += face.vertexCount();
         for (FaceStamp face : defaultStamp.interior()) interiorVerts += face.vertexCount();
-        logger.info("Processed SBO stamp for {}: {} boundary + {} interior default-state vertices, {} state variants",
-                blockType.getName(), totalVerts, interiorVerts, variantCount);
+        int protrudingVerts = 0;
+        for (FaceStamp[] side : defaultStamp.protruding()) {
+            for (FaceStamp face : side) protrudingVerts += face.vertexCount();
+        }
+        logger.info("Processed SBO stamp for {}: {} boundary + {} interior + {} protruding default-state vertices, {} state variants",
+                blockType.getName(), totalVerts, interiorVerts, protrudingVerts, variantCount);
 
         return true;
     }
@@ -203,17 +238,21 @@ public class SBOMeshProcessor {
         boolean[] triFlush = mesh.triangleFlush();
         int triangleCount = mesh.triangleCount();
 
-        // Bucket index: [0] = boundary-flush (cullable), [1] = interior (always drawn).
-        int[][] counts = new int[2][6];
+        // Bucket index: [0] = boundary-flush (cullable), [1] = interior (always drawn),
+        // [2 + side] = protruding through MMS face `side` (culled with that side).
+        int[] triBucket = new int[triangleCount];
+        int[][] counts = new int[BUCKETS][6];
         for (int tri = 0; tri < triangleCount; tri++) {
-            counts[triFlush[tri] ? 0 : 1][triFaces[tri]]++;
+            int side = triFlush[tri] ? -1 : protrusionSide(verts, tri);
+            triBucket[tri] = triFlush[tri] ? 0 : side < 0 ? 1 : 2 + side;
+            counts[triBucket[tri]][triFaces[tri]]++;
         }
 
-        float[][][] positions = new float[2][6][];
-        float[][][] normals = new float[2][6][];
-        float[][][] texCoords = new float[2][6][];
-        float[][][] layers = new float[2][6][];
-        int[][] insert = new int[2][6];
+        float[][][] positions = new float[BUCKETS][6][];
+        float[][][] normals = new float[BUCKETS][6][];
+        float[][][] texCoords = new float[BUCKETS][6][];
+        float[][][] layers = new float[BUCKETS][6][];
+        int[][] insert = new int[BUCKETS][6];
 
         // Per-face texture-array layer and atlas UV rectangle. State-aware layer
         // lookup resolves to the variant's texture set when stateName is non-null.
@@ -227,7 +266,7 @@ public class SBOMeshProcessor {
                 atlasUVBounds[f] = new float[]{0f, 0f, 1f, 1f};
                 logger.warn("No atlas UVs for {} face {}, using full range", blockType.getName(), f);
             }
-            for (int bucket = 0; bucket < 2; bucket++) {
+            for (int bucket = 0; bucket < BUCKETS; bucket++) {
                 int vertCount = counts[bucket][f] * 3;
                 positions[bucket][f] = new float[vertCount * 3];
                 normals[bucket][f] = new float[vertCount * 3];
@@ -244,7 +283,7 @@ public class SBOMeshProcessor {
 
         for (int tri = 0; tri < triangleCount; tri++) {
             int face = triFaces[tri];
-            int bucket = triFlush[tri] ? 0 : 1;
+            int bucket = triBucket[tri];
 
             float au1 = atlasUVBounds[face][0];
             float av1 = atlasUVBounds[face][1];
@@ -260,7 +299,7 @@ public class SBOMeshProcessor {
             // block's side texture. Flush triangles keep the uniform per-MMS-face
             // layer, so cube-shaped stamps are texture-identical to the shipped path.
             float triLayer = faceLayer[face];
-            if (bucket == 1 && hasAuthoredFaces) {
+            if (bucket != 0 && hasAuthoredFaces) {
                 triLayer = layerProvider.getBlockFaceLayerForAuthoredFace(
                         blockType, stateName, authoredTriFaces[tri], face);
             }
@@ -295,15 +334,57 @@ public class SBOMeshProcessor {
         FaceStamp[] flushStamps = new FaceStamp[6];
         FaceStamp[] interiorStamps = new FaceStamp[6];
         boolean[] occludes = new boolean[6];
+        FaceStamp[][] protruding = new FaceStamp[6][6];
         for (int f = 0; f < 6; f++) {
             flushStamps[f] = new FaceStamp(positions[0][f], normals[0][f], texCoords[0][f],
                     layers[0][f], counts[0][f] * 3);
             interiorStamps[f] = new FaceStamp(positions[1][f], normals[1][f], texCoords[1][f],
                     layers[1][f], counts[1][f] * 3);
             occludes[f] = coveredArea[f] >= FULL_FACE_AREA - AREA_EPSILON;
+            for (int side = 0; side < 6; side++) {
+                int b = 2 + side;
+                protruding[side][f] = new FaceStamp(positions[b][f], normals[b][f], texCoords[b][f],
+                        layers[b][f], counts[b][f] * 3);
+            }
         }
 
-        return new BlockStamp(flushStamps, interiorStamps, occludes);
+        return new BlockStamp(flushStamps, interiorStamps, occludes, protruding);
+    }
+
+    /** flush + interior + one protruding bucket per side. */
+    private static final int BUCKETS = 8;
+    /** How far past a boundary plane a vertex must sit to count as poking out. */
+    private static final float PROTRUSION_EPSILON = 1e-3f;
+
+    /**
+     * The one MMS face a de-indexed triangle pokes out through (some vertex
+     * beyond that boundary plane of the ±0.5 cell), or -1 when it stays inside
+     * the cell or pokes out through more than one plane — such a triangle can
+     * be seen through either neighbour, so it stays always-drawn interior.
+     */
+    private static int protrusionSide(float[] verts, int tri) {
+        int side = -1;
+        for (int v = 0; v < 3; v++) {
+            int off = tri * 9 + v * 3;
+            for (int axis = 0; axis < 3; axis++) {
+                float c = verts[off + axis];
+                int out = c > 0.5f + PROTRUSION_EPSILON ? positiveFace(axis)
+                        : c < -0.5f - PROTRUSION_EPSILON ? SBOFaceConventions.opposite(positiveFace(axis))
+                        : -1;
+                if (out < 0) continue;
+                if (side >= 0 && side != out) return -1;
+                side = out;
+            }
+        }
+        return side;
+    }
+
+    private static int positiveFace(int axis) {
+        return switch (axis) {
+            case 0 -> SBOFaceConventions.MMS_EAST;
+            case 1 -> SBOFaceConventions.MMS_TOP;
+            default -> SBOFaceConventions.MMS_SOUTH;
+        };
     }
 
     /** Area of a de-indexed triangle projected onto the plane perpendicular to {@code axis}. */
