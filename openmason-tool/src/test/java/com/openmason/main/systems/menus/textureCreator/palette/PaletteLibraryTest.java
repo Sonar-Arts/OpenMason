@@ -109,6 +109,31 @@ class PaletteLibraryTest {
         assertEquals(List.of(3), library.getAll().get("Cool"));
     }
 
+    @Test
+    void createWithSwatchesSeedsThemInsteadOfDb32() {
+        PaletteLibrary library = libraryOf("Warm", List.of(1), "Cool", List.of(3));
+        assertTrue(library.createPalette("Ore", List.of(5, 6)));
+        assertEquals("Ore", library.getActiveName());
+        assertEquals(List.of(5, 6), library.getActiveModel().getSwatches());
+        assertEquals(List.of(1), library.getAll().get("Warm"));
+    }
+
+    @Test
+    void deleteNonActivePaletteKeepsActiveAndItsEdits() {
+        PaletteLibrary library = libraryOf("Warm", List.of(1), "Cool", List.of(3));
+        library.getActiveModel().add(9);
+        AtomicInteger changes = new AtomicInteger();
+        library.setChangeListener(changes::incrementAndGet);
+
+        assertTrue(library.deletePalette("Cool"));
+        assertEquals("Warm", library.getActiveName());
+        assertEquals(List.of(1, 9), library.getActiveModel().getSwatches());
+        assertEquals(List.of("Warm"), library.getNames());
+        assertEquals(1, changes.get());
+        assertFalse(library.deletePalette("Missing"));
+        assertFalse(library.deletePalette("Warm"), "last palette is kept");
+    }
+
     private static PaletteLibrary libraryOf(String n1, List<Integer> c1, String n2, List<Integer> c2) {
         Map<String, List<Integer>> map = new LinkedHashMap<>();
         map.put(n1, c1);

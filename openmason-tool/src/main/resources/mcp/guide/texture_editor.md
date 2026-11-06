@@ -71,6 +71,14 @@ Eraser, Fill, Line, Shapes, Color Picker, selections…) and paint colour;
 `tex_set_symmetry {mode: none|horizontal|vertical|quadrant, offset_x,
 offset_y, show_axes}` mirrors their brush strokes.
 
+## Palettes — the user's swatches
+`tex_palette_list` shows the saved palettes (colour panel + palette strip) as
+hex; paint with those colours to match the user's look. `tex_palette_create
+{name, colors}` builds a ramp and makes it active (omit colors for DB32);
+`tex_palette_switch`, `tex_palette_add_swatches {colors}`,
+`tex_palette_remove_swatch {index|color}` and `tex_palette_delete {name}`
+edit them. Palettes are editor-wide, saved immediately, and not undoable.
+
 ## Pixel-art habits that read well at 16px
 - Shade with 3–4 tones per material (dark / base / light / highlight); pick
   a ramp, then paint by glyph.

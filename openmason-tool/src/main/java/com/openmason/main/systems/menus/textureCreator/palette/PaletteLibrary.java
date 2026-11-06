@@ -73,12 +73,23 @@ public final class PaletteLibrary {
      * @return false if the name is blank or already taken
      */
     public boolean createPalette(String name) {
+        return createPalette(name, null);
+    }
+
+    /**
+     * Create a new palette seeded with {@code swatches} (null: the DB32
+     * default) and switch to it.
+     *
+     * @return false if the name is blank or already taken
+     */
+    public boolean createPalette(String name, List<Integer> swatches) {
         if (name == null || name.isBlank() || palettes.containsKey(name.trim())) {
             return false;
         }
         snapshotActive();
         String trimmed = name.trim();
-        palettes.put(trimmed, PaletteModel.createDefault().getSwatches());
+        palettes.put(trimmed, swatches != null
+                ? new ArrayList<>(swatches) : PaletteModel.createDefault().getSwatches());
         activeName = trimmed;
         activeModel.setSwatches(palettes.get(trimmed));
         notifyChanged();
@@ -90,14 +101,29 @@ public final class PaletteLibrary {
      * Refused when it is the only palette.
      */
     public boolean deleteActivePalette() {
-        if (palettes.size() <= 1) {
+        return deletePalette(activeName);
+    }
+
+    /**
+     * Delete the named palette. Deleting the active one switches to the first
+     * remaining palette; deleting another leaves the active one untouched.
+     * Refused when the name is unknown or it is the only palette.
+     */
+    public boolean deletePalette(String name) {
+        if (!palettes.containsKey(name) || palettes.size() <= 1) {
             return false;
         }
-        palettes.remove(activeName);
-        activeName = palettes.keySet().iterator().next();
-        activeModel.setSwatches(palettes.get(activeName));
+        palettes.remove(name);
+        if (name.equals(activeName)) {
+            activeName = palettes.keySet().iterator().next();
+            activeModel.setSwatches(palettes.get(activeName));
+        }
         notifyChanged();
         return true;
+    }
+
+    public boolean contains(String name) {
+        return palettes.containsKey(name);
     }
 
     /** Sync the active model's swatches back into the named map. */

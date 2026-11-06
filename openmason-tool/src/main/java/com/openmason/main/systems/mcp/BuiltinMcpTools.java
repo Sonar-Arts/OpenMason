@@ -63,6 +63,7 @@ public final class BuiltinMcpTools {
         McpSharedServices s = McpSharedServices.of(c);
         new TextureToolDefinitions(s.texture(), new CanvasCaptureService(s.editor()), s.writes(), c.mapper())
                 .registerAll(c.registry());
+        new PaletteToolDefinitions(new PaletteEditingService(s.editor()), c.mapper()).registerAll(c.registry());
     });
 
     public static final McpToolContribution FACE_TEXTURES = new McpToolContribution("texture.faces",

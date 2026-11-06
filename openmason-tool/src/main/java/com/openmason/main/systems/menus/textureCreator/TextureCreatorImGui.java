@@ -78,6 +78,9 @@ public class TextureCreatorImGui {
     // Status bar (rendered by the hosting window below the dockspace)
     private com.openmason.main.systems.menus.textureCreator.panels.status.StatusBarPanel statusBarPanel;
 
+    // Saved-palettes library shared by the color panel and palette strip (also driven over MCP)
+    private com.openmason.main.systems.menus.textureCreator.palette.PaletteLibrary paletteLibrary;
+
     // Drag-and-drop handler for processing dropped files
     private final DragDropHandler dragDropHandler;
 
@@ -243,6 +246,7 @@ public class TextureCreatorImGui {
         );
         ui.statusBarPanel = new com.openmason.main.systems.menus.textureCreator.panels.status.StatusBarPanel(
             statusService, state, controller, state.getCanvasHoverInfo());
+        ui.paletteLibrary = paletteLibrary;
         return ui;
     }
 
@@ -434,6 +438,10 @@ public class TextureCreatorImGui {
         }
     }
 
+    public FaceTextureResizeDialog getFaceTextureResizeDialog() {
+        return faceTextureResizeDialog;
+    }
+
     /**
      * Wire the per-face texture resize dialog. Once set, the dialog is rendered
      * every frame (so its modal popup can stay alive while open) and the
@@ -441,10 +449,6 @@ public class TextureCreatorImGui {
      *
      * @param dialog the resize dialog (must already have its dependencies injected)
      */
-    public FaceTextureResizeDialog getFaceTextureResizeDialog() {
-        return faceTextureResizeDialog;
-    }
-
     public void setFaceTextureResizeDialog(FaceTextureResizeDialog dialog) {
         this.faceTextureResizeDialog = dialog;
         if (dialog == null) {
@@ -509,7 +513,7 @@ public class TextureCreatorImGui {
 
         if (!omtFiles.isEmpty()) {
             if (controller.hasOpenDocument()) {
-                omtImportDialog.show(omtFiles.get(0)); // flatten / import layers into this texture
+                omtImportDialog.show(omtFiles.getFirst()); // flatten / import layers into this texture
             } else {
                 for (String omt : omtFiles) {
                     controller.loadProject(omt); // nothing to import into: open them as textures
@@ -632,6 +636,14 @@ public class TextureCreatorImGui {
 
     public TextureCreatorState getState() {
         return state;
+    }
+
+    /**
+     * The saved-palettes library the color panel and palette strip are bound to.
+     * Every change through it persists and shows in those views immediately.
+     */
+    public com.openmason.main.systems.menus.textureCreator.palette.PaletteLibrary getPaletteLibrary() {
+        return paletteLibrary;
     }
 
     /**

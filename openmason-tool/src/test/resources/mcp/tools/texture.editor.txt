@@ -22,6 +22,12 @@ tex_noise
 tex_open_editor
 tex_outline
 tex_paint_grid
+tex_palette_add_swatches
+tex_palette_create
+tex_palette_delete
+tex_palette_list
+tex_palette_remove_swatch
+tex_palette_switch
 tex_rect
 tex_resize_face_texture
 tex_save_project
