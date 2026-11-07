@@ -40,6 +40,12 @@ public final class BuiltinFileTypes {
     public static final FileType OMANIM = FileType.of("omanim", "Open Mason Animation", ".omanim")
             .withSave("project", "", "animation");
 
+    // ── openmason.particles ─────────────────────────────────────────────────
+
+    /** Particle effect libraries (engine {@code ParticleLibrary} JSON), edited in Tools -> Particle Editor. */
+    public static final FileType OMFX = FileType.of("omfx", "Particle Library", ".omfx")
+            .withSave("project", "Particles", "particles");
+
     // ── openmason.ui ────────────────────────────────────────────────────────
 
     /** UI Editor source documents (#324); bare names land beside the convention tree {@code UI/}. */

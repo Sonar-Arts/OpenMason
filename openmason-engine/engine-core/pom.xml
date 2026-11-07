@@ -139,6 +139,20 @@
             <artifactId>mockito-core</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- GLFW, tests only: hidden-window GL contexts for the opt-in rendering tests
+             (-Dopenmason.particles.gl=true). The engine itself never creates windows. -->
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>test</scope>
+        </dependency>
         </dependencies>
 
     <build>

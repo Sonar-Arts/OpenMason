@@ -30,6 +30,7 @@ wayfind	openmason-engine/engine-voxel	com/openmason/engine/wayfind/**/*Test
 shaders	openmason-engine/engine-core	com/openmason/engine/rendering/shaders/**/*Test,com/openmason/engine/rendering/RenderOriginTest
 shadow	openmason-engine/engine-core	com/openmason/engine/rendering/shadow/**/*Test
 sky	openmason-engine/engine-core	com/openmason/engine/rendering/sky/**/*Test
+particles	openmason-engine/engine-core	com/openmason/engine/rendering/particles/**/*Test
 ui-program	openmason-engine/engine-ui	com/openmason/engine/ui/**/*Test,!com/openmason/engine/ui/cenda/**,!com/openmason/engine/ui/boundary/**
 audio	openmason-engine/engine-core	com/openmason/engine/audio/**/*Test
 boundaries	openmason-engine/engine-core	com/openmason/engine/boundary/**/*Test
@@ -40,6 +41,7 @@ boundaries	openmason-engine/samples/core-consumer	com/openmason/samples/**/*Test
 
 
 # ---- tool ----
+particles	openmason-tool	com/openmason/main/systems/particles/**/*Test
 mcp	openmason-tool	com/openmason/main/systems/mcp/**/*Test
 assets	openmason-tool	com/openmason/main/systems/assets/**/*Test
 tool-io	openmason-tool	com/openmason/main/systems/io/**/*Test

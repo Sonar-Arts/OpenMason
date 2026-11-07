@@ -176,6 +176,7 @@ public class mainOpenMason {
             if (++frame == 3) {
                 devOpenUiEditor();
                 devOpenTextureEditor();
+                devOpenParticleEditor();
             }
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -420,6 +421,10 @@ public class mainOpenMason {
             safeRender(() -> mainInterface.getSBTExportWindow().render(), "SBT Export Window");
         }
 
+        if (mainInterface != null && mainInterface.getParticleEditorWindow() != null) {
+            safeRender(() -> mainInterface.getParticleEditorWindow().render(), "Particle Editor");
+        }
+
         if (mainInterface != null && mainInterface.getSBOEditorWindow() != null) {
             safeRender(() -> mainInterface.getSBOEditorWindow().render(), "SBO Editor Window");
         }
@@ -492,6 +497,25 @@ public class mainOpenMason {
     /**
      * Transition to main interface from home screen.
      */
+    /**
+     * Dev hook for live runs: {@code -Dopenmason.particles.editor=<effect name | library.omfx>} opens the
+     * Particle Editor on that built-in effect or library file.
+     */
+    private void devOpenParticleEditor() {
+        String spec = System.getProperty("openmason.particles.editor");
+        if (spec == null || mainInterface == null || mainInterface.getParticleEditorWindow() == null) {
+            return;
+        }
+        transitionToMainInterface();
+        var editor = mainInterface.getParticleEditorWindow();
+        editor.show();
+        if (spec.endsWith(".omfx")) {
+            editor.openFile(java.nio.file.Path.of(spec));
+        } else if (!spec.isBlank() && !"true".equals(spec)) {
+            editor.select(spec.trim());
+        }
+    }
+
     /**
      * Dev hook for live runs: {@code -Dopenmason.texeditor=<project.omp>[,<texture.omt>]} opens the
      * project (when given) and the Texture Editor tab, with the texture loaded; add

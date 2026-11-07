@@ -66,6 +66,7 @@ module openmason.engine.core {
     exports com.openmason.engine.rendering.lighting;
     exports com.openmason.engine.rendering.model;
     exports com.openmason.engine.rendering.model.draw;
+    exports com.openmason.engine.rendering.particles;
     exports com.openmason.engine.rendering.postfx;
     exports com.openmason.engine.rendering.postfx.effects;
     exports com.openmason.engine.rendering.shaders;

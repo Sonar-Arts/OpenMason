@@ -31,6 +31,8 @@ public final class GpuMemoryTracker {
         PLAYER_GEOMETRY,
         /** Shadow map depth textures (cascaded sun shadows). */
         SHADOW_MAP,
+        /** Particle instance ring buffers (rendering.particles). */
+        PARTICLES,
         /** UI quads, font atlases, anything not otherwise categorized. */
         OTHER
     }

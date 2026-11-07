@@ -30,6 +30,7 @@ import com.openmason.main.systems.menus.ViewMenuHandler;
 import com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui;
 import com.openmason.main.systems.menus.dialogs.SBEEditorWindow;
 import com.openmason.main.systems.menus.dialogs.SBOEditorWindow;
+import com.openmason.main.systems.particles.ParticleEditorWindow;
 import com.openmason.main.systems.menus.mainHub.services.TemplateService;
 import com.openmason.main.systems.menus.preferences.PreferencesPageRenderer;
 import com.openmason.main.systems.menus.preferences.PreferencesWindow;
@@ -87,6 +88,7 @@ public final class CoreFeatures {
         textureEditor(context);
         animationEditor(context);
         scripting(context);
+        particles(context);
         logger.info("[core] registered: {}", contributionSummary(registries));
     }
 
@@ -315,6 +317,19 @@ public final class CoreFeatures {
      * Programmatic modelling: Tools → Scripting Editor, the script-running and script-library MCP
      * tools, and the {@code scripting} topic (the Python {@code om} cheatsheet).
      */
+    /**
+     * The Particle Editor: Tools -> Particle Editor and the .omfx particle-library file type (opened in the
+     * editor window). Effects are engine {@code ParticleEffect}s, previewed by the engine particle renderer.
+     */
+    private static void particles(PluginContext context) {
+        ServiceRegistry services = context.services();
+        context.menuEntries().register(MenuItem.of("particles.tools.open", TopMenu.TOOLS, 140, "Particle Editor",
+                () -> services.find(ParticleEditorWindow.class).ifPresent(ParticleEditorWindow::show)));
+        context.fileTypes().register(BuiltinFileTypes.OMFX);
+        context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMFX.id(),
+                path -> services.require(ParticleEditorWindow.class).openFile(path)));
+    }
+
     private static void scripting(PluginContext context) {
         context.menuEntries().register(MenuItem.of("scripting.tools.open", TopMenu.TOOLS, 120, "Scripting Editor",
                 () -> context.services().find(ScriptingPresenter.class).ifPresent(ScriptingPresenter::show)));
