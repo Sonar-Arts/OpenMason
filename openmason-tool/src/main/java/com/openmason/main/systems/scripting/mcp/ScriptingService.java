@@ -146,6 +146,16 @@ public final class ScriptingService {
             return result;
         }
 
+        // Script commands write face mappings straight into the FaceTextureManager, which
+        // re-projects nothing: a run that only re-materials or re-UVs faces (no geometry op
+        // to force a rebuild) would leave the render mesh — what the viewport draws, the
+        // undo snapshot below captures, and export serializes — on the OLD UVs until the
+        // model is reopened. Re-derive once, before anything reads it.
+        if (vp.getModelRenderer() != null) {
+            vp.getModelRenderer().markDrawBatchesDirty();
+            vp.getModelRenderer().refreshUVs();
+        }
+
         // One undo entry for the whole run (model history). A run that applied an om.ui batch
         // and left the model unchanged has its single step in the UI document's history instead.
         if (vp.getCommandHistory() != null && vp.getRendererSynchronizer() != null) {
