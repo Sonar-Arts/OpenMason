@@ -27,7 +27,9 @@ flat out uint v_frame;
 const uint FIRST_PROCEDURAL_FRAME = 0xFFF0u;
 const uint CAMERA = 0u, VELOCITY = 1u, AXIS_Y = 2u, FLAT = 3u;
 
-// ---- host lighting: defines vec3 particleLight(vec3 renderPos) ----
+// ---- host hooks (ParticleShaderExtension; engine defaults for the ones the host leaves out) ----
+//   vec3 particleLight(vec3 renderPos);              light for non-emissive particles
+//   vec4 particleColor(vec4 color, vec3 renderPos);  final premultiplied colour (fog, tint), every particle
 //@PARTICLE_LIGHT
 
 void main() {
@@ -85,5 +87,6 @@ void main() {
         // Premultiplied: additive light fades out, covered colour is pulled toward the fog colour.
         color.rgb = color.rgb * (1.0 - fog) + u_fogColor * color.a * fog;
     }
-    v_color = color;
+    // Host colour last: sees lighting and the engine fog, may replace either (regional weather fog, grading).
+    v_color = particleColor(color, a_position);
 }

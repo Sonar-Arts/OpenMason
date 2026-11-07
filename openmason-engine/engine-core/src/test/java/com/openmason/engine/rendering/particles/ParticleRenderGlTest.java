@@ -100,6 +100,10 @@ class ParticleRenderGlTest {
                 .size(1, 1).color(0xFFFFFFFF);
     }
 
+    private static ParticleEffect.Builder square(String name, int rgba, float size) {
+        return still(name).sprite(ParticleEffect.Sprite.SQUARE).color(rgba).size(size, size);
+    }
+
     private static ParticleEffect square(String name, int rgba) {
         return still(name).sprite(ParticleEffect.Sprite.SQUARE).color(rgba).build();
     }
@@ -620,6 +624,48 @@ class ParticleRenderGlTest {
         assertRgb(pixel(16, C), 255, 128, 0, 2, "host light colour");
         assertRgb(pixel(48, 41), 128, 64, 0, 2, "host light varies with position");
         assertRgb(pixel(48, 23), 255, 255, 255, 1, "emissive ignores host light");
+    }
+
+    @Test
+    void hostColourHookReachesEveryParticleAndFadesAdditiveOnes() {
+        renderer.close();
+        // Host "weather fog": full on the left half of the world (x < 0), off on the right.
+        renderer = new ParticleRenderer(ParticleShaderExtension.coloring("""
+                uniform vec3 u_hostFog;
+                vec4 particleColor(vec4 color, vec3 renderPos) {
+                    float f = renderPos.x < 0.0 ? 1.0 : 0.0;
+                    return vec4(mix(color.rgb, u_hostFog * color.a, f), color.a);
+                }
+                """));
+        frame.uniforms = shader -> shader.setVec3("u_hostFog", new org.joml.Vector3f(0f, 1f, 0f));
+        ParticleSystem s = new ParticleSystem(8);
+        // A fresh builder per effect: Builder is mutable, so reusing one leaks additive/emissive into the next.
+        s.burst(square("c", 0xFFFFFFFF, 0.5f).build(), -1, 0.6, -2, 1);                       // lit, fogged
+        s.burst(square("glow", 0xFFFFFFFF, 0.5f).emissive(true).build(), -1, 0, -2, 1);        // emissive, fogged
+        s.burst(square("add", 0xFF8000FF, 0.5f).additive(1).build(), -1, -0.6, -2, 1);        // additive: fades
+        s.burst(square("clear", 0xFFFFFFFF, 0.5f).build(), 1, 0, -2, 1);                       // outside the fog
+        clear(0, 0, 0);
+        draw(s);
+        frame.uniforms = null;
+        assertRgb(pixel(16, 41), 0, 255, 0, 2, "covered particle takes the host fog colour");
+        assertRgb(pixel(16, C), 0, 255, 0, 2, "emissive particles go through the colour hook as well");
+        assertRgb(pixel(16, 23), 0, 0, 0, 1, "an additive particle (a = 0) fades instead of turning fog-coloured");
+        assertRgb(pixel(48, C), 255, 255, 255, 1, "untouched outside the host fog");
+    }
+
+    @Test
+    void theColourHookRunsAfterTheLightHook() {
+        renderer.close();
+        renderer = new ParticleRenderer(ParticleShaderExtension.of("""
+                vec3 particleLight(vec3 renderPos) { return vec3(1.0, 0.5, 0.0); }
+                vec4 particleColor(vec4 color, vec3 renderPos) { return color.bgra; }
+                """, true, true));
+        ParticleSystem s = new ParticleSystem(4);
+        s.burst(still("both").sprite(ParticleEffect.Sprite.SQUARE).build(), 0, 0, -2, 1);
+        clear(0, 0, 0);
+        draw(s);
+        // White lit to (1, 0.5, 0), then the colour hook swaps red and blue.
+        assertRgb(pixel(C, C), 0, 128, 255, 2, "light first, colour last");
     }
 
     @Test

@@ -100,7 +100,10 @@ public final class ParticleRenderer implements AutoCloseable {
         this(ParticleShaderExtension.NONE);
     }
 
-    /** A renderer whose non-emissive particles are lit by the host's {@code particleLight} GLSL. */
+    /**
+     * A renderer with host GLSL hooks: {@code particleLight} (non-emissive lighting) and/or {@code particleColor}
+     * (final colour of every particle, e.g. weather fog); see {@link ParticleShaderExtension}.
+     */
     public ParticleRenderer(ParticleShaderExtension extension) {
         String vertex = ShaderResourceLoader.load(VERTEX_SHADER, ParticleRenderer.class::getResourceAsStream);
         if (!vertex.contains(LIGHT_MARKER)) {
