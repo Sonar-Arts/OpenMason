@@ -1,15 +1,18 @@
 package com.openmason.main.systems.particles;
 
+import com.openmason.api.workspace.WorkspaceDock;
 import com.openmason.engine.rendering.particles.ParticleEffect;
 import com.openmason.engine.rendering.particles.ParticleLibrary;
 import com.openmason.main.systems.io.BuiltinFileTypes;
+import com.openmason.main.systems.layout.BuiltinWorkspaces;
+import com.openmason.main.systems.layout.WorkspaceState;
 import com.openmason.main.systems.menus.dialogs.FileDialogService;
+import com.openmason.main.systems.menus.dialogs.ModalDialogs;
 import com.openmason.main.systems.services.StatusService;
 import imgui.ImGui;
-import imgui.flag.ImGuiCond;
+import imgui.flag.ImGuiDir;
 import imgui.flag.ImGuiTreeNodeFlags;
 import imgui.flag.ImGuiWindowFlags;
-import imgui.type.ImBoolean;
 import imgui.type.ImInt;
 import imgui.type.ImString;
 import org.slf4j.Logger;
@@ -24,53 +27,77 @@ import java.util.Optional;
 import java.util.function.UnaryOperator;
 
 /**
- * Tools -> Particle Editor: author {@code .omfx} particle libraries ({@link ParticleLibrary} JSON) with a live
- * preview drawn by the engine particle renderer.
+ * The Particle Editor: a closable workspace tab ({@code Scene | UI | ... | Particles}) authoring {@code .omfx}
+ * particle libraries ({@link ParticleLibrary} JSON) with a live preview drawn by the engine particle renderer.
  *
- * <p>Left: the library's effects (new / duplicate / delete). Centre: the preview (drag to orbit, wheel to
- * zoom; continuous or looping-burst playback, floor + soft particles toggles, budget stats). Right: every
- * {@link ParticleEffect} field. Edits rebuild the immutable effect through its builder, cascade to effects
- * that spawn it ({@link ParticleEditorModel#apply}) and hot-swap into the running preview, so dragging a
- * slider updates particles already in flight. An invalid value (e.g. a range whose max is below its min) is
- * reported and not applied.
+ * <p>Follows the workspace-tab framework ({@link WorkspaceDock}): a toolbar in {@link #renderHeader} (file
+ * actions, Copy JSON, Reset Layout), and three docked panels arranged by {@link #buildDefaultLayout} and drawn in
+ * {@link #renderPanels} - {@value #EFFECTS_WINDOW} (the library's effects), {@value #PREVIEW_WINDOW} (drag to
+ * orbit, wheel to zoom; continuous or looping-burst playback, floor + soft-particle toggles, budget stats) and
+ * {@value #INSPECTOR_WINDOW} (every {@link ParticleEffect} field). Like every closable tab it ends only when the
+ * user closes it ({@link WorkspaceState#requestClose}); unsaved changes then ask Save / Don't Save / Cancel
+ * ({@link #allowClose}). It can pop out into its own window like any workspace.
  *
- * <p>Strings are ASCII only: the editor's ImGui font has no typographic punctuation.
+ * <p>Edits rebuild the immutable effect through its builder, cascade to effects that spawn it
+ * ({@link ParticleEditorModel#apply}) and hot-swap into the running preview, so dragging a slider updates
+ * particles already in flight. An invalid value is reported and not applied. Strings are ASCII only: the
+ * editor's ImGui font has no typographic punctuation.
  */
-public final class ParticleEditorWindow {
+public final class ParticleEditorWorkspace implements WorkspaceDock {
 
-    private static final Logger logger = LoggerFactory.getLogger(ParticleEditorWindow.class);
-    private static final String TITLE = "Particle Editor";
+    private static final Logger logger = LoggerFactory.getLogger(ParticleEditorWorkspace.class);
+
+    /** Workspace id (stored name in .omp/imgui layouts). */
+    public static final String ID = BuiltinWorkspaces.PARTICLES;
+    /** Bump when the curated default layout changes, to force a one-time rebuild. */
+    public static final int LAYOUT_VERSION = 1;
+
+    static final String EFFECTS_WINDOW = "Particle Effects";
+    static final String PREVIEW_WINDOW = "Particle Preview";
+    static final String INSPECTOR_WINDOW = "Particle Inspector";
+    private static final String UNSAVED_POPUP = "Unsaved Particle Library##particlesUnsaved";
 
     private final ParticleEditorModel model = new ParticleEditorModel();
     private final FileDialogService fileDialogs;
     private final StatusService status;
-    private final ImBoolean open = new ImBoolean(false);
+    private final WorkspaceState workspaces;
+    private Runnable resetLayout = () -> { };
     private ParticlePreview preview;
 
     private final ImString nameBuffer = new ImString(64);
     private String nameBufferFor;
     private String error;
-    private Runnable pendingDiscard;
-    private boolean discardRequested;
+
+    /** What runs once unsaved changes were saved or discarded (New, Open, closing the tab). */
+    private Runnable pendingAfterUnsaved;
+    private boolean unsavedRequested;
+    private boolean wasShown;
 
     /** The selected effect at the start of the inspector pass, and the builder collecting this frame's edits. */
     private ParticleEffect current;
     private ParticleEffect.Builder edit;
 
-    public ParticleEditorWindow(FileDialogService fileDialogs, StatusService status) {
+    public ParticleEditorWorkspace(FileDialogService fileDialogs, StatusService status, WorkspaceState workspaces) {
         this.fileDialogs = fileDialogs;
         this.status = status;
+        this.workspaces = workspaces;
     }
 
+    /** The host's layout gate rebuilds this workspace's layout on the next frame (Reset Layout). */
+    public void setResetLayoutAction(Runnable resetLayout) {
+        this.resetLayout = resetLayout == null ? () -> { } : resetLayout;
+    }
+
+    /** Opens the tab (or brings it forward, raising its window when popped out). */
     public void show() {
-        open.set(true);
+        workspaces.open(ID);
     }
 
     public boolean isOpen() {
-        return open.get();
+        return workspaces.isOpen(ID);
     }
 
-    /** Opens {@code path} (file opener / Open...). */
+    /** Opens {@code path} in the tab (file opener / Open...); asks first when the current library is unsaved. */
     public void openFile(Path path) {
         show();
         guardUnsaved(() -> {
@@ -96,81 +123,146 @@ public final class ParticleEditorWindow {
     }
 
     // ------------------------------------------------------------------------------------------------
-    // Frame
+    // WorkspaceDock
     // ------------------------------------------------------------------------------------------------
 
-    public void render() {
-        if (!open.get()) {
+    /** Effects | Preview | Inspector. */
+    @Override
+    public void buildDefaultLayout(int dockspaceId, float width, float height) {
+        if (width <= 0 || height <= 0) {
+            width = 1200;
+            height = 800;
+        }
+        imgui.internal.ImGui.dockBuilderRemoveNode(dockspaceId);
+        // DockSpace flag: a host-submitted dockspace, not a floating node (else a popped-out tab's
+        // DockSpace() asserts "twice a frame"; see the Texture workspace).
+        imgui.internal.ImGui.dockBuilderAddNode(dockspaceId, imgui.internal.flag.ImGuiDockNodeFlags.DockSpace);
+        imgui.internal.ImGui.dockBuilderSetNodeSize(dockspaceId, width, height);
+        ImInt left = new ImInt(), rest = new ImInt(), right = new ImInt(), center = new ImInt();
+        imgui.internal.ImGui.dockBuilderSplitNode(dockspaceId, ImGuiDir.Left, 0.17f, left, rest);
+        imgui.internal.ImGui.dockBuilderSplitNode(rest.get(), ImGuiDir.Right, 0.34f, right, center);
+        imgui.internal.ImGui.dockBuilderDockWindow(EFFECTS_WINDOW, left.get());
+        imgui.internal.ImGui.dockBuilderDockWindow(PREVIEW_WINDOW, center.get());
+        imgui.internal.ImGui.dockBuilderDockWindow(INSPECTOR_WINDOW, right.get());
+        var node = imgui.internal.ImGui.dockBuilderGetNode(center.get());
+        if (node != null) {
+            // The preview absorbs window resizing; the side columns keep their width.
+            node.addLocalFlags(imgui.internal.flag.ImGuiDockNodeFlags.CentralNode);
+        }
+        imgui.internal.ImGui.dockBuilderFinish(dockspaceId);
+    }
+
+    /** File actions and the document name, above the dockspace. */
+    @Override
+    public void renderHeader() {
+        if (ImGui.button("New")) {
+            guardUnsaved(() -> {
+                model.newDocument();
+                restartPreview();
+            });
+        }
+        ImGui.sameLine();
+        if (ImGui.button("Open...")) {
+            fileDialogs.showOpenDialog(FileDialogService.StartIn.TYPE_FOLDER, p -> openFile(Path.of(p)),
+                    BuiltinFileTypes.OMFX);
+        }
+        ImGui.sameLine();
+        if (ImGui.button("Save")) {
+            save(model.file().orElse(null), null);
+        }
+        ImGui.sameLine();
+        if (ImGui.button("Save As...")) {
+            save(null, null);
+        }
+        ImGui.sameLine();
+        ImGui.textDisabled("|");
+        ImGui.sameLine();
+        boolean hasSelection = model.selected().isPresent();
+        if (ImGui.button("Copy JSON") && hasSelection) {
+            model.selected().ifPresent(e -> {
+                ImGui.setClipboardText(ParticleLibrary.toJsonText(e));
+                status.updateStatus("Copied '" + e.name() + "' as JSON");
+            });
+        }
+        ImGui.sameLine();
+        if (ImGui.button("Reset Layout")) {
+            resetLayout.run();
+        }
+        ImGui.sameLine();
+        ImGui.textDisabled(model.file().map(p -> p.getFileName().toString()).orElse("(built-in presets, unsaved)")
+                + (model.isDirty() ? " *" : ""));
+    }
+
+    @Override
+    public void renderPanels(float deltaTime, boolean shown) {
+        if (!shown) {
+            wasShown = false;
+            if (!isOpen()) {
+                onClosed();
+            }
             return;
         }
-        ImGui.setNextWindowSize(1180, 720, ImGuiCond.FirstUseEver);
-        String title = TITLE + model.file().map(p -> " - " + p.getFileName()).orElse("") + (model.isDirty() ? " *" : "")
-                + "###particleEditor";
-        if (ImGui.begin(title, open, ImGuiWindowFlags.MenuBar)) {
-            renderMenuBar();
-            float listWidth = 190f, inspectorWidth = 360f;
-            float h = ImGui.getContentRegionAvailY();
-            ImGui.beginChild("##effects", listWidth, h, true);
+        if (ImGui.begin(EFFECTS_WINDOW)) {
             renderEffectList();
-            ImGui.endChild();
-            ImGui.sameLine();
-            float previewWidth = Math.max(160f, ImGui.getContentRegionAvailX() - inspectorWidth - 8f);
-            ImGui.beginChild("##preview", previewWidth, h, false);
-            renderPreview(previewWidth);
-            ImGui.endChild();
-            ImGui.sameLine();
-            ImGui.beginChild("##inspector", 0, h, true);
-            renderInspector();
-            ImGui.endChild();
-            renderDiscardPopup();
         }
         ImGui.end();
+        if (ImGui.begin(PREVIEW_WINDOW, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)) {
+            renderPreview(ImGui.getContentRegionAvailX());
+        }
+        ImGui.end();
+        if (ImGui.begin(INSPECTOR_WINDOW)) {
+            renderInspector();
+        }
+        ImGui.end();
+        if (!wasShown) {
+            // The tab just came forward: start the preview on the selection again (it paused while hidden).
+            wasShown = true;
+            ImGui.setWindowFocus(PREVIEW_WINDOW);
+        }
+        renderUnsavedDialog();
     }
 
-    private void renderMenuBar() {
-        if (!ImGui.beginMenuBar()) {
-            return;
+    /** The user closes the tab: unsaved changes ask Save / Don't Save / Cancel first. */
+    @Override
+    public boolean allowClose(Runnable proceed) {
+        if (!model.isDirty()) {
+            return true;
         }
-        if (ImGui.beginMenu("File")) {
-            if (ImGui.menuItem("New (built-in presets)")) {
-                guardUnsaved(() -> {
-                    model.newDocument();
-                    restartPreview();
-                });
-            }
-            if (ImGui.menuItem("Open...")) {
-                fileDialogs.showOpenDialog(FileDialogService.StartIn.TYPE_FOLDER, p -> openFile(Path.of(p)),
-                        BuiltinFileTypes.OMFX);
-            }
-            if (ImGui.menuItem("Save", "", false, true)) {
-                save(model.file().orElse(null));
-            }
-            if (ImGui.menuItem("Save As...")) {
-                save(null);
-            }
-            ImGui.endMenu();
-        }
-        if (ImGui.beginMenu("Edit")) {
-            if (ImGui.menuItem("Copy effect as JSON", "", false, model.selected().isPresent())) {
-                model.selected().ifPresent(e -> {
-                    ImGui.setClipboardText(ParticleLibrary.toJsonText(e));
-                    status.updateStatus("Copied '" + e.name() + "' as JSON");
-                });
-            }
-            ImGui.endMenu();
-        }
-        ImGui.endMenuBar();
+        workspaces.set(ID); // come forward to ask
+        pendingAfterUnsaved = proceed;
+        unsavedRequested = true;
+        return false;
     }
 
-    private void save(Path path) {
+    /** The tab closed: the session ends (preview GL released, fresh document next time it opens). */
+    private void onClosed() {
+        if (preview != null) {
+            preview.close();
+            preview = null;
+        }
+        if (model.isDirty() || model.file().isPresent()) {
+            model.newDocument();
+        }
+        error = null;
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Files and the unsaved-changes dialog
+    // ------------------------------------------------------------------------------------------------
+
+    /** Saves to {@code path} (null = ask where), then runs {@code after} if the save succeeded. */
+    private void save(Path path, Runnable after) {
         if (path == null) {
             String name = model.file().map(p -> p.getFileName().toString()).orElse("particles.omfx");
-            fileDialogs.showSaveDialog(BuiltinFileTypes.OMFX, name, null, p -> save(Path.of(p)));
+            fileDialogs.showSaveDialog(BuiltinFileTypes.OMFX, name, null, p -> save(Path.of(p), after));
             return;
         }
         try {
             model.save(path);
             status.updateStatus("Saved particle library " + path.getFileName());
+            if (after != null) {
+                after.run();
+            }
         } catch (Exception e) {
             logger.warn("Could not save particle library {}", path, e);
             error = "Could not save: " + e.getMessage();
@@ -179,35 +271,48 @@ public final class ParticleEditorWindow {
 
     private void guardUnsaved(Runnable action) {
         if (model.isDirty()) {
-            pendingDiscard = action;
-            discardRequested = true; // opened at window level: popups resolve against the window's ID stack
+            pendingAfterUnsaved = action;
+            unsavedRequested = true; // opened from renderPanels: popups resolve against one ID stack
         } else {
             action.run();
         }
     }
 
-    private void renderDiscardPopup() {
-        if (discardRequested) {
-            ImGui.openPopup("Discard changes?##particles");
-            discardRequested = false;
+    private void renderUnsavedDialog() {
+        if (unsavedRequested) {
+            ModalDialogs.openIfNeeded(UNSAVED_POPUP);
+            unsavedRequested = false;
         }
-        if (ImGui.beginPopupModal("Discard changes?##particles", ImGuiWindowFlags.AlwaysAutoResize)) {
-            ImGui.text("The particle library has unsaved changes.");
-            if (ImGui.button("Discard")) {
-                Runnable action = pendingDiscard;
-                pendingDiscard = null;
-                ImGui.closeCurrentPopup();
-                if (action != null) {
-                    action.run();
-                }
-            }
-            ImGui.sameLine();
-            if (ImGui.button("Cancel")) {
-                pendingDiscard = null;
-                ImGui.closeCurrentPopup();
-            }
-            ImGui.endPopup();
+        if (!ModalDialogs.begin(UNSAVED_POPUP, 380)) {
+            return;
         }
+        ImGui.textWrapped("The particle library has unsaved changes. Save them first?");
+        ModalDialogs.buttonsBegin();
+        if (ModalDialogs.primary("Save", true)) {
+            Runnable after = takePending();
+            ModalDialogs.close();
+            save(model.file().orElse(null), after);
+        }
+        ImGui.sameLine();
+        if (ModalDialogs.danger("Don't Save", true)) {
+            Runnable after = takePending();
+            ModalDialogs.close();
+            if (after != null) {
+                after.run();
+            }
+        }
+        ImGui.sameLine();
+        if (ModalDialogs.cancel()) {
+            pendingAfterUnsaved = null;
+            ModalDialogs.close();
+        }
+        ModalDialogs.end();
+    }
+
+    private Runnable takePending() {
+        Runnable r = pendingAfterUnsaved;
+        pendingAfterUnsaved = null;
+        return r;
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -270,9 +375,14 @@ public final class ParticleEditorWindow {
         float controlsHeight = ImGui.getFrameHeightWithSpacing() * 3 + 6f;
         float imageHeight = Math.max(120f, ImGui.getContentRegionAvailY() - controlsHeight);
         int texture = preview.render((int) width, (int) imageHeight, ImGui.getIO().getDeltaTime());
+        float imageX = ImGui.getCursorScreenPosX(), imageY = ImGui.getCursorScreenPosY();
         ImGui.image(texture, width, imageHeight, 0, 1, 1, 0); // GL rows are bottom-up
-        if (ImGui.isItemHovered()) {
-            if (ImGui.isMouseDragging(0)) {
+        // An invisible button over the image owns the mouse, so dragging orbits instead of moving the
+        // (possibly floating or popped-out) panel.
+        ImGui.setCursorScreenPos(imageX, imageY);
+        ImGui.invisibleButton("##orbit", width, imageHeight);
+        if (ImGui.isItemHovered() || ImGui.isItemActive()) {
+            if (ImGui.isItemActive() && ImGui.isMouseDragging(0)) {
                 preview.orbit(ImGui.getIO().getMouseDeltaX(), ImGui.getIO().getMouseDeltaY());
             }
             float wheel = ImGui.getIO().getMouseWheel();

@@ -79,7 +79,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
     private SBEExportWindow sbeExportWindow; // Initialized after components
     private SBTExportWindow sbtExportWindow; // Initialized after components
     private SBOEditorWindow sboEditorWindow; // Initialized after components
-    private com.openmason.main.systems.particles.ParticleEditorWindow particleEditorWindow;
     private SBEEditorWindow sbeEditorWindow; // Initialized after components
     private final AboutDialog aboutDialog;
 
@@ -266,9 +265,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
         services.put(SBEExportWindow.class, sbeExportWindow);
         services.put(SBTExportWindow.class, sbtExportWindow);
         services.put(SBOEditorWindow.class, sboEditorWindow);
-        if (particleEditorWindow != null) {
-            services.put(com.openmason.main.systems.particles.ParticleEditorWindow.class, particleEditorWindow);
-        }
         services.put(SBEEditorWindow.class, sbeEditorWindow);
         services.put(MainImGuiInterface.class, this);
     }
@@ -347,8 +343,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
 
             // SBO editor — for opening and editing existing .sbo files
             this.sboEditorWindow = new SBOEditorWindow(fileDialogService, statusService);
-            this.particleEditorWindow = new com.openmason.main.systems.particles.ParticleEditorWindow(
-                    fileDialogService, statusService);
             assetExportActions.setSBOEditorWindow(sboEditorWindow);
             sboEditorWindow.setOpenModelHandler((omoBytes, name) -> {
                 if (modelOperations != null) {
@@ -816,10 +810,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
     /**
      * Gets the SBO editor window for external rendering.
      */
-    public com.openmason.main.systems.particles.ParticleEditorWindow getParticleEditorWindow() {
-        return particleEditorWindow;
-    }
-
     public SBOEditorWindow getSBOEditorWindow() {
         return sboEditorWindow;
     }
@@ -1063,9 +1053,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
         }
         if (projectBrowserImGui != null) {
             projectBrowserImGui.cleanup();
-        }
-        if (particleEditorWindow != null) {
-            particleEditorWindow.cleanup(); // GL preview resources, render thread
         }
         if (propertyPanelImGui != null) {
             propertyPanelImGui.dispose();

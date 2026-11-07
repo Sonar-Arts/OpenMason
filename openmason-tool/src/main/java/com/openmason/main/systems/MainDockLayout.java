@@ -43,6 +43,9 @@ public final class MainDockLayout {
     /** Dockspace string id of the Texture Editor workspace. */
     public static final String TEXTURE_DOCKSPACE_ID = "OpenMasonTextureDockSpace";
 
+    /** Dockspace string id of the Particle Editor workspace. */
+    public static final String PARTICLES_DOCKSPACE_ID = "OpenMasonParticleDockSpace";
+
     private final WorkspaceState workspaceState;
     private final WorkspaceLayouts layouts;
     private final WorkspaceTabStrip tabStrip = new WorkspaceTabStrip();

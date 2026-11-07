@@ -187,7 +187,7 @@ class ParticleEditorModelTest {
     @Test
     void colourPackingRoundTrips() {
         for (int c : new int[]{0x00000000, 0xFFFFFFFF, 0x12345678, 0xFF8000C0}) {
-            assertEquals(c, ParticleEditorWindow.pack(ParticleEditorWindow.rgba(c)));
+            assertEquals(c, ParticleEditorWorkspace.pack(ParticleEditorWorkspace.rgba(c)));
         }
     }
 

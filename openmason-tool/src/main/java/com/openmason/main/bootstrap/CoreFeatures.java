@@ -7,6 +7,7 @@ import com.openmason.api.files.FileOpener;
 import com.openmason.api.menu.MenuItem;
 import com.openmason.api.menu.MenuSection;
 import com.openmason.api.menu.TopMenu;
+import com.openmason.api.lifecycle.LifecycleListener;
 import com.openmason.api.workspace.WorkspaceDescriptor;
 import com.openmason.api.workspace.WorkspaceDock;
 import com.openmason.main.plugins.EditorRegistries;
@@ -20,6 +21,8 @@ import com.openmason.main.systems.layout.MainLayoutBuilder;
 import com.openmason.main.systems.layout.SceneWorkspaceDock;
 import com.openmason.main.systems.layout.WorkspaceLayouts;
 import com.openmason.main.systems.layout.WorkspaceState;
+import com.openmason.main.systems.menus.dialogs.FileDialogService;
+import com.openmason.main.systems.services.StatusService;
 import com.openmason.main.systems.mcp.BuiltinKnowledge;
 import com.openmason.main.systems.mcp.BuiltinMcpTools;
 import com.openmason.main.systems.mcp.KnowledgeBase;
@@ -30,7 +33,7 @@ import com.openmason.main.systems.menus.ViewMenuHandler;
 import com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui;
 import com.openmason.main.systems.menus.dialogs.SBEEditorWindow;
 import com.openmason.main.systems.menus.dialogs.SBOEditorWindow;
-import com.openmason.main.systems.particles.ParticleEditorWindow;
+import com.openmason.main.systems.particles.ParticleEditorWorkspace;
 import com.openmason.main.systems.menus.mainHub.services.TemplateService;
 import com.openmason.main.systems.menus.preferences.PreferencesPageRenderer;
 import com.openmason.main.systems.menus.preferences.PreferencesWindow;
@@ -323,11 +326,35 @@ public final class CoreFeatures {
      */
     private static void particles(PluginContext context) {
         ServiceRegistry services = context.services();
+        WorkspaceState workspaces = services.require(WorkspaceState.class);
+        WorkspaceLayouts layouts = services.require(WorkspaceLayouts.class);
+        ParticleEditorWorkspace editor = new ParticleEditorWorkspace(services.require(FileDialogService.class),
+                services.require(StatusService.class), workspaces);
+        services.publish(ParticleEditorWorkspace.class, editor);
+
+        // A closable workspace tab like the Texture Editor: exists while open, ends only on the user's close
+        // (its guard asks about unsaved changes), can pop out into its own window.
+        context.workspaces().register(WorkspaceDescriptor.builder(BuiltinWorkspaces.PARTICLES, "Particles")
+                .description("Particle Editor: author .omfx particle libraries with a live preview")
+                .closable(true)
+                .minSize(900f, 560f)
+                .layoutVersion(ParticleEditorWorkspace.LAYOUT_VERSION)
+                .dockspaceName(MainDockLayout.PARTICLES_DOCKSPACE_ID)
+                .dock(editor)
+                .build());
+        editor.setResetLayoutAction(() -> layouts.requestReset(BuiltinWorkspaces.PARTICLES));
+
         context.menuEntries().register(MenuItem.of("particles.tools.open", TopMenu.TOOLS, 140, "Particle Editor",
-                () -> services.find(ParticleEditorWindow.class).ifPresent(ParticleEditorWindow::show)));
+                editor::show));
         context.fileTypes().register(BuiltinFileTypes.OMFX);
-        context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMFX.id(),
-                path -> services.require(ParticleEditorWindow.class).openFile(path)));
+        context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMFX.id(), editor::openFile));
+        // The preview's GL resources go while GL still exists.
+        context.lifecycle().register(new LifecycleListener() {
+            @Override
+            public void shuttingDown() {
+                editor.cleanup();
+            }
+        });
     }
 
     private static void scripting(PluginContext context) {

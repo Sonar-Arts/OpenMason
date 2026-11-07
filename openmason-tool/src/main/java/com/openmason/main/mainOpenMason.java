@@ -421,10 +421,6 @@ public class mainOpenMason {
             safeRender(() -> mainInterface.getSBTExportWindow().render(), "SBT Export Window");
         }
 
-        if (mainInterface != null && mainInterface.getParticleEditorWindow() != null) {
-            safeRender(() -> mainInterface.getParticleEditorWindow().render(), "Particle Editor");
-        }
-
         if (mainInterface != null && mainInterface.getSBOEditorWindow() != null) {
             safeRender(() -> mainInterface.getSBOEditorWindow().render(), "SBO Editor Window");
         }
@@ -503,11 +499,12 @@ public class mainOpenMason {
      */
     private void devOpenParticleEditor() {
         String spec = System.getProperty("openmason.particles.editor");
-        if (spec == null || mainInterface == null || mainInterface.getParticleEditorWindow() == null) {
+        var found = registries.services().find(com.openmason.main.systems.particles.ParticleEditorWorkspace.class);
+        if (spec == null || mainInterface == null || found.isEmpty()) {
             return;
         }
         transitionToMainInterface();
-        var editor = mainInterface.getParticleEditorWindow();
+        var editor = found.get();
         editor.show();
         if (spec.endsWith(".omfx")) {
             editor.openFile(java.nio.file.Path.of(spec));

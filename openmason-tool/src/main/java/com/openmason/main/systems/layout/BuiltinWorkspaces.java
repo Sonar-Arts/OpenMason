@@ -16,6 +16,9 @@ public final class BuiltinWorkspaces {
     /** The Texture Editor: closable, present while it is open. */
     public static final String TEXTURE = "TEXTURE";
 
+    /** The Particle Editor: closable, present while it is open. */
+    public static final String PARTICLES = "PARTICLES";
+
     private BuiltinWorkspaces() {
     }
 }
