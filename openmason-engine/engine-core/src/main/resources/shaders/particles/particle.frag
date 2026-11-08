@@ -2,13 +2,12 @@
 // Premultiplied-alpha output: blend with glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA).
 
 in vec2 v_local;
-in vec2 v_atlasUv;
 in vec4 v_color;
 in float v_viewDepth;
 in float v_softness;
 flat in uint v_frame;
 
-uniform sampler2D u_atlas;
+uniform sampler2DArray u_sprites; // one sprite / flipbook frame per layer, premultiplied, row 0 = image top
 uniform sampler2D u_sceneDepth;   // opaque scene depth, viewport-sized, not the bound depth attachment
 uniform int u_softEnabled;
 uniform vec2 u_depthParams;       // projection m22, m32: view depth = m32 / (ndcZ + m22)
@@ -26,9 +25,13 @@ void main() {
         shape = vec4(a);
     } else if (v_frame == 0xFFFEu) {
         shape = vec4(1.0);
+    } else if (v_frame == 0xFFFDu) {
+        // Missing sprite texture: a loud magenta/black checker, never a silent white square.
+        ivec2 cell = ivec2(v_local * 4.0);
+        shape = ((cell.x + cell.y) & 1) == 0 ? vec4(1.0, 0.0, 1.0, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
     } else {
-        vec4 t = texture(u_atlas, v_atlasUv);
-        shape = vec4(t.rgb * t.a, t.a);
+        // Layers are uploaded top row first, so flip V; texels are already premultiplied.
+        shape = texture(u_sprites, vec3(v_local.x, 1.0 - v_local.y, float(v_frame)));
     }
     vec4 c = v_color * shape;
     if (u_softEnabled == 1 && v_softness > 0.0) {

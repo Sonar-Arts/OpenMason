@@ -39,8 +39,9 @@ import java.util.Set;
  *                  "orientation": "camera",          // camera | velocity | axis_y | flat
  *                  "stretch": 0.03,                  // velocity orientation: trail = speed × stretch
  *                  "rotation": [0, 360], "spin": [-90, 90],
- *                  "sprite": "soft_disc",            // soft_disc | square | atlas
- *                  "frames": { "start": 0, "count": 4, "animate": true },
+ *                  "sprite": "soft_disc",            // soft_disc | square | texture
+ *                  "textures": ["smoke_0", "smoke_1"], // texture sprite: names for the host's sprite loader
+ *                  "animate": true,                  // flipbook over life (false = one texture per particle)
  *                  "collision": { "enabled": true, "bounce": 0.3, "friction": 0.7 },
  *                  "subEmitters": [ { "effect": "smoke", "trigger": "death", "count": 1, "inherit": 0.2 },
  *                                   { "effect": "embers", "trigger": "trail", "rate": 8 } ],
@@ -51,6 +52,10 @@ import java.util.Set;
  * Sub-emitters name their effect: it may be defined anywhere in the same document or already be in the
  * library; reference cycles are rejected. {@link #write} emits every member, so a write/read round trip
  * reproduces each effect exactly.
+ *
+ * <p>Sprites name their own textures (#97); there are no atlas frame numbers. A legacy {@code "frames"} block is
+ * ignored on procedural sprites (older writers emitted one on every effect) and an {@code "atlas"} sprite is
+ * rejected with a message saying to list textures instead.
  */
 public final class ParticleLibrary {
 
@@ -275,15 +280,30 @@ public final class ParticleLibrary {
         if (n.has("stretch")) b.stretch(f(n, "stretch"));
         if ((r = range(n, "rotation")) != null) b.rotation(r.min(), r.max());
         if ((r = range(n, "spin")) != null) b.spin(r.min(), r.max());
-        if (n.has("sprite")) b.sprite(parseEnum(ParticleEffect.Sprite.class, n.get("sprite").asText()));
-        JsonNode frames = n.get("frames");
-        if (frames != null) {
-            ParticleEffect.Sprite sprite = n.has("sprite")
-                    ? parseEnum(ParticleEffect.Sprite.class, n.get("sprite").asText()) : ParticleEffect.Sprite.ATLAS;
-            b.atlas(frames.path("start").asInt(0), frames.path("count").asInt(1),
-                    frames.path("animate").asBoolean(false));
-            b.sprite(sprite);
+        if (n.has("sprite") && "atlas".equalsIgnoreCase(n.get("sprite").asText())) {
+            throw new IllegalArgumentException(name + ": atlas sprites were removed; list the sprite's own "
+                    + "images in \"textures\" (sprite \"texture\")");
         }
+        JsonNode textures = n.get("textures");
+        if (textures != null) {
+            if (!textures.isArray()) {
+                throw new IllegalArgumentException(name + ": 'textures' must be an array of names");
+            }
+            List<String> names = new ArrayList<>();
+            for (JsonNode t : textures) {
+                if (!t.isTextual()) {
+                    throw new IllegalArgumentException(name + ": 'textures' entries must be strings");
+                }
+                names.add(t.asText());
+            }
+            b.textureNames(names);
+        }
+        if (n.has("animate")) {
+            b.animateFrames(n.get("animate").asBoolean());
+        } else if (n.path("frames").has("animate")) {
+            b.animateFrames(n.get("frames").get("animate").asBoolean()); // legacy block on a procedural sprite
+        }
+        if (n.has("sprite")) b.sprite(parseEnum(ParticleEffect.Sprite.class, n.get("sprite").asText()));
         JsonNode collision = n.get("collision");
         if (collision != null && collision.isObject()) {
             b.collides((float) collision.path("bounce").asDouble(d.bounce()),
@@ -351,10 +371,11 @@ public final class ParticleLibrary {
         putRange(n, "rotation", e.rotation());
         putRange(n, "spin", e.spin());
         n.put("sprite", lower(e.sprite()));
-        ObjectNode frames = n.putObject("frames");
-        frames.put("start", e.frameStart());
-        frames.put("count", e.frameCount());
-        frames.put("animate", e.animateFrames());
+        ArrayNode textures = n.putArray("textures");
+        for (String t : e.textures()) {
+            textures.add(t);
+        }
+        n.put("animate", e.animateFrames());
         ObjectNode c = n.putObject("collision");
         c.put("enabled", e.collides());
         c.put("bounce", e.bounce());

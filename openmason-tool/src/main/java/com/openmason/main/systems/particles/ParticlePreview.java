@@ -4,14 +4,19 @@ import com.openmason.engine.rendering.particles.ParticleEffect;
 import com.openmason.engine.rendering.particles.ParticleEmitter;
 import com.openmason.engine.rendering.particles.ParticleFrame;
 import com.openmason.engine.rendering.particles.ParticleRenderer;
+import com.openmason.engine.rendering.particles.ParticleSpriteLayout;
 import com.openmason.engine.rendering.particles.ParticleSystem;
+import com.openmason.engine.rendering.particles.ParticleTextureArray;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.system.MemoryStack;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.nio.file.Path;
+import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 
 import static org.lwjgl.opengl.GL33C.*;
 
@@ -41,6 +46,10 @@ final class ParticlePreview implements AutoCloseable {
     private final Vector3f target = new Vector3f(0f, 0.8f, 0f);
 
     private ParticleSystem system = new ParticleSystem(BUDGET);
+    /** Every texture the document's effects use, packed from files next to the document. */
+    private ParticleTextureArray sprites;
+    private List<String> spriteNames = List.of();
+    private Path spriteBase;
     private ParticleEffect effect;
     private ParticleEmitter emitter;
     private float burstClock;
@@ -120,6 +129,31 @@ final class ParticlePreview implements AutoCloseable {
                 effect = s.updated();
             }
         }
+    }
+
+    /**
+     * Keeps the sprite array in step with the document: repacks when the textures its effects use or the
+     * document's folder change, or when {@code reload} (images edited on disk). Cheap when nothing changed.
+     */
+    void useSprites(Collection<ParticleEffect> effects, Path baseDir, boolean reload) {
+        List<String> names = ParticleSpriteLayout.referencedTextures(effects);
+        if (!reload && sprites != null && names.equals(spriteNames) && Objects.equals(baseDir, spriteBase)) {
+            return;
+        }
+        ParticleTextureArray next = ParticleTextureArray.upload(ParticleSpriteLayout.packNames(names,
+                new ParticleSpriteFiles(baseDir), ParticleSpriteLayout.DEFAULT_CELL_SIZE));
+        if (sprites != null) {
+            sprites.close();
+        }
+        sprites = next;
+        spriteNames = names;
+        spriteBase = baseDir;
+        frame.sprites = next; // the renderer binds it; the system re-resolves its layers on the next frame
+    }
+
+    /** Texture names the last {@link #useSprites} could not load (shown as a checker in the preview). */
+    List<String> missingSprites() {
+        return sprites == null ? List.of() : sprites.layout().missing();
     }
 
     /** Clears everything and starts the current effect again. */
@@ -233,7 +267,7 @@ final class ParticlePreview implements AutoCloseable {
     long dropped() { return system.droppedTotal(); }
     int drawn() { return renderer.lastDrawn(); }
     int drawCalls() { return renderer.lastDrawCalls(); }
-    long gpuBytes() { return renderer.gpuBytes(); }
+    long gpuBytes() { return renderer.gpuBytes() + (sprites == null ? 0 : sprites.gpuBytes()); }
     long heapBytes() { return system.memoryBytes(); }
 
     // ------------------------------------------------------------------------------------------------
@@ -359,5 +393,9 @@ final class ParticlePreview implements AutoCloseable {
         glDeleteProgram(groundProgram);
         glDeleteVertexArrays(groundVao);
         renderer.close();
+        if (sprites != null) {
+            sprites.close();
+            sprites = null;
+        }
     }
 }

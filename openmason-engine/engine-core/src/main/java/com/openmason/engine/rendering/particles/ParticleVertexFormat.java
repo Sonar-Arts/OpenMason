@@ -15,8 +15,8 @@ package com.openmason.engine.rendering.particles;
  *
  * Colour alpha is coverage × (1 − additive): with {@code glBlendFunc(ONE, ONE_MINUS_SRC_ALPHA)} an alpha of 0
  * adds and an alpha of 1 blends, so additive and alpha-blended particles share a single draw call.
- * Frame codes {@code 0xFFFF}/{@code 0xFFFE} are the procedural soft disc / square; anything lower is an atlas
- * frame. Flags: bit 0 = emissive, bits 1–2 = {@link ParticleEffect.Orientation} ordinal.
+ * Frame codes {@code 0xFFFF}/{@code 0xFFFE} are the procedural soft disc / square, {@code 0xFFFD} the
+ * missing-texture checker; codes below {@code 0xFFF0} are layers of the {@link ParticleTextureArray}. Flags: bit 0 = emissive, bits 1–2 = {@link ParticleEffect.Orientation} ordinal.
  */
 public final class ParticleVertexFormat {
 
@@ -35,6 +35,7 @@ public final class ParticleVertexFormat {
 
     public static final int FRAME_SOFT_DISC = CompiledEffect.FRAME_SOFT_DISC;
     public static final int FRAME_SQUARE = CompiledEffect.FRAME_SQUARE;
+    public static final int FRAME_MISSING = CompiledEffect.FRAME_MISSING;
     public static final int FLAG_EMISSIVE = 1;
     public static final int ORIENTATION_SHIFT = 1;
 

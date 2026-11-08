@@ -32,10 +32,12 @@ public final class ParticleFrame {
     /** Particles farther than this from the camera are culled (blocks). */
     public float maxDistance = Float.POSITIVE_INFINITY;
 
-    /** GL texture name of the sprite atlas for {@code ATLAS} effects (0 = none: a white texel is used). */
-    public int atlasTexture;
-    /** Atlas grid; frame {@code f} is column {@code f % columns}, row {@code f / columns}, row 0 at the image top. */
-    public int atlasColumns = 1, atlasRows = 1;
+    /**
+     * The sprite textures for {@link ParticleEffect.Sprite#TEXTURE} effects (null = none: textured particles draw
+     * the missing-texture checker). Setting it is all a host does: the renderer binds the array and the batch
+     * builder resolves the system's texture names to its layers.
+     */
+    public ParticleTextureArray sprites;
 
     /**
      * Scene depth for soft particles: a depth texture the size of the viewport holding the opaque scene, which
@@ -70,13 +72,8 @@ public final class ParticleFrame {
         return this;
     }
 
-    public ParticleFrame atlas(int texture, int columns, int rows) {
-        if (columns < 1 || rows < 1) {
-            throw new IllegalArgumentException("atlas grid must be at least 1x1");
-        }
-        atlasTexture = texture;
-        atlasColumns = columns;
-        atlasRows = rows;
+    public ParticleFrame sprites(ParticleTextureArray array) {
+        sprites = array;
         return this;
     }
 

@@ -32,8 +32,8 @@ import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL33C.*;
 
 /**
- * Golden-image tests: every library preset (plus atlas animation, translucency layering and a composite
- * campfire) is simulated deterministically for a fixed time, drawn every frame through the real
+ * Golden-image tests: every library preset (plus a texture flipbook, textured smoke, translucency layering
+ * and a composite campfire) is simulated deterministically for a fixed time, drawn every frame through the real
  * {@link ParticleRenderer} over a ground plane, and the final frame is compared with a reference PNG in
  * {@code src/test/resources/particles/goldens/}.
  *
@@ -67,6 +67,7 @@ class ParticleGoldenGlTest {
     private int groundProgram, groundVao, groundViewProj, groundColor;
     private ParticleRenderer renderer;
     private final ParticleFrame frame = new ParticleFrame();
+    private ParticleTextureArray sceneSprites;
     private final Map<String, BufferedImage> rendered = new LinkedHashMap<>();
 
     // ------------------------------------------------------------------------------------------------
@@ -185,18 +186,36 @@ class ParticleGoldenGlTest {
                     assertTrue(st.maxLuma > 230, "blinding core: " + st.maxLuma);
                 }));
 
-        list.add(new Scene("atlas-animation", v(0, 1f, 3f), v(0, 1f, 0), 1.2f, false,
+        list.add(new Scene("texture-flipbook", v(0, 1f, 3f), v(0, 1f, 0), 1.2f, false,
                 s -> {
-                    s.frame.atlas(s.test.ringAtlas(), 4, 1);
+                    s.frame.sprites = s.test.sprites(ringImages());
                     s.system.createEmitter(ParticleEffect.builder("rings").lifetime(1.2f, 1.2f).rate(6)
-                            .speed(1.2f, 1.2f).direction(0, 1, 0).spread(0).size(0.4f, 0.4f)
-                            .fade(0, 0).atlas(0, 4, true).emissive(true).build(), 0, 0.2, 0);
+                            .speed(1.2f, 1.2f).direction(0, 1, 0).spread(0).size(0.4f, 0.4f).fade(0, 0)
+                            .textures(List.of("ring_red", "ring_yellow", "ring_green", "ring_blue"), true)
+                            .emissive(true).build(), 0, 0.2, 0);
                 },
                 p -> {
                     // Frames run red → yellow → green → blue from the bottom (young) to the top (old).
                     Vector3f young = p.project(0, 0.5f, 0), old = p.project(0, 1.55f, 0);
                     assertTrue(p.dominant((int) young.x, (int) young.y, 10) == 'r', "young particles show frame 0 (red)");
                     assertTrue(p.dominant((int) old.x, (int) old.y, 10) == 'b', "old particles show frame 3 (blue)");
+                }));
+
+        list.add(new Scene("textured-smoke", v(0.8f, 1.3f, 4.5f), v(0.8f, 1.3f, 0), 4f, true,
+                s -> {
+                    s.frame.sprites = s.test.sprites(puffImages());
+                    s.system.setWind(0.8f, 0, 0);
+                    // The smoke preset with its own puff images (one picked per particle) instead of the disc.
+                    s.system.createEmitter(lib.get("smoke").toBuilder()
+                            .textures(List.of("puff_0", "puff_1", "puff_2", "puff_3"), false).build(), 0, 0.1, 0);
+                },
+                p -> {
+                    Picture.Stats st = p.stats();
+                    assertTrue(st.count > 800, "billowing column: " + st.count);
+                    assertTrue(Math.abs(st.meanR - st.meanG) < 6 && Math.abs(st.meanG - st.meanB) < 10,
+                            "grey, no magenta missing-texture checker: " + st);
+                    assertTrue(st.centroidX > p.project(0, 0, 0).x, "drifts downwind (+X)");
+                    assertTrue(st.height > SIZE * 0.35, "tall: " + st.height);
                 }));
 
         list.add(new Scene("translucency-layers", v(0, 0, 0), v(0, 0, -1), 0f, false,
@@ -322,7 +341,7 @@ class ParticleGoldenGlTest {
     private BufferedImage render(Scene scene) {
         ParticleSystem system = new ParticleSystem(20_000, 0xC0FFEE);
         system.setCollider(FLOOR);
-        frame.atlas(0, 1, 1);
+        frame.sprites = null;
         frame.ambient = 1f;
         frame.fogDensity = 0f;
         frame.depthTexture = depthCopyTex;
@@ -345,10 +364,10 @@ class ParticleGoldenGlTest {
             renderer.render(system, frame);
             assertEquals(GL_NO_ERROR, glGetError());
         }
-        int atlas = frame.atlasTexture;
-        if (atlas != 0) {
-            glDeleteTextures(atlas);
-            frame.atlas(0, 1, 1);
+        if (sceneSprites != null) {
+            sceneSprites.close();
+            sceneSprites = null;
+            frame.sprites = null;
         }
         return readBack();
     }
@@ -494,37 +513,72 @@ class ParticleGoldenGlTest {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     }
 
-    /** 4×1 atlas of 16-px ring sprites: red, yellow, green, blue. */
-    int ringAtlas() {
-        int cell = 16, w = cell * 4;
+    /** Uploads a scene's sprite images (64-px cells); released after the scene renders. */
+    ParticleTextureArray sprites(Map<String, ParticleImage> images) {
+        sceneSprites = ParticleTextureArray.upload(ParticleSpriteLayout.packNames(images.keySet(), images::get,
+                ParticleSpriteLayout.DEFAULT_CELL_SIZE));
+        assertTrue(sceneSprites.layout().missing().isEmpty());
+        return sceneSprites;
+    }
+
+    /** Four 16-px ring sprites, one image each: red, yellow, green, blue. */
+    static Map<String, ParticleImage> ringImages() {
+        int cell = 16;
+        String[] names = {"ring_red", "ring_yellow", "ring_green", "ring_blue"};
         int[] colours = {0xFF2020, 0xFFE020, 0x20FF40, 0x3060FF};
-        ByteBuffer data = MemoryUtil.memAlloc(w * cell * 4);
-        try {
+        Map<String, ParticleImage> out = new LinkedHashMap<>();
+        for (int f = 0; f < 4; f++) {
+            int[] px = new int[cell * cell];
             for (int y = 0; y < cell; y++) {
-                for (int x = 0; x < w; x++) {
-                    int f = x / cell;
-                    float dx = (x % cell) + 0.5f - cell / 2f, dy = y + 0.5f - cell / 2f;
+                for (int x = 0; x < cell; x++) {
+                    float dx = x + 0.5f - cell / 2f, dy = y + 0.5f - cell / 2f;
                     float d = (float) Math.sqrt(dx * dx + dy * dy) / (cell / 2f);
                     float a = Math.max(0f, 1f - Math.abs(d - 0.65f) / 0.3f);
-                    int c = colours[f];
-                    data.put((byte) (c >> 16)).put((byte) (c >> 8)).put((byte) c).put((byte) Math.round(a * 255));
+                    px[y * cell + x] = colours[f] << 8 | Math.round(a * 255);
                 }
             }
-            data.flip();
-            int tex = glGenTextures();
-            int previous = glGetInteger(GL_TEXTURE_BINDING_2D);
-            glBindTexture(GL_TEXTURE_2D, tex);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, cell, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glBindTexture(GL_TEXTURE_2D, previous);
-            return tex;
-        } finally {
-            MemoryUtil.memFree(data);
+            out.put(names[f], new ParticleImage(cell, cell, px));
         }
+        return out;
+    }
+
+    /**
+     * Four 64-px smoke puffs: a soft round falloff broken up by deterministic value noise, so each puff has its
+     * own lumpy outline (what a textured smoke sprite looks like, without shipping an image in the tests).
+     */
+    static Map<String, ParticleImage> puffImages() {
+        int cell = 64;
+        Map<String, ParticleImage> out = new LinkedHashMap<>();
+        for (int v = 0; v < 4; v++) {
+            int[] px = new int[cell * cell];
+            for (int y = 0; y < cell; y++) {
+                for (int x = 0; x < cell; x++) {
+                    float u = (x + 0.5f) / cell * 2f - 1f, w = (y + 0.5f) / cell * 2f - 1f;
+                    float d = (float) Math.sqrt(u * u + w * w);
+                    float noise = 0.6f * valueNoise(x / 12f, y / 12f, v) + 0.4f * valueNoise(x / 5f, y / 5f, v + 17);
+                    float a = Math.max(0f, Math.min(1f, (1f - d) * 1.6f - 0.25f + (noise - 0.5f) * 0.9f));
+                    int grey = 200 + Math.round(55 * noise);
+                    px[y * cell + x] = grey << 24 | grey << 16 | grey << 8 | Math.round(a * a * 255);
+                }
+            }
+            out.put("puff_" + v, new ParticleImage(cell, cell, px));
+        }
+        return out;
+    }
+
+    private static float valueNoise(float x, float y, int seed) {
+        int x0 = (int) Math.floor(x), y0 = (int) Math.floor(y);
+        float fx = x - x0, fy = y - y0;
+        fx = fx * fx * (3 - 2 * fx);
+        fy = fy * fy * (3 - 2 * fy);
+        float a = hash(x0, y0, seed), b = hash(x0 + 1, y0, seed), c = hash(x0, y0 + 1, seed), d = hash(x0 + 1, y0 + 1, seed);
+        return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+    }
+
+    private static float hash(int x, int y, int seed) {
+        int h = x * 374761393 + y * 668265263 + seed * 1274126177;
+        h = (h ^ (h >>> 13)) * 1274126177;
+        return ((h ^ (h >>> 16)) & 0xFFFF) / 65535f;
     }
 
     private BufferedImage readBack() {

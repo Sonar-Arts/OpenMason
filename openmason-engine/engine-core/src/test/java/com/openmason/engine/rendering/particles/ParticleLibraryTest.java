@@ -70,7 +70,8 @@ class ParticleLibraryTest {
     @Test
     void writeThenReadReproducesEveryEffectExactly() throws IOException {
         ParticleLibrary lib = ParticleLibrary.withBuiltIns();
-        lib.register(ParticleEffect.builder("custom").lifetime(0.3f, 0.7f).box(1, 2, 3).atlas(5, 7, true)
+        lib.register(ParticleEffect.builder("custom").lifetime(0.3f, 0.7f).box(1, 2, 3)
+                .textures(java.util.List.of("puff_a", "puff_b", "puff_c"), true)
                 .colors(0x12345678, 0x9ABCDEF0).collides(0.25f, 0.125f).collides(false).wind(0.33f).build());
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         lib.write(bytes);
@@ -86,7 +87,7 @@ class ParticleLibraryTest {
     void minimalDocumentsUseBuilderDefaultsAndScalarRanges() throws IOException {
         ParticleLibrary lib = read("""
                 { "effects": [ { "name": "puff", "lifetime": 2, "colorStart": "#FF8000",
-                                 "shape": { "type": "sphere", "radius": 0.5 }, "frames": { "count": 4 } } ] }
+                                 "shape": { "type": "sphere", "radius": 0.5 } } ] }
                 """);
         ParticleEffect e = lib.get("puff");
         ParticleEffect d = ParticleEffect.builder("puff").build();
@@ -95,11 +96,45 @@ class ParticleLibraryTest {
         assertEquals(0xFF8000FF, e.colorEnd(), "end colour defaults to the start colour");
         assertEquals(ParticleEffect.EmitterShape.SPHERE, e.shape());
         assertEquals(0.5f, e.radius());
-        assertEquals(ParticleEffect.Sprite.ATLAS, e.sprite(), "frames without a sprite means atlas");
-        assertEquals(4, e.frameCount());
+        assertEquals(ParticleEffect.Sprite.SOFT_DISC, e.sprite());
+        assertTrue(e.textures().isEmpty());
         assertEquals(d.rate(), e.rate());
         assertEquals(d.speed(), e.speed());
         assertFalse(e.collides());
+    }
+
+    @Test
+    void textureSpritesNameTheirOwnImages() throws IOException {
+        ParticleEffect e = read("""
+                { "effects": [ { "name": "smoke", "sprite": "texture",
+                                 "textures": ["smoke_0", "smoke_1", "smoke_2"], "animate": true } ] }
+                """).get("smoke");
+        assertEquals(ParticleEffect.Sprite.TEXTURE, e.sprite());
+        assertEquals(java.util.List.of("smoke_0", "smoke_1", "smoke_2"), e.textures());
+        assertTrue(e.animateFrames());
+
+        IOException none = assertThrows(IOException.class, () -> read(
+                "{ \"effects\": [ { \"name\": \"x\", \"sprite\": \"texture\" } ] }"));
+        assertTrue(none.getMessage().contains("at least one texture"), none.getMessage());
+        assertThrows(IOException.class, () -> read(
+                "{ \"effects\": [ { \"name\": \"x\", \"textures\": \"smoke\" } ] }"));
+        assertThrows(IOException.class, () -> read(
+                "{ \"effects\": [ { \"name\": \"x\", \"sprite\": \"texture\", \"textures\": [\" \"] } ] }"));
+    }
+
+    @Test
+    void legacyAtlasFramesAreIgnoredOnProceduralSpritesAndRejectedOnAtlasSprites() throws IOException {
+        // Writers before #97 emitted a frames block on every effect; those documents must still open.
+        ParticleEffect e = read("""
+                { "effects": [ { "name": "old", "sprite": "square",
+                                 "frames": { "start": 0, "count": 1, "animate": true } } ] }
+                """).get("old");
+        assertEquals(ParticleEffect.Sprite.SQUARE, e.sprite());
+        assertTrue(e.animateFrames());
+        IOException atlas = assertThrows(IOException.class, () -> read("""
+                { "effects": [ { "name": "old", "sprite": "atlas", "frames": { "start": 2, "count": 4 } } ] }
+                """));
+        assertTrue(atlas.getMessage().contains("textures"), atlas.getMessage());
     }
 
     @Test

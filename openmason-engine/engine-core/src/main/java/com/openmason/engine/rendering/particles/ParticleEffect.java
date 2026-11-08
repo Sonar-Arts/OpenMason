@@ -60,10 +60,12 @@ import java.util.Objects;
  * @param stretch       {@link Orientation#VELOCITY}: trail length = speed × stretch (seconds)
  * @param rotation      initial rotation in degrees
  * @param spin          angular velocity in degrees/s
- * @param sprite        procedural disc, square, or sprite-atlas frames
- * @param frameStart    first atlas frame ({@link Sprite#ATLAS})
- * @param frameCount    atlas frames available to the effect (≥ 1)
- * @param animateFrames true = play the frames over the particle's life; false = pick one at random
+ * @param sprite        procedural disc, square, or the effect's own {@link #textures}
+ * @param textures      {@link Sprite#TEXTURE}: the sprite's texture names — one = a still sprite, several = a
+ *                      flipbook in play order. Names go to the host's {@link ParticleSpriteLoader}; the engine
+ *                      packs every referenced texture into one texture array ({@link ParticleTextureArray}).
+ *                      Kept (unused) for the procedural sprites, so switching the sprite back keeps them.
+ * @param animateFrames true = play the textures over the particle's life; false = each particle picks one
  * @param collides      test the system's {@link ParticleCollider} each step
  * @param bounce        velocity kept (reflected) on impact, 0..1
  * @param friction      horizontal velocity kept per ground contact, 0..1
@@ -102,8 +104,7 @@ public record ParticleEffect(
         Range rotation,
         Range spin,
         Sprite sprite,
-        int frameStart,
-        int frameCount,
+        List<String> textures,
         boolean animateFrames,
         boolean collides,
         float bounce,
@@ -122,8 +123,8 @@ public record ParticleEffect(
         SOFT_DISC,
         /** Procedural solid square (debris, pixels). */
         SQUARE,
-        /** Frames of the host's sprite atlas. */
-        ATLAS
+        /** The effect's own {@link ParticleEffect#textures} (one sprite, or flipbook frames). */
+        TEXTURE
     }
 
     /** How a particle's quad is oriented. */
@@ -166,8 +167,8 @@ public record ParticleEffect(
         TRAIL
     }
 
-    /** Hard limit on atlas frames: frame codes ≥ this are reserved for the procedural sprites. */
-    public static final int MAX_ATLAS_FRAMES = 0xFFF0;
+    /** Most textures (flipbook frames) one effect may name. */
+    public static final int MAX_TEXTURES = 256;
     /** Most keys a gradient or curve may have. */
     public static final int MAX_KEYS = 8;
     /** Most sub-emitters an effect may have. */
@@ -264,6 +265,7 @@ public record ParticleEffect(
         sizeKeys = List.copyOf(sizeKeys == null ? List.of() : sizeKeys);
         colorKeys = List.copyOf(colorKeys == null ? List.of() : colorKeys);
         subEmitters = List.copyOf(subEmitters == null ? List.of() : subEmitters);
+        textures = List.copyOf(textures == null ? List.of() : textures);
         if (name.isBlank()) {
             throw new IllegalArgumentException("effect name is blank");
         }
@@ -297,9 +299,16 @@ public record ParticleEffect(
         checkUnit(name, "additive", additive);
         checkUnit(name, "bounce", bounce);
         checkUnit(name, "friction", friction);
-        if (frameStart < 0 || frameCount < 1 || (long) frameStart + frameCount > MAX_ATLAS_FRAMES) {
-            throw new IllegalArgumentException(name + ": atlas frames out of range: "
-                    + frameStart + " + " + frameCount);
+        if (textures.size() > MAX_TEXTURES) {
+            throw new IllegalArgumentException(name + ": at most " + MAX_TEXTURES + " textures");
+        }
+        for (String t : textures) {
+            if (t.isBlank()) {
+                throw new IllegalArgumentException(name + ": blank texture name");
+            }
+        }
+        if (sprite == Sprite.TEXTURE && textures.isEmpty()) {
+            throw new IllegalArgumentException(name + ": a texture sprite needs at least one texture");
         }
         List<ColorKey> ck = colorKeys;
         List<SizeKey> sk = sizeKeys;
@@ -368,8 +377,7 @@ public record ParticleEffect(
         b.rotation = rotation;
         b.spin = spin;
         b.sprite = sprite;
-        b.frameStart = frameStart;
-        b.frameCount = frameCount;
+        b.textures = new ArrayList<>(textures);
         b.animateFrames = animateFrames;
         b.collides = collides;
         b.bounce = bounce;
@@ -412,8 +420,7 @@ public record ParticleEffect(
         private Range rotation = Range.of(0f);
         private Range spin = Range.of(0f);
         private Sprite sprite = Sprite.SOFT_DISC;
-        private int frameStart;
-        private int frameCount = 1;
+        private List<String> textures = new ArrayList<>();
         private boolean animateFrames;
         private boolean collides;
         private float bounce = 0.3f;
@@ -484,10 +491,21 @@ public record ParticleEffect(
             this.spin = Range.of(minDegPerSec, maxDegPerSec); return this;
         }
         public Builder sprite(Sprite s) { this.sprite = s; return this; }
-        public Builder atlas(int start, int count, boolean animate) {
-            this.sprite = Sprite.ATLAS; this.frameStart = start; this.frameCount = count;
+        /** A still textured sprite: {@link Sprite#TEXTURE} showing {@code name}. */
+        public Builder texture(String name) {
+            return textures(List.of(name), false);
+        }
+        /**
+         * {@link Sprite#TEXTURE} over {@code names}: a flipbook played over life ({@code animate}) or, when not
+         * animated, one texture picked per particle (variants: debris chips, leaf shapes).
+         */
+        public Builder textures(List<String> names, boolean animate) {
+            this.sprite = Sprite.TEXTURE; this.textures = new ArrayList<>(names);
             this.animateFrames = animate; return this;
         }
+        /** Sets the texture names without changing the sprite (editors keep them across sprite switches). */
+        public Builder textureNames(List<String> names) { this.textures = new ArrayList<>(names); return this; }
+        public Builder animateFrames(boolean v) { this.animateFrames = v; return this; }
         public Builder collides(float bounce, float friction) {
             this.collides = true; this.bounce = bounce; this.friction = friction; return this;
         }
@@ -502,8 +520,8 @@ public record ParticleEffect(
             return new ParticleEffect(name, lifetime, rate, shape, radius, halfX, halfY, halfZ, speed,
                     dirX, dirY, dirZ, spread, gravityX, gravityY, gravityZ, drag, windInfluence,
                     startSize, endSize, sizeKeys, colorStart, colorEnd, colorKeys, colorJitter, fadeIn, fadeOut,
-                    additive, emissive, softness, orientation, stretch, rotation, spin, sprite, frameStart,
-                    frameCount, animateFrames, collides, bounce, friction, subEmitters, maxLive, priority,
+                    additive, emissive, softness, orientation, stretch, rotation, spin, sprite, textures,
+                    animateFrames, collides, bounce, friction, subEmitters, maxLive, priority,
                     lodDistance);
         }
     }

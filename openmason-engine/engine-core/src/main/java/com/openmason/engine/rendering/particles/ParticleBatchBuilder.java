@@ -59,6 +59,9 @@ public final class ParticleBatchBuilder {
      */
     public int prepare(ParticleSystem system, ParticleFrame frame) {
         this.system = system;
+        if (frame.sprites != null) {
+            system.setSprites(frame.sprites); // no-op unless the host swapped arrays
+        }
         ensureCapacity(system.allocatedSlots());
         int live = system.liveCount();
         count = 0;
@@ -233,14 +236,10 @@ public final class ParticleBatchBuilder {
             if (angle > Math.PI || angle < -Math.PI) {
                 angle -= TWO_PI * (float) Math.floor((angle + Math.PI) / TWO_PI);
             }
-            int frame;
-            if (!e.atlas) {
-                frame = e.frameBase;
-            } else if (e.animate) {
-                frame = e.frameBase + Math.min((int) (t * e.frameCount), e.frameCount - 1);
-            } else {
-                frame = e.frameBase + (frameOffset[i] & 0xFFFF);
-            }
+            int fc = e.frameCount;
+            int pick = e.animate ? Math.min((int) (t * fc), fc - 1) : (frameOffset[i] & 0xFFFF);
+            // A hot-swap may shorten the texture list under particles that picked a later one.
+            int frame = e.frames[pick < fc ? pick : pick % fc];
             int flags = (e.emissive ? ParticleVertexFormat.FLAG_EMISSIVE : 0)
                     | (e.orientation << ParticleVertexFormat.ORIENTATION_SHIFT);
             float stretch = e.orientation == VELOCITY ? e.stretch : 0f;

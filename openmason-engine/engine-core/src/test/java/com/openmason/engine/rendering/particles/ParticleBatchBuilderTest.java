@@ -165,9 +165,13 @@ class ParticleBatchBuilderTest {
     }
 
     @Test
-    void atlasFramesAnimateOverLifeOrStayRandomlyPicked() {
+    void textureFramesAnimateOverLifeOrStayRandomlyPicked() {
         ParticleSystem s = new ParticleSystem(400, 3);
-        ParticleEffect anim = still("anim").lifetime(1, 1).atlas(8, 4, true).build();
+        java.util.Map<String, Integer> layers = java.util.Map.of("a", 8, "b", 9, "c", 10, "d", 11,
+                "x", 4, "y", 5, "z", 6);
+        s.setSprites(name -> layers.getOrDefault(name, -1));
+        ParticleEffect anim = still("anim").lifetime(1, 1)
+                .textures(java.util.List.of("a", "b", "c", "d"), true).build();
         s.burst(anim, 0, 0, -2, 1);
         ParticleBatchBuilder b = new ParticleBatchBuilder();
         float[] ages = {0f, 0.24f, 0.26f, 0.6f, 0.99f};
@@ -179,7 +183,7 @@ class ParticleBatchBuilderTest {
             assertEquals(frames[i], frameCode(0), "frame at t=" + ages[i]);
         }
         s.clearParticles();
-        ParticleEffect pick = still("pick").atlas(4, 3, false).build();
+        ParticleEffect pick = still("pick").textures(java.util.List.of("x", "y", "z"), false).build();
         s.burst(pick, 0, 0, -2, 300);
         int n = b.prepare(s, frame());
         b.pack(out);
@@ -189,6 +193,56 @@ class ParticleBatchBuilderTest {
         }
         assertTrue(seen[4] > 50 && seen[5] > 50 && seen[6] > 50, "each of frames 4..6 picked");
         assertEquals(n, seen[4] + seen[5] + seen[6]);
+    }
+
+    @Test
+    void textureNamesResolveToLayersAndReResolveWhenTheSpritesChange() {
+        ParticleSystem s = new ParticleSystem(16);
+        ParticleEffect flip = still("flip").lifetime(1, 1)
+                .textures(java.util.List.of("one", "two", "gone"), true).build();
+        s.burst(flip, 0, 0, -2, 1);
+        ParticleBatchBuilder b = new ParticleBatchBuilder();
+        s.age[0] = 0.1f;
+        b.prepare(s, frame());
+        b.pack(out);
+        assertEquals(ParticleVertexFormat.FRAME_MISSING, frameCode(0), "no sprites yet: the missing checker");
+
+        s.setSprites(name -> switch (name) { case "one" -> 3; case "two" -> 7; default -> -1; });
+        b.prepare(s, frame());
+        b.pack(out);
+        assertEquals(3, frameCode(0));
+        s.age[0] = 0.5f;
+        b.prepare(s, frame());
+        b.pack(out);
+        assertEquals(7, frameCode(0));
+        s.age[0] = 0.9f;
+        b.prepare(s, frame());
+        b.pack(out);
+        assertEquals(ParticleVertexFormat.FRAME_MISSING, frameCode(0), "an unpacked frame shows the checker");
+
+        // Hot-swap to a shorter list: the live particle keeps a valid frame.
+        ParticleEffect shorter = flip.toBuilder().textures(java.util.List.of("two"), true).build();
+        assertTrue(s.replace(flip, shorter));
+        b.prepare(s, frame());
+        b.pack(out);
+        assertEquals(7, frameCode(0));
+    }
+
+    @Test
+    void proceduralSpritesKeepTheirCodesWhateverTheLayers() {
+        ParticleSystem s = new ParticleSystem(16);
+        s.setSprites(name -> 0);
+        s.burst(still("disc").build(), 0, 0, -2, 1);
+        s.burst(still("sq").sprite(ParticleEffect.Sprite.SQUARE)
+                .textureNames(java.util.List.of("kept")).build(), 0, 0, -2, 1);
+        ParticleBatchBuilder b = new ParticleBatchBuilder();
+        int n = b.prepare(s, frame());
+        b.pack(out);
+        java.util.Set<Integer> codes = new java.util.HashSet<>();
+        for (int k = 0; k < n; k++) {
+            codes.add(frameCode(k));
+        }
+        assertEquals(java.util.Set.of(ParticleVertexFormat.FRAME_SOFT_DISC, ParticleVertexFormat.FRAME_SQUARE), codes);
     }
 
     @Test

@@ -12,19 +12,16 @@ uniform mat4 u_viewProj;
 uniform vec3 u_camRight;
 uniform vec3 u_camUp;
 uniform vec3 u_camPos;
-uniform vec2 u_atlasGrid;    // columns, rows
 uniform float u_ambient;
 uniform float u_fogDensity;
 uniform vec3 u_fogColor;
 
 out vec2 v_local;
-out vec2 v_atlasUv;
 out vec4 v_color;
 out float v_viewDepth;
 out float v_softness;
 flat out uint v_frame;
 
-const uint FIRST_PROCEDURAL_FRAME = 0xFFF0u;
 const uint CAMERA = 0u, VELOCITY = 1u, AXIS_Y = 2u, FLAT = 3u;
 
 // ---- host hooks (ParticleShaderExtension; engine defaults for the ones the host leaves out) ----
@@ -66,17 +63,7 @@ void main() {
     v_softness = a_axisSoftness.w;
 
     v_local = corner + 0.5;
-    uint frame = a_frameFlags.x;
-    v_frame = frame;
-    if (frame < FIRST_PROCEDURAL_FRAME) {
-        float columns = u_atlasGrid.x;
-        float f = float(frame);
-        vec2 cell = vec2(mod(f, columns), floor(f / columns));
-        // Row 0 is the top of the image (uploaded top row first), so flip V inside the cell.
-        v_atlasUv = (cell + vec2(v_local.x, 1.0 - v_local.y)) / u_atlasGrid;
-    } else {
-        v_atlasUv = vec2(0.0);
-    }
+    v_frame = a_frameFlags.x;   // procedural code (>= 0xFFF0) or sprite-array layer
 
     vec4 color = a_color;
     if ((a_frameFlags.y & 1u) == 0u) {

@@ -64,7 +64,7 @@ public final class ParticleSystem {
     /** Per-particle colour multiplier {@code 0xRRGGBBAA} (emitter tint × brightness jitter). */
     int[] tint;
     short[] effectId;
-    /** Atlas frame offset for non-animated atlas effects (0 otherwise). */
+    /** Texture picked at birth by a non-animated textured effect with several textures (0 otherwise). */
     short[] frameOffset;
 
     // ---- effects ----
@@ -89,6 +89,7 @@ public final class ParticleSystem {
     private boolean hasViewer;
     private float windX, windY, windZ;
     private ParticleCollider collider = ParticleCollider.NONE;
+    private ParticleSpriteLayers sprites = ParticleSpriteLayers.NONE;
     private final ParticleRandom random;
 
     // ---- stats ----
@@ -255,6 +256,7 @@ public final class ParticleSystem {
             throw new IllegalStateException("too many distinct effects in one particle system");
         }
         c = new CompiledEffect(effect, effectCount, targets);
+        c.resolve(sprites);
         if (effectCount == effects.length) {
             effects = Arrays.copyOf(effects, effects.length * 2);
         }
@@ -282,6 +284,7 @@ public final class ParticleSystem {
             targets[i] = child == old ? null : compile(child);
         }
         CompiledEffect c = new CompiledEffect(updated, previous.id, targets);
+        c.resolve(sprites);
         for (int i = 0; i < targets.length; i++) {
             if (targets[i] == null) {
                 targets[i] = c; // an effect spawning itself after the swap (records can't, editors can)
@@ -305,6 +308,26 @@ public final class ParticleSystem {
             }
         }
         return true;
+    }
+
+    /**
+     * Where textured effects find their sprites: every compiled effect re-resolves its texture names to layers
+     * now (no allocation), later ones at compile time. The renderer's batch builder calls this with
+     * {@link ParticleFrame#sprites} when set, so a host using a {@link ParticleTextureArray} never has to.
+     */
+    public void setSprites(ParticleSpriteLayers layers) {
+        ParticleSpriteLayers next = layers == null ? ParticleSpriteLayers.NONE : layers;
+        if (next == sprites) {
+            return;
+        }
+        sprites = next;
+        for (int k = 0; k < effectCount; k++) {
+            effects[k].resolve(next);
+        }
+    }
+
+    public ParticleSpriteLayers sprites() {
+        return sprites;
     }
 
     CompiledEffect effect(int id) {
@@ -491,7 +514,7 @@ public final class ParticleSystem {
             spin[i] = r.range(e.spinMin, e.spinSpan);
             tint[i] = e.colorJitter > 0f ? scaleRgb(tintRgba, 1f - e.colorJitter * r.nextFloat()) : tintRgba;
             effectId[i] = id;
-            frameOffset[i] = (short) (e.atlas && !e.animate && e.frameCount > 1 ? r.nextInt(e.frameCount) : 0);
+            frameOffset[i] = (short) (e.textured && !e.animate && e.frameCount > 1 ? r.nextInt(e.frameCount) : 0);
             if (e.hasBirth) {
                 queueSubs(e, CompiledEffect.TRIGGER_BIRTH, i, 0f);
             }

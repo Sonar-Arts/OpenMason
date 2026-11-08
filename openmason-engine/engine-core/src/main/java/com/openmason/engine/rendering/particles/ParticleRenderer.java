@@ -34,14 +34,16 @@ import static org.lwjgl.opengl.GL33C.*;
  *       {@link ParticleBatchBuilder} writes records straight into the mapping (no staging copy). A fence per
  *       segment guarantees the GPU finished reading it before it is rewritten.</li>
  *   <li>No vertex or index buffer: quad corners come from {@code gl_VertexID}.</li>
- *   <li>A 1×1 white texture bound when the host has no atlas.</li>
+ *   <li>A 1×1 white texture (2D, for soft-particle depth) and a one-layer white array (sprites) bound when
+ *       the host has none.</li>
  * </ul>
  * The ring is charged to {@link GpuMemoryTracker.Category#PARTICLES} and released by {@link #close()}.
  * Uniform locations are cached; nothing is allocated on the Java heap per frame.
  *
  * <h2>GL state</h2>
  * Each draw is depth-tested without depth writes, culling off, blend {@code (ONE, ONE_MINUS_SRC_ALPHA)}, the
- * atlas on texture unit {@value #ATLAS_UNIT} and scene depth (soft particles) on unit {@value #DEPTH_UNIT}.
+ * sprite array ({@link ParticleFrame#sprites}) on texture unit {@value #SPRITE_UNIT} with no sampler object
+ * (a UI library's leftover sampler would override the array's filtering), and scene depth (soft particles) on unit {@value #DEPTH_UNIT}.
  * Everything it changes is restored afterwards unless {@link #setRestoreState(boolean) setRestoreState(false)}.
  * The host's depth function is used as-is. Requires GL 3.3; render-thread only.
  */
@@ -50,7 +52,7 @@ public final class ParticleRenderer implements AutoCloseable {
     public static final String VERTEX_SHADER = "/shaders/particles/particle.vert";
     public static final String FRAGMENT_SHADER = "/shaders/particles/particle.frag";
     public static final int SEGMENTS = 3;
-    public static final int ATLAS_UNIT = 0;
+    public static final int SPRITE_UNIT = 0;
     public static final int DEPTH_UNIT = 1;
     /** Smallest ring segment, in instances. */
     public static final int MIN_SEGMENT_INSTANCES = 1024;
@@ -62,11 +64,12 @@ public final class ParticleRenderer implements AutoCloseable {
 
     private final ParticleBatchBuilder builder = new ParticleBatchBuilder();
     private final ShaderProgram shader;
-    private final int locViewProj, locCamRight, locCamUp, locCamPos, locAtlasGrid, locAmbient, locFogDensity,
+    private final int locViewProj, locCamRight, locCamUp, locCamPos, locAmbient, locFogDensity,
             locFogColor, locSoftEnabled, locDepthParams;
     private final FloatBuffer matrixScratch = MemoryUtil.memAllocFloat(16);
     private final Matrix4f viewProjection = new Matrix4f();
     private final int whiteTexture;
+    private final int whiteArray;
     private final int vao;
 
     private int buffer;
@@ -118,7 +121,6 @@ public final class ParticleRenderer implements AutoCloseable {
         locCamRight = glGetUniformLocation(program, "u_camRight");
         locCamUp = glGetUniformLocation(program, "u_camUp");
         locCamPos = glGetUniformLocation(program, "u_camPos");
-        locAtlasGrid = glGetUniformLocation(program, "u_atlasGrid");
         locAmbient = glGetUniformLocation(program, "u_ambient");
         locFogDensity = glGetUniformLocation(program, "u_fogDensity");
         locFogColor = glGetUniformLocation(program, "u_fogColor");
@@ -126,22 +128,32 @@ public final class ParticleRenderer implements AutoCloseable {
         locDepthParams = glGetUniformLocation(program, "u_depthParams");
         int previousProgram = glGetInteger(GL_CURRENT_PROGRAM);
         glUseProgram(program);
-        glUniform1i(glGetUniformLocation(program, "u_atlas"), ATLAS_UNIT);
+        glUniform1i(glGetUniformLocation(program, "u_sprites"), SPRITE_UNIT);
         glUniform1i(glGetUniformLocation(program, "u_sceneDepth"), DEPTH_UNIT);
         glUseProgram(previousProgram);
 
         int previousActive = glGetInteger(GL_ACTIVE_TEXTURE);
-        glActiveTexture(GL_TEXTURE0 + ATLAS_UNIT);
+        glActiveTexture(GL_TEXTURE0 + SPRITE_UNIT);
         int previousTexture = glGetInteger(GL_TEXTURE_BINDING_2D);
+        int previousArray = glGetInteger(GL_TEXTURE_BINDING_2D_ARRAY);
+        int previousUnpackBuffer = glGetInteger(GL_PIXEL_UNPACK_BUFFER_BINDING);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
         whiteTexture = glGenTextures();
-        glBindTexture(GL_TEXTURE_2D, whiteTexture);
+        whiteArray = glGenTextures();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer white = stack.malloc(4).putInt(0, 0xFFFFFFFF);
+            glBindTexture(GL_TEXTURE_2D, whiteTexture);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, whiteArray);
+            glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 1, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         }
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glBindTexture(GL_TEXTURE_2D, previousTexture);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, previousArray);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, previousUnpackBuffer);
         glActiveTexture(previousActive);
 
         int previousVao = glGetInteger(GL_VERTEX_ARRAY_BINDING);
@@ -236,7 +248,7 @@ public final class ParticleRenderer implements AutoCloseable {
         }
         ParticleFrame f = frame;
         boolean restore = restoreState;
-        int prevProgram = 0, prevVao = 0, prevArrayBuffer = 0, prevActive = 0, prevAtlas = 0, prevDepth = 0;
+        int prevProgram = 0, prevVao = 0, prevArrayBuffer = 0, prevActive = 0, prevSprites = 0, prevSampler = 0, prevDepth = 0;
         int prevSrcRgb = 0, prevDstRgb = 0, prevSrcAlpha = 0, prevDstAlpha = 0;
         boolean prevBlend = false, prevDepthTest = false, prevDepthMask = false, prevCull = false;
         if (restore) {
@@ -244,8 +256,9 @@ public final class ParticleRenderer implements AutoCloseable {
             prevVao = glGetInteger(GL_VERTEX_ARRAY_BINDING);
             prevArrayBuffer = glGetInteger(GL_ARRAY_BUFFER_BINDING);
             prevActive = glGetInteger(GL_ACTIVE_TEXTURE);
-            glActiveTexture(GL_TEXTURE0 + ATLAS_UNIT);
-            prevAtlas = glGetInteger(GL_TEXTURE_BINDING_2D);
+            glActiveTexture(GL_TEXTURE0 + SPRITE_UNIT);
+            prevSprites = glGetInteger(GL_TEXTURE_BINDING_2D_ARRAY);
+            prevSampler = glGetInteger(GL_SAMPLER_BINDING);
             glActiveTexture(GL_TEXTURE0 + DEPTH_UNIT);
             prevDepth = glGetInteger(GL_TEXTURE_BINDING_2D);
             prevBlend = glIsEnabled(GL_BLEND);
@@ -266,7 +279,6 @@ public final class ParticleRenderer implements AutoCloseable {
         glUniform3f(locCamRight, v.m00(), v.m10(), v.m20());
         glUniform3f(locCamUp, v.m01(), v.m11(), v.m21());
         glUniform3f(locCamPos, f.cameraPosition.x, f.cameraPosition.y, f.cameraPosition.z);
-        glUniform2f(locAtlasGrid, f.atlasColumns, f.atlasRows);
         glUniform1f(locAmbient, f.ambient);
         glUniform1f(locFogDensity, f.fogDensity);
         glUniform3f(locFogColor, f.fogColor.x, f.fogColor.y, f.fogColor.z);
@@ -278,8 +290,10 @@ public final class ParticleRenderer implements AutoCloseable {
 
         glActiveTexture(GL_TEXTURE0 + DEPTH_UNIT);
         glBindTexture(GL_TEXTURE_2D, f.depthTexture != 0 ? f.depthTexture : whiteTexture);
-        glActiveTexture(GL_TEXTURE0 + ATLAS_UNIT);
-        glBindTexture(GL_TEXTURE_2D, f.atlasTexture != 0 ? f.atlasTexture : whiteTexture);
+        glActiveTexture(GL_TEXTURE0 + SPRITE_UNIT);
+        int sprites = f.sprites != null ? f.sprites.texture() : 0;
+        glBindTexture(GL_TEXTURE_2D_ARRAY, sprites != 0 ? sprites : whiteArray);
+        glBindSampler(SPRITE_UNIT, 0);
 
         glEnable(GL_BLEND);
         glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -316,8 +330,9 @@ public final class ParticleRenderer implements AutoCloseable {
             glBindBuffer(GL_ARRAY_BUFFER, prevArrayBuffer);
             glActiveTexture(GL_TEXTURE0 + DEPTH_UNIT);
             glBindTexture(GL_TEXTURE_2D, prevDepth);
-            glActiveTexture(GL_TEXTURE0 + ATLAS_UNIT);
-            glBindTexture(GL_TEXTURE_2D, prevAtlas);
+            glActiveTexture(GL_TEXTURE0 + SPRITE_UNIT);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, prevSprites);
+            glBindSampler(SPRITE_UNIT, prevSampler);
             glActiveTexture(prevActive);
             setEnabled(GL_BLEND, prevBlend);
             glBlendFuncSeparate(prevSrcRgb, prevDstRgb, prevSrcAlpha, prevDstAlpha);
@@ -443,6 +458,7 @@ public final class ParticleRenderer implements AutoCloseable {
         releaseBuffer();
         glDeleteVertexArrays(vao);
         glDeleteTextures(whiteTexture);
+        glDeleteTextures(whiteArray);
         shader.cleanup();
         MemoryUtil.memFree(matrixScratch);
         if (fallback != null) {

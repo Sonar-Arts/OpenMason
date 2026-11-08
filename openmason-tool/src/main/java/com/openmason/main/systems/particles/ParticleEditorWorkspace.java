@@ -65,6 +65,10 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
     private ParticlePreview preview;
 
     private final ImString nameBuffer = new ImString(64);
+    private final ImString textureBuffer = new ImString(256);
+    /** A texture picked in the file dialog, appended to the selected effect on the next inspector frame. */
+    private volatile String pendingTexture;
+    private boolean reloadSprites;
     private String nameBufferFor;
     private String error;
 
@@ -371,6 +375,12 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
             }
         }
         model.selected().ifPresent(preview::show);
+        try {
+            preview.useSprites(model.library().effects(), documentFolder(), reloadSprites);
+        } catch (RuntimeException e) {
+            error = "Sprites: " + e.getMessage();
+        }
+        reloadSprites = false;
 
         float controlsHeight = ImGui.getFrameHeightWithSpacing() * 3 + 6f;
         float imageHeight = Math.max(120f, ImGui.getContentRegionAvailY() - controlsHeight);
@@ -500,6 +510,7 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
         if (ImGui.isItemDeactivatedAfterEdit() && !nameBuffer.get().isBlank()) {
             change(b -> b.name(nameBuffer.get().strip()));
         }
+        applyPendingTexture();
 
         if (header("Emission", true)) {
             dragFloat("rate (/s)", current.rate(), 0.5f, 0f, 100_000f, v -> change(b -> b.rate(v)));
@@ -572,17 +583,14 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
             range("spin (deg/s)", current.spin(), 1f, -7200f, 7200f, (a, z) -> change(b -> b.spin(a, z)));
             ParticleEffect.Sprite sprite = enumCombo("sprite", current.sprite(), ParticleEffect.Sprite.values());
             if (sprite != current.sprite()) {
-                change(b -> b.sprite(sprite));
+                if (sprite == ParticleEffect.Sprite.TEXTURE && current.textures().isEmpty()) {
+                    browseTexture(); // a texture sprite needs an image before it is valid
+                } else {
+                    change(b -> b.sprite(sprite));
+                }
             }
-            if (current.sprite() == ParticleEffect.Sprite.ATLAS) {
-                int[] frames = {current.frameStart(), current.frameCount()};
-                if (ImGui.dragInt2("first frame, count", frames, 0.1f, 0, ParticleEffect.MAX_ATLAS_FRAMES - 1)) {
-                    change(b -> b.atlas(Math.max(0, frames[0]), Math.max(1, frames[1]), current.animateFrames()));
-                }
-                if (ImGui.checkbox("animate over life", current.animateFrames())) {
-                    change(b -> b.atlas(current.frameStart(), current.frameCount(), !current.animateFrames()));
-                }
-                ImGui.textDisabled("The preview has no atlas: frames show white.");
+            if (current.sprite() == ParticleEffect.Sprite.TEXTURE) {
+                renderTextures();
             }
         }
 
@@ -629,6 +637,93 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
         } catch (IllegalArgumentException e) {
             error = e.getMessage();
         }
+    }
+
+    // ---- sprite textures ----
+
+    private void renderTextures() {
+        List<String> names = new ArrayList<>(current.textures());
+        List<String> missing = preview == null ? List.of() : preview.missingSprites();
+        ImGui.textDisabled(names.size() > 1 ? "Textures (flipbook frames, in order)" : "Texture");
+        boolean changed = false;
+        for (int i = 0; i < names.size(); i++) {
+            ImGui.pushID("tex" + i);
+            if (ImGui.arrowButton("##up", ImGuiDir.Up) && i > 0) {
+                names.add(i - 1, names.remove(i));
+                changed = true;
+            }
+            ImGui.sameLine();
+            if (ImGui.arrowButton("##down", ImGuiDir.Down) && i < names.size() - 1) {
+                names.add(i + 1, names.remove(i));
+                changed = true;
+            }
+            ImGui.sameLine();
+            boolean last = names.size() == 1;
+            if (last) ImGui.beginDisabled();
+            if (ImGui.smallButton("x")) {
+                names.remove(i);
+                changed = true;
+                if (last) ImGui.endDisabled();
+                ImGui.popID();
+                break;
+            }
+            if (last) ImGui.endDisabled();
+            ImGui.sameLine();
+            String name = names.get(i);
+            if (missing.contains(name)) {
+                ImGui.textColored(0.95f, 0.45f, 0.4f, 1f, name + "  (not found)");
+            } else {
+                ImGui.text(name);
+            }
+            ImGui.popID();
+        }
+        ImGui.setNextItemWidth(Math.max(80f, ImGui.getContentRegionAvailX() - 140f));
+        ImGui.inputText("##texname", textureBuffer);
+        ImGui.sameLine();
+        String typed = textureBuffer.get().strip();
+        if (ImGui.button("Add") && !typed.isEmpty() && names.size() < ParticleEffect.MAX_TEXTURES) {
+            names.add(typed);
+            textureBuffer.set("");
+            changed = true;
+        }
+        ImGui.sameLine();
+        if (ImGui.button("Browse...")) {
+            browseTexture();
+        }
+        if (changed && !names.isEmpty()) {
+            change(b -> b.textures(names, current.animateFrames()));
+        }
+        if (names.size() > 1 && ImGui.checkbox("flipbook over life (off: one per particle)", current.animateFrames())) {
+            change(b -> b.animateFrames(!current.animateFrames()));
+        }
+        if (model.file().isEmpty()) {
+            ImGui.textDisabled("Names are image paths next to the document: save it to load relative ones.");
+        }
+        if (ImGui.smallButton("Reload images")) {
+            reloadSprites = true;
+        }
+    }
+
+    /** Picks a PNG and appends it (the callback may come later; applied on the next inspector frame). */
+    private void browseTexture() {
+        fileDialogs.showOpenPNGDialog(p -> pendingTexture = ParticleSpriteFiles.nameFor(Path.of(p), documentFolder()));
+    }
+
+    private void applyPendingTexture() {
+        String name = pendingTexture;
+        if (name == null) {
+            return;
+        }
+        pendingTexture = null;
+        List<String> names = new ArrayList<>(current.sprite() == ParticleEffect.Sprite.TEXTURE ? current.textures() : List.of());
+        if (names.size() < ParticleEffect.MAX_TEXTURES) {
+            names.add(name);
+            change(b -> b.textures(names, current.animateFrames()));
+        }
+    }
+
+    private Path documentFolder() {
+        return model.file().map(p -> p.toAbsolutePath().getParent()).orElse(null);
     }
 
     // ---- keys and sub-emitters ----

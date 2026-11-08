@@ -11,6 +11,10 @@ import org.lwjgl.system.MemoryStack;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -33,6 +37,7 @@ class ParticleRenderGlTest {
     private int fbo, colorTex, depthRb;
     private ParticleRenderer renderer;
     private final ParticleFrame frame = new ParticleFrame();
+    private final List<ParticleTextureArray> arrays = new ArrayList<>();
     private final Matrix4f projection = new Matrix4f().perspective((float) Math.toRadians(90), 1f, 0.1f, 100f);
 
     @BeforeEach
@@ -81,6 +86,8 @@ class ParticleRenderGlTest {
         if (renderer != null) {
             renderer.close();
         }
+        arrays.forEach(ParticleTextureArray::close);
+        arrays.clear();
         glDeleteFramebuffers(fbo);
         glDeleteRenderbuffers(depthRb);
         glDeleteTextures(colorTex);
@@ -285,43 +292,146 @@ class ParticleRenderGlTest {
     // ------------------------------------------------------------------------------------------------
 
     @Test
-    void atlasFramesSampleTheirOwnCellUprightFromTheImageTop() {
-        // 2×2 atlas of single texels, image top row first: red, green / blue, white.
-        int atlas = texture(2, 2, new int[]{0xFF0000FF, 0x00FF00FF, 0x0000FFFF, 0xFFFFFFFF});
-        frame.atlas(atlas, 2, 2);
+    void textureFramesSampleTheirOwnLayerUprightFromTheImageTop() {
+        String[] names = {"red", "green", "blue", "white"};
+        int[] colors = {0xFF0000FF, 0x00FF00FF, 0x0000FFFF, 0xFFFFFFFF};
+        Map<String, ParticleImage> images = new LinkedHashMap<>();
+        for (int i = 0; i < 4; i++) {
+            images.put(names[i], new ParticleImage(1, 1, new int[]{colors[i]}));
+        }
+        images.put("upright", new ParticleImage(1, 2, new int[]{0xFF0000FF, 0x00FF00FF})); // red over green
+        frame.sprites = sprites(16, images);
         int[][] expected = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255}};
         for (int f = 0; f < 4; f++) {
             ParticleSystem s = new ParticleSystem(4);
-            s.burst(still("frame" + f).atlas(f, 1, false).build(), 0, 0, -2, 1);
+            s.burst(still("frame" + f).texture(names[f]).build(), 0, 0, -2, 1);
             clear(0, 0, 0);
             draw(s);
-            assertRgb(pixel(C, C), expected[f][0], expected[f][1], expected[f][2], 1, "frame " + f);
+            assertRgb(pixel(C, C), expected[f][0], expected[f][1], expected[f][2], 1, "layer " + names[f]);
         }
-        glDeleteTextures(atlas);
 
-        // One 1×2 sprite (red over green): its top must face up on screen.
-        int upright = texture(1, 2, new int[]{0xFF0000FF, 0x00FF00FF});
-        frame.atlas(upright, 1, 1);
         ParticleSystem s = new ParticleSystem(4);
-        s.burst(still("upright").atlas(0, 1, false).build(), 0, 0, -2, 1);
+        s.burst(still("upright").texture("upright").build(), 0, 0, -2, 1);
         clear(0, 0, 0);
         draw(s);
         assertRgb(pixel(C, 36), 255, 0, 0, 1, "image top is the top of the quad");
         assertRgb(pixel(C, 28), 0, 255, 0, 1, "image bottom is the bottom of the quad");
-        glDeleteTextures(upright);
     }
 
     @Test
-    void atlasTransparencyCutsTheSpriteShape() {
-        int atlas = texture(2, 1, new int[]{0xFFFFFFFF, 0xFFFFFF00});
-        frame.atlas(atlas, 1, 1);
+    void textureTransparencyCutsTheSpriteShape() {
+        frame.sprites = sprites(16, Map.of("cut", new ParticleImage(2, 1, new int[]{0xFFFFFFFF, 0xFFFFFF00})));
         ParticleSystem s = new ParticleSystem(4);
-        s.burst(still("cut").atlas(0, 1, false).color(0x00FF00FF).build(), 0, 0, -2, 1);
+        s.burst(still("cut").texture("cut").color(0x00FF00FF).build(), 0, 0, -2, 1);
         clear(0, 0, 0);
         draw(s);
         assertRgb(pixel(28, C), 0, 255, 0, 1, "opaque texel tinted by the particle colour");
         assertRgb(pixel(36, C), 0, 0, 0, 0, "transparent texel draws nothing");
-        glDeleteTextures(atlas);
+    }
+
+    @Test
+    void flipbooksAnimateOverLifeAndStillSpritesPickAFrame() {
+        Map<String, ParticleImage> images = new LinkedHashMap<>();
+        images.put("f0", new ParticleImage(1, 1, new int[]{0xFF0000FF}));
+        images.put("f1", new ParticleImage(1, 1, new int[]{0x00FF00FF}));
+        images.put("f2", new ParticleImage(1, 1, new int[]{0x0000FFFF}));
+        frame.sprites = sprites(8, images);
+        ParticleSystem s = new ParticleSystem(4);
+        s.burst(still("flip").lifetime(3, 3).textures(List.of("f0", "f1", "f2"), true).build(), 0, 0, -2, 1);
+        float[] ages = {0.2f, 1.2f, 2.8f};
+        int[][] expected = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}};
+        for (int i = 0; i < ages.length; i++) {
+            s.age[0] = ages[i];
+            clear(0, 0, 0);
+            draw(s);
+            assertRgb(pixel(C, C), expected[i][0], expected[i][1], expected[i][2], 1, "frame at age " + ages[i]);
+        }
+        // Flipbook frames are plain layers: listing them in another order plays them in that order.
+        s.clearParticles();
+        s.burst(still("back").lifetime(3, 3).textures(List.of("f2", "f0"), true).build(), 0, 0, -2, 1);
+        s.age[0] = 0.2f;
+        clear(0, 0, 0);
+        draw(s);
+        assertRgb(pixel(C, C), 0, 0, 255, 1, "first listed frame first");
+    }
+
+    @Test
+    void layersNeverBleedIntoEachOtherEvenAtTheSmallestMips() {
+        // Neighbouring layers of opposite colours, each with a hard opaque/transparent edge: a packed 2D atlas
+        // mixes neighbouring cells once linear filtering and mips are on; array layers must not.
+        int cell = 64;
+        int[] redEdge = new int[cell * cell];
+        int[] blue = new int[cell * cell];
+        for (int i = 0; i < redEdge.length; i++) {
+            redEdge[i] = (i % cell) < cell / 2 ? 0xFF0000FF : 0x00000000;
+            blue[i] = 0x0000FFFF;
+        }
+        Map<String, ParticleImage> images = new LinkedHashMap<>();
+        images.put("blue_a", new ParticleImage(cell, cell, blue));
+        images.put("red", new ParticleImage(cell, cell, redEdge));
+        images.put("blue_b", new ParticleImage(cell, cell, blue));
+        ParticleTextureArray array = sprites(cell, images);
+        assertEquals(7, array.mipLevels(), "64 → 1 is seven levels");
+        frame.sprites = array;
+
+        float[] sizes = {1f, 0.25f, 0.1f};   // ~16, 4 and 1.6 px: mip levels ~2, ~4 and ~5
+        for (float size : sizes) {
+            ParticleSystem s = new ParticleSystem(4);
+            s.burst(still("red" + size).texture("red").size(size, size).build(), 0, 0, -2, 1);
+            clear(0, 0, 0);
+            draw(s);
+            int maxBlue = 0, maxRed = 0;
+            for (int y = 20; y < 44; y++) {
+                for (int x = 20; x < 44; x++) {
+                    int[] p = pixel(x, y);
+                    maxBlue = Math.max(maxBlue, p[2]);
+                    maxRed = Math.max(maxRed, p[0]);
+                }
+            }
+            assertTrue(maxRed > 40, "size " + size + " drew red (" + maxRed + ")");
+            assertEquals(0, maxBlue, "size " + size + ": no blue from the neighbouring layers");
+        }
+    }
+
+    @Test
+    void missingTexturesShowTheCheckerNotWhite() {
+        frame.sprites = sprites(8, Map.of("present", new ParticleImage(1, 1, new int[]{0x00FF00FF})));
+        ParticleSystem s = new ParticleSystem(4);
+        s.burst(still("lost").texture("absent").build(), 0, 0, -2, 1);
+        clear(0, 0, 0);
+        draw(s);
+        int magenta = 0, white = 0;
+        for (int y = 24; y < 40; y++) {
+            for (int x = 24; x < 40; x++) {
+                int[] p = pixel(x, y);
+                if (p[0] > 200 && p[1] < 40 && p[2] > 200) magenta++;
+                if (p[0] > 200 && p[1] > 200 && p[2] > 200) white++;
+            }
+        }
+        assertTrue(magenta > 64, "checker visible: " + magenta);
+        assertEquals(0, white);
+    }
+
+    @Test
+    void spriteArraysAreAccountedAndReleased() {
+        GpuMemoryTracker tracker = GpuMemoryTracker.getInstance();
+        long before = tracker.getBytes(GpuMemoryTracker.Category.PARTICLES);
+        Map<String, ParticleImage> images = new LinkedHashMap<>();
+        images.put("a", new ParticleImage(1, 1, new int[]{0xFFFFFFFF}));
+        images.put("b", new ParticleImage(1, 1, new int[]{0xFFFFFFFF}));
+        ParticleTextureArray array = ParticleTextureArray.upload(ParticleSpriteLayout.packNames(images.keySet(), images::get, 32));
+        assertNotEquals(0, array.texture());
+        assertEquals(ParticleTextureArray.bytesFor(32, 2), array.gpuBytes());
+        assertEquals(before + array.gpuBytes(), tracker.getBytes(GpuMemoryTracker.Category.PARTICLES));
+        array.close();
+        assertEquals(0, array.texture());
+        assertEquals(before, tracker.getBytes(GpuMemoryTracker.Category.PARTICLES), "released on close");
+        array.close(); // idempotent
+
+        ParticleTextureArray empty = ParticleTextureArray.upload(ParticleSpriteLayout.EMPTY);
+        assertEquals(0, empty.texture(), "no layers, no texture");
+        assertEquals(0, empty.gpuBytes());
+        empty.close();
     }
 
     @Test
@@ -387,13 +497,12 @@ class ParticleRenderGlTest {
     void sixtyFiveThousandMixedParticlesDrawInOneCall() {
         int n = 65_536;
         ParticleSystem s = new ParticleSystem(n);
-        int atlas = texture(1, 1, new int[]{0xFFFFFFFF});
-        frame.atlas(atlas, 1, 1);
+        frame.sprites = sprites(8, Map.of("white", new ParticleImage(1, 1, new int[]{0xFFFFFFFF})));
         ParticleEffect[] mix = {
                 still("soft").size(0.02f, 0.02f).build(),
                 still("sq").sprite(ParticleEffect.Sprite.SQUARE).size(0.02f, 0.02f).color(0xFF000080).build(),
                 still("add").size(0.02f, 0.02f).additive(1).emissive(true).build(),
-                still("atlas").atlas(0, 1, false).size(0.02f, 0.02f).build()};
+                still("textured").texture("white").size(0.02f, 0.02f).build()};
         for (int i = 0; i < 4; i++) {
             s.burst(mix[i].toBuilder().box(1.5f, 1.5f, 0.5f).priority(ParticleEffect.Priority.CRITICAL).build(),
                     0, 0, -4, n / 4);
@@ -405,7 +514,6 @@ class ParticleRenderGlTest {
         assertEquals(1, renderer.lastDrawCalls(), "every effect, sprite and blend style in one draw");
         assertEquals((long) n * ParticleVertexFormat.STRIDE, renderer.uploadedBytesTotal() - uploaded);
         assertTrue(renderer.builder().sortedLastBuild());
-        glDeleteTextures(atlas);
     }
 
     @Test
@@ -431,8 +539,13 @@ class ParticleRenderGlTest {
         int tex1 = texture(1, 1, new int[]{0xFFFFFFFF});
         glActiveTexture(GL_TEXTURE0 + ParticleRenderer.DEPTH_UNIT);
         glBindTexture(GL_TEXTURE_2D, tex1);
-        glActiveTexture(GL_TEXTURE0 + ParticleRenderer.ATLAS_UNIT);
+        glActiveTexture(GL_TEXTURE0 + ParticleRenderer.SPRITE_UNIT);
         glBindTexture(GL_TEXTURE_2D, tex);
+        int array = glGenTextures();
+        glBindTexture(GL_TEXTURE_2D_ARRAY, array);
+        int sampler = glGenSamplers(); // a UI library's leftover sampler object (Skia does this)
+        glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glBindSampler(ParticleRenderer.SPRITE_UNIT, sampler);
         glActiveTexture(GL_TEXTURE3);
         glDisable(GL_BLEND);
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
@@ -446,8 +559,14 @@ class ParticleRenderGlTest {
         assertEquals(vao, glGetInteger(GL_VERTEX_ARRAY_BINDING));
         assertEquals(buffer, glGetInteger(GL_ARRAY_BUFFER_BINDING));
         assertEquals(GL_TEXTURE3, glGetInteger(GL_ACTIVE_TEXTURE));
-        glActiveTexture(GL_TEXTURE0 + ParticleRenderer.ATLAS_UNIT);
+        glActiveTexture(GL_TEXTURE0 + ParticleRenderer.SPRITE_UNIT);
         assertEquals(tex, glGetInteger(GL_TEXTURE_BINDING_2D));
+        assertEquals(array, glGetInteger(GL_TEXTURE_BINDING_2D_ARRAY));
+        assertEquals(sampler, glGetInteger(GL_SAMPLER_BINDING));
+        glBindSampler(ParticleRenderer.SPRITE_UNIT, 0);
+        glDeleteSamplers(sampler);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+        glDeleteTextures(array);
         glActiveTexture(GL_TEXTURE0 + ParticleRenderer.DEPTH_UNIT);
         assertEquals(tex1, glGetInteger(GL_TEXTURE_BINDING_2D));
         assertFalse(glIsEnabled(GL_BLEND));
@@ -694,6 +813,14 @@ class ParticleRenderGlTest {
     }
 
     /** RGBA8 texture from {@code 0xRRGGBBAA} texels, first row = image top; nearest filtering. */
+    /** Packs and uploads {@code images} at {@code cell}; closed after the test. */
+    private ParticleTextureArray sprites(int cell, Map<String, ParticleImage> images) {
+        ParticleTextureArray array = ParticleTextureArray.upload(
+                ParticleSpriteLayout.packNames(images.keySet(), images::get, cell));
+        arrays.add(array);
+        return array;
+    }
+
     private static int texture(int w, int h, int[] rgba) {
         int tex = glGenTextures();
         int previousActive = glGetInteger(GL_ACTIVE_TEXTURE);

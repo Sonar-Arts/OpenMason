@@ -15,6 +15,10 @@ final class CompiledEffect {
     static final int FRAME_SOFT_DISC = 0xFFFF;
     /** GPU frame code for the procedural square. */
     static final int FRAME_SQUARE = 0xFFFE;
+    /** GPU frame code for a texture the sprite layers do not hold (a magenta checker, so it is noticed). */
+    static final int FRAME_MISSING = 0xFFFD;
+    /** Frame codes at or above this are procedural; below it a code is a texture-array layer. */
+    static final int FIRST_PROCEDURAL_FRAME = 0xFFF0;
     static final int TRIGGER_BIRTH = 0, TRIGGER_DEATH = 1, TRIGGER_COLLISION = 2, TRIGGER_TRAIL = 3;
 
     final ParticleEffect source;
@@ -47,10 +51,17 @@ final class CompiledEffect {
     final int orientation;
     final float stretch;
     final float rotMin, rotSpan, spinMin, spinSpan;
-    /** {@link #FRAME_SOFT_DISC}, {@link #FRAME_SQUARE}, or the first atlas frame. */
-    final int frameBase;
+    /**
+     * GPU frame code per flipbook frame: {@link #FRAME_SOFT_DISC}/{@link #FRAME_SQUARE} (one entry) for the
+     * procedural sprites, else each texture's array layer or {@link #FRAME_MISSING}. Rewritten in place by
+     * {@link #resolve} when the sprite layers change.
+     */
+    final int[] frames;
+    /** {@link ParticleEffect#textures} in frame order (empty for the procedural sprites). */
+    final String[] textureNames;
+    /** Number of {@link #frames} (≥ 1). */
     final int frameCount;
-    final boolean atlas, animate;
+    final boolean textured, animate;
     final boolean collides;
     final float bounce, friction;
 
@@ -154,14 +165,15 @@ final class CompiledEffect {
         rotSpan = (float) Math.toRadians(e.rotation().span());
         spinMin = (float) Math.toRadians(e.spin().min());
         spinSpan = (float) Math.toRadians(e.spin().span());
-        atlas = e.sprite() == ParticleEffect.Sprite.ATLAS;
-        frameBase = switch (e.sprite()) {
-            case SOFT_DISC -> FRAME_SOFT_DISC;
-            case SQUARE -> FRAME_SQUARE;
-            case ATLAS -> e.frameStart();
+        textured = e.sprite() == ParticleEffect.Sprite.TEXTURE;
+        textureNames = textured ? e.textures().toArray(new String[0]) : new String[0];
+        frames = switch (e.sprite()) {
+            case SOFT_DISC -> new int[]{FRAME_SOFT_DISC};
+            case SQUARE -> new int[]{FRAME_SQUARE};
+            case TEXTURE -> new int[textureNames.length];
         };
-        frameCount = atlas ? e.frameCount() : 1;
-        animate = atlas && e.animateFrames();
+        frameCount = frames.length;
+        animate = textured && e.animateFrames();
         collides = e.collides();
         bounce = e.bounce();
         friction = e.friction();
@@ -194,6 +206,14 @@ final class CompiledEffect {
         maxLive = e.maxLive() == 0 ? Integer.MAX_VALUE : e.maxLive();
         budgetFraction = e.priority().budgetFraction;
         lodDistance = e.lodDistance();
+    }
+
+    /** Maps the texture names to frame codes through {@code layers}; procedural sprites are left as they are. */
+    void resolve(ParticleSpriteLayers layers) {
+        for (int i = 0; i < textureNames.length; i++) {
+            int layer = layers.layerOf(textureNames[i]);
+            frames[i] = layer >= 0 && layer < FIRST_PROCEDURAL_FRAME ? layer : FRAME_MISSING;
+        }
     }
 
     /**
