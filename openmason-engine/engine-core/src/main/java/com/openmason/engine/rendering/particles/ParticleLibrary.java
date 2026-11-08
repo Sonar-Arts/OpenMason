@@ -136,7 +136,14 @@ public final class ParticleLibrary {
 
     /** Reads effects from a {@value #FORMAT} document and registers them. Returns how many were read. */
     public int load(InputStream in) throws IOException {
-        JsonNode root = MAPPER.readTree(in);
+        return load(MAPPER.readTree(in));
+    }
+
+    /**
+     * Reads effects from a parsed {@value #FORMAT} document and registers them (the {@code .omfx} v2 codec hands
+     * its {@code system.json} effects here, so both formats share one effect reader). Returns how many were read.
+     */
+    public int load(JsonNode root) throws IOException {
         if (root == null || !root.isObject()) {
             throw new IOException("particle library must be a JSON object");
         }
@@ -339,6 +346,11 @@ public final class ParticleLibrary {
             }
         }
         return b.build();
+    }
+
+    /** One effect as a JSON tree, every member written (sub-emitters by name, the graph inline). */
+    public static ObjectNode toJsonNode(ParticleEffect e) {
+        return toJson(e);
     }
 
     static ObjectNode toJson(ParticleEffect e) {

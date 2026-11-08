@@ -2,6 +2,7 @@ package com.openmason.main.systems.particles;
 
 import com.openmason.engine.rendering.particles.ParticleEffect;
 import com.openmason.engine.rendering.particles.ParticleLibrary;
+import com.openmason.engine.rendering.particles.omfx.OmfxCodec;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -237,10 +238,19 @@ public final class ParticleEditorModel {
         reset(ParticleLibrary.withBuiltIns(), null);
     }
 
-    /** Replaces the document with the effects in {@code path}. On error the document is unchanged. */
+    /**
+     * Replaces the document with the effects in {@code path}. On error the document is unchanged. An {@code .omfx}
+     * v2 FX system (a zip archive, OM #101) is refused with a reason: this editor still edits v1 effect libraries
+     * until the FX editor (OM #104), and saving a system as a library would lose its emitters, parameters and events.
+     */
     public void open(Path path) throws IOException {
+        byte[] bytes = Files.readAllBytes(path);
+        if (OmfxCodec.isArchive(bytes)) {
+            throw new IOException(path.getFileName() + " is an .omfx v2 FX system; the Particles tab still edits "
+                    + "v1 particle libraries (the FX editor is OM #104)");
+        }
         ParticleLibrary lib = new ParticleLibrary();
-        try (InputStream in = Files.newInputStream(path)) {
+        try (InputStream in = new java.io.ByteArrayInputStream(bytes)) {
             lib.load(in);
         }
         reset(lib, path);

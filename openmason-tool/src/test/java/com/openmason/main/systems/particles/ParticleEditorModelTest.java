@@ -1,8 +1,11 @@
 package com.openmason.main.systems.particles;
 
+import com.openmason.engine.rendering.particles.FxPresets;
 import com.openmason.engine.rendering.particles.ParticleEffect;
 import com.openmason.engine.rendering.particles.ParticleLibrary;
 import com.openmason.engine.rendering.particles.ParticleSystem;
+import com.openmason.engine.rendering.particles.omfx.OmfxCodec;
+import com.openmason.engine.rendering.particles.omfx.OmfxDocument;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -146,6 +149,18 @@ class ParticleEditorModelTest {
             assertEquals(m.library().get(name), back.library().get(name), name);
         }
         assertEquals(123f, back.library().get("fire").rate());
+    }
+
+    @Test
+    void anOmfxV2SystemIsRefusedWithAReasonAndTheDocumentKept(@TempDir Path dir) throws Exception {
+        ParticleEditorModel m = new ParticleEditorModel();
+        m.create("mine");
+        Path v2 = dir.resolve("campfire.omfx");
+        OmfxCodec.write(OmfxDocument.of(FxPresets.CAMPFIRE), v2);
+        Exception e = assertThrows(java.io.IOException.class, () -> m.open(v2));
+        assertTrue(e.getMessage().contains("v2 FX system"), e.getMessage());
+        assertTrue(m.library().contains("mine"));
+        assertTrue(m.isDirty());
     }
 
     @Test
