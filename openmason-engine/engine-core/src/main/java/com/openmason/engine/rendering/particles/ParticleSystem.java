@@ -66,6 +66,31 @@ public final class ParticleSystem {
     short[] effectId;
     /** Texture picked at birth by a non-animated textured effect with several textures (0 otherwise). */
     short[] frameOffset;
+    /**
+     * Who spawned the particle (0 = nobody: plain emitters and bursts). Opaque to the system except that a
+     * sub-emitter child gets its parent's tag with the low byte set ({@link #OWNER_DERIVED}). The FX runtime
+     * ({@link FxWorld}) tags its particles to route their deaths and impacts back to the instance.
+     */
+    int[] owner;
+
+    /** Low byte of an owner tag; all ones = "spawned by an owned particle's sub-emitter", not by an FX emitter. */
+    static final int OWNER_DERIVED = 0xFF;
+
+    /** Notified about owned particles ({@code owner != 0}); set by the one {@link FxWorld} driving this system. */
+    interface OwnerListener {
+        void spawned(int owner, int count);
+
+        /** An owned particle died of old age at anchor-relative {@code (x, y, z)} moving at {@code v}. */
+        void died(int owner, float x, float y, float z, float vx, float vy, float vz);
+
+        /** An owned particle hit something faster than the impact threshold. */
+        void collided(int owner, float x, float y, float z, float vx, float vy, float vz);
+
+        /** Every particle was removed at once ({@link #clearParticles()}). */
+        void cleared();
+    }
+
+    private OwnerListener ownerListener;
 
     // ---- effects ----
     private CompiledEffect[] effects = new CompiledEffect[8];
@@ -79,6 +104,7 @@ public final class ParticleSystem {
     // ---- sub-emitter event queue ----
     private final short[] evEffect = new short[EVENT_CAPACITY];
     private final int[] evCount = new int[EVENT_CAPACITY];
+    private final int[] evOwner = new int[EVENT_CAPACITY];
     private final float[] evX = new float[EVENT_CAPACITY], evY = new float[EVENT_CAPACITY], evZ = new float[EVENT_CAPACITY];
     private final float[] evVx = new float[EVENT_CAPACITY], evVy = new float[EVENT_CAPACITY], evVz = new float[EVENT_CAPACITY];
     private int evTail;
@@ -125,6 +151,7 @@ public final class ParticleSystem {
         tint = tint == null ? new int[n] : Arrays.copyOf(tint, n);
         effectId = effectId == null ? new short[n] : Arrays.copyOf(effectId, n);
         frameOffset = frameOffset == null ? new short[n] : Arrays.copyOf(frameOffset, n);
+        owner = owner == null ? new int[n] : Arrays.copyOf(owner, n);
     }
 
     private static float[] grow(float[] a, int n) {
@@ -156,7 +183,7 @@ public final class ParticleSystem {
     /** Sub-emitter events that did not fit the per-step queue. */
     public long eventsDroppedTotal() { return eventsDroppedTotal; }
     /** Heap bytes held by particle state (diagnostics). */
-    public long memoryBytes() { return (long) slots * (12 * 4 + 4 + 2 + 2); }
+    public long memoryBytes() { return (long) slots * (12 * 4 + 4 + 2 + 2 + 4); }
 
     /** Live particles of {@code effect} in this system. */
     public int liveCount(ParticleEffect effect) {
@@ -220,6 +247,21 @@ public final class ParticleSystem {
         for (int k = 0; k < effectCount; k++) {
             effects[k].live = 0;
         }
+        if (ownerListener != null) {
+            ownerListener.cleared();
+        }
+    }
+
+    /** Forgets every live particle's owner (the FX world that tagged them is gone). */
+    void clearOwners() {
+        Arrays.fill(owner, 0, live, 0);
+    }
+
+    void setOwnerListener(OwnerListener listener) {
+        if (listener != null && ownerListener != null && ownerListener != listener) {
+            throw new IllegalStateException("this particle system is already driven by another FxWorld");
+        }
+        ownerListener = listener;
     }
 
     /** Kills every particle and detaches every emitter. */
@@ -369,7 +411,7 @@ public final class ParticleSystem {
     public int burst(ParticleEffect effect, double x, double y, double z, int count) {
         CompiledEffect c = compile(effect);
         int n = spawn(c, rel(x, anchorX), rel(y, anchorY), rel(z, anchorZ), c.dirX, c.dirY, c.dirZ,
-                count, 0xFFFFFFFF, 0f, 0f, 0f, 0f);
+                count, 0xFFFFFFFF, 0f, 0f, 0f, 0f, 0, 1f, 1f);
         flushEvents();
         return n;
     }
@@ -385,7 +427,8 @@ public final class ParticleSystem {
             dy = dirY / len;
             dz = dirZ / len;
         }
-        int n = spawn(c, rel(x, anchorX), rel(y, anchorY), rel(z, anchorZ), dx, dy, dz, count, tint, 0f, 0f, 0f, 0f);
+        int n = spawn(c, rel(x, anchorX), rel(y, anchorY), rel(z, anchorZ), dx, dy, dz, count, tint, 0f, 0f, 0f, 0f,
+                0, 1f, 1f);
         flushEvents();
         return n;
     }
@@ -394,7 +437,23 @@ public final class ParticleSystem {
     int emit(ParticleEmitter em, int count, float preAge) {
         CompiledEffect e = em.effect;
         return spawn(e, rel(em.x, anchorX), rel(em.y, anchorY), rel(em.z, anchorZ),
-                em.launchX(), em.launchY(), em.launchZ(), count, em.tint, preAge, 0f, 0f, 0f);
+                em.launchX(), em.launchY(), em.launchZ(), count, em.tint, preAge, 0f, 0f, 0f, 0, 1f, 1f);
+    }
+
+    /**
+     * The FX runtime's spawn: world position, a normalized launch direction, births spread over {@code preAge},
+     * inherited velocity, an owner tag and per-instance size/speed multipliers. Does not flush sub-emitter
+     * events; call {@link #flushSubEvents()} after a batch.
+     */
+    int spawnOwned(CompiledEffect e, double x, double y, double z, float dx, float dy, float dz, int count,
+                   int tintRgba, float preAge, float ivx, float ivy, float ivz, int ownerTag,
+                   float sizeScale, float speedScale) {
+        return spawn(e, rel(x, anchorX), rel(y, anchorY), rel(z, anchorZ), dx, dy, dz, count, tintRgba, preAge,
+                ivx, ivy, ivz, ownerTag, sizeScale, speedScale);
+    }
+
+    void flushSubEvents() {
+        flushEvents();
     }
 
     int emitBurst(ParticleEmitter em, int count) {
@@ -414,7 +473,8 @@ public final class ParticleSystem {
      * {@code (ivx, ivy, ivz)} is added to every launch velocity (sub-emitter velocity inheritance).
      */
     private int spawn(CompiledEffect e, float ox, float oy, float oz, float dx, float dy, float dz,
-                      int count, int tintRgba, float preAge, float ivx, float ivy, float ivz) {
+                      int count, int tintRgba, float preAge, float ivx, float ivy, float ivz,
+                      int ownerTag, float sizeScale, float speedScale) {
         if (count <= 0) {
             return 0;
         }
@@ -445,6 +505,9 @@ public final class ParticleSystem {
         spawnedTotal += n;
         ensureSlots(live + n);
         e.live += n;
+        if (ownerTag != 0 && ownerListener != null) {
+            ownerListener.spawned(ownerTag, n);
+        }
 
         // Basis around the launch direction: precomputed for the effect's own direction.
         float ux, uy, uz, wx, wy, wz;
@@ -494,7 +557,7 @@ public final class ParticleSystem {
             float sinT = (float) Math.sqrt(Math.max(0f, 1f - cosT * cosT));
             float phi = r.nextFloat() * (float) (2 * Math.PI);
             float cp = (float) Math.cos(phi) * sinT, sp = (float) Math.sin(phi) * sinT;
-            float speed = r.range(e.speedMin, e.speedSpan);
+            float speed = r.range(e.speedMin, e.speedSpan) * speedScale;
             float lvx = (dx * cosT + ux * cp + wx * sp) * speed + ivx;
             float lvy = (dy * cosT + uy * cp + wy * sp) * speed + ivy;
             float lvz = (dz * cosT + uz * cp + wz * sp) * speed + ivz;
@@ -508,12 +571,13 @@ public final class ParticleSystem {
             vz[i] = lvz;
             age[i] = born;
             invLife[i] = 1f / r.range(e.lifeMin, e.lifeSpan);
-            size0[i] = r.range(e.startSizeMin, e.startSizeSpan);
-            size1[i] = r.range(e.endSizeMin, e.endSizeSpan);
+            size0[i] = r.range(e.startSizeMin, e.startSizeSpan) * sizeScale;
+            size1[i] = r.range(e.endSizeMin, e.endSizeSpan) * sizeScale;
             rot[i] = r.range(e.rotMin, e.rotSpan);
             spin[i] = r.range(e.spinMin, e.spinSpan);
             tint[i] = e.colorJitter > 0f ? scaleRgb(tintRgba, 1f - e.colorJitter * r.nextFloat()) : tintRgba;
             effectId[i] = id;
+            owner[i] = ownerTag;
             frameOffset[i] = (short) (e.textured && !e.animate && e.frameCount > 1 ? r.nextInt(e.frameCount) : 0);
             if (e.hasBirth) {
                 queueSubs(e, CompiledEffect.TRIGGER_BIRTH, i, 0f);
@@ -553,6 +617,8 @@ public final class ParticleSystem {
             float inherit = e.subInherit[s];
             evEffect[q] = (short) e.subTarget[s].id;
             evCount[q] = count;
+            int o = owner[i];
+            evOwner[q] = o == 0 ? 0 : o | OWNER_DERIVED;
             evX[q] = px[i];
             evY[q] = py[i];
             evZ[q] = pz[i];
@@ -567,7 +633,7 @@ public final class ParticleSystem {
         for (int q = 0; q < evTail; q++) {
             CompiledEffect target = effects[evEffect[q]];
             spawn(target, evX[q], evY[q], evZ[q], target.dirX, target.dirY, target.dirZ, evCount[q],
-                    0xFFFFFFFF, 0f, evVx[q], evVy[q], evVz[q]);
+                    0xFFFFFFFF, 0f, evVx[q], evVy[q], evVz[q], evOwner[q], 1f, 1f);
         }
         evTail = 0;
     }
@@ -637,6 +703,10 @@ public final class ParticleSystem {
             if (a * invLife[i] >= 1f) {
                 if (e.hasDeath) {
                     queueSubs(e, CompiledEffect.TRIGGER_DEATH, i, 0f);
+                }
+                int o = owner[i];
+                if (o != 0 && ownerListener != null) {
+                    ownerListener.died(o, px[i], py[i], pz[i], vx[i], vy[i], vz[i]);
                 }
                 kill(i);
                 continue; // the swapped-in particle is processed at the same index
@@ -727,8 +797,14 @@ public final class ParticleSystem {
         vx[i] = nvx;
         vy[i] = nvy;
         vz[i] = nvz;
-        if (impact > IMPACT_SPEED && e.hasCollision) {
-            queueSubs(e, CompiledEffect.TRIGGER_COLLISION, i, 0f);
+        if (impact > IMPACT_SPEED) {
+            if (e.hasCollision) {
+                queueSubs(e, CompiledEffect.TRIGGER_COLLISION, i, 0f);
+            }
+            int o = owner[i];
+            if (o != 0 && ownerListener != null) {
+                ownerListener.collided(o, x, y, z, nvx, nvy, nvz);
+            }
         }
     }
 
@@ -768,6 +844,7 @@ public final class ParticleSystem {
         tint[i] = tint[last];
         effectId[i] = effectId[last];
         frameOffset[i] = frameOffset[last];
+        owner[i] = owner[last];
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -781,6 +858,10 @@ public final class ParticleSystem {
     /** Life fraction 0..1 of live particle {@code i}. */
     public float lifeFraction(int i) { return age[checkLive(i)] * invLife[i]; }
     public ParticleEffect effectOf(int i) { return effects[effectId[checkLive(i)]].source; }
+    /** Owner tag of live particle {@code i} (0 = not spawned by an FX instance). */
+    int ownerOf(int i) { return owner[checkLive(i)]; }
+    CompiledEffect compiled(ParticleEffect effect) { return compile(effect); }
+    ParticleRandom random() { return random; }
 
     private int checkLive(int i) {
         if (i < 0 || i >= live) {
