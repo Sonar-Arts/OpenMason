@@ -1,0 +1,31 @@
+# Restores/saves Cenda's FetchContent deps dir (FastNoise2, zstd, Yoga, Lua) so a job only downloads
+# them when a pin changes. Without it every native job hit github.com and www.lua.org on every push,
+# and one unreachable host (lua.org timed out on a Windows runner, run 42515386813) failed the build.
+#
+# Use before "Configure Cenda" and configure with
+#   -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps" -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+# (disconnected: a restored git checkout must not `git fetch` to re-check its tag; a pin change edits
+# a hashed CMake file, which misses the cache and starts from an empty dir anyway).
+#
+# Cached: the *-src source trees and the *-subbuild download/populate projects (their stamps are what
+# lets FetchContent skip the download). NOT cached: the *-build dirs, which hold compiled objects of
+# the main project's build. The runner image version is in the key because a subbuild records its
+# generator/toolchain (a Visual Studio update would otherwise reject the restored subbuild).
+name: Cenda deps cache
+description: Cache Cenda's FetchContent dependency sources, keyed on the dependency pins.
+
+runs:
+  using: composite
+  steps:
+    - name: Cenda deps cache key
+      id: key
+      shell: bash
+      # ImageVersion is a runner machine variable, not part of the `env` context, so read it here.
+      run: echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v6
+      with:
+        path: |
+          ${{ runner.temp }}/cenda-deps
+          !${{ runner.temp }}/cenda-deps/*-build
+        key: cenda-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.key.outputs.image }}-${{ hashFiles('openmason-engine/cenda/**/CMakeLists.txt', 'openmason-engine/cenda/cmake/*.cmake', 'openmason-engine/cenda/native/kernels/lua/*.cmake') }}

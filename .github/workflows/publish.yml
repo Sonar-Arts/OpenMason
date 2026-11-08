@@ -64,9 +64,13 @@ jobs:
         with:
           ref: ${{ env.PUBLISH_SHA }}
 
+      - uses: ./.github/actions/cenda-deps-cache
+
       - name: Configure Cenda (release)
         working-directory: openmason-engine/cenda
-        run: cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps"
+        run: >
+          cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps"
+          -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
 
       - name: Build Cenda
         working-directory: openmason-engine/cenda

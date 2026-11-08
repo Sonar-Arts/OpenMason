@@ -31,10 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: ./.github/actions/cenda-deps-cache
+
       - name: Configure Cenda (release)
         working-directory: openmason-engine/cenda
-        # FETCHCONTENT_BASE_DIR overrides the preset's $HOME cache.
-        run: cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps" -DBUILD_TESTING=OFF
+        # FETCHCONTENT_BASE_DIR overrides the preset's $HOME cache (restored by cenda-deps-cache).
+        run: >
+          cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps"
+          -DFETCHCONTENT_UPDATES_DISCONNECTED=ON -DBUILD_TESTING=OFF
 
       - name: Build Cenda
         working-directory: openmason-engine/cenda
@@ -83,10 +87,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: ./.github/actions/cenda-deps-cache
+
       - name: Configure Cenda (release)
         working-directory: openmason-engine/cenda
-        # FETCHCONTENT_BASE_DIR overrides the preset's $HOME cache, which Windows runners lack.
-        run: cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps"
+        # FETCHCONTENT_BASE_DIR overrides the preset's $HOME cache, which Windows runners lack
+        # (restored by cenda-deps-cache).
+        run: >
+          cmake --preset release -DFETCHCONTENT_BASE_DIR="${{ runner.temp }}/cenda-deps"
+          -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
 
       - name: Build Cenda
         working-directory: openmason-engine/cenda
