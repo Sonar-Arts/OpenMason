@@ -66,6 +66,9 @@ public interface PluginContext {
     /** Game-data sections of the SBO/SBE editor and export windows (#431). */
     Registrar<AssetSectionContribution<?>> assetSections();
 
+    /** Containers FX systems export to: a game's own shipped FX format (#102). */
+    Registrar<com.openmason.api.fx.FxExportTarget> fxExporters();
+
     /** Non-model content for the Model Editor viewport. */
     Registrar<ViewportContentProvider> viewportContent();
 

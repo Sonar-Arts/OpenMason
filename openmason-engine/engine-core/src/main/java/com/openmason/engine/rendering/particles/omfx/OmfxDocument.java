@@ -200,6 +200,11 @@ public record OmfxDocument(String author, FxSystem system, List<OmfxSprite> spri
                 : new OmfxDocument(author, system, next, soundFiles, extensions, extraFiles);
     }
 
+    /** With {@code next} as the manifest's game data (extensions + foreign fields), e.g. a plugin section's edit. */
+    public OmfxDocument withExtensions(FormatExtensions next) {
+        return new OmfxDocument(author, system, sprites, soundFiles, next, extraFiles);
+    }
+
     /** With {@code name} as the author. */
     public OmfxDocument withAuthor(String name) {
         return new OmfxDocument(name, system, sprites, soundFiles, extensions, extraFiles);

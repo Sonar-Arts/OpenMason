@@ -9,7 +9,8 @@ import java.util.function.Function;
  *
  * <p>Tabs (core and contributed) are ordered by {@code order}; the core uses these slots:
  * SBO editor Metadata 0, States 200, Sounds 500; SBO export Metadata 0, States 200; SBE editor
- * Metadata 0, States 100, Variants 200, Sounds 300; SBE export Metadata 0, States 100, Variants 200.
+ * Metadata 0, States 100, Variants 200, Sounds 300; SBE export Metadata 0, States 100, Variants 200; Export FX (#102)
+ * Export 0.
  * Metadata-placed sections are drawn in {@code order} too.
  *
  * @param id      unique id ({@code <plugin>.<surface>.<section>})

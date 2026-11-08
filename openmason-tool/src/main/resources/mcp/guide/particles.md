@@ -71,6 +71,14 @@ captures show a magenta checker).
 - `fx_capture {seconds, size, yaw, pitch, distance}`: the engine renderer's picture at that moment
   (floor grid = 1 block). Use a time where the effect is fully developed (peakAt from fx_simulate).
 
+## Game data and export
+A game plugin may register its own shipped FX container (`fx_presets` -> `exporters`; `deploys:true` = it
+writes into the game target's checkout). Game data lives in the manifest `extensions` under the game's
+namespace: `fx_set {extensions:{"<ns>:<name>": {...}}}` (null removes); `fx_get` shows it. `fx_export
+{exporter?}` checks the system compiles, asks the container for problems, then writes: without `path` a
+game container deploys into its asset folder (the write policy may ask the user), `path` exports elsewhere.
+`openmason.omfx` is always registered (the neutral source).
+
 ## Files
 `fx_save {path?}`: bare names land in the project's `Particles/`; documents opened from a v2 file
 save back to it. `fx_open` reads v2, or migrates a v1 library (one document per effect, never saved

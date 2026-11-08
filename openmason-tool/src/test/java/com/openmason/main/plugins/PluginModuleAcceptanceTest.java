@@ -46,7 +46,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * #379 acceptance: a third-party plugin, as a real JPMS module ({@code provides
  * com.openmason.api.OpenMasonPlugin}), compiled here and loaded through its own {@link ModuleLayer},
- * contributes a workspace, a menu command, an MCP tool and a file type through
+ * contributes a workspace, a menu command, an MCP tool, a file type and an FX export target (#102) through
  * {@code PluginContext} only; the editor's registries, tool surface, file dialogs' kinds and
  * Project Browser see them like the built-in ones.
  */
@@ -68,6 +68,7 @@ class PluginModuleAcceptanceTest {
             import com.openmason.api.PluginContext;
             import com.openmason.api.files.FileOpener;
             import com.openmason.api.files.FileType;
+            import com.openmason.api.fx.FxExportTarget;
             import com.openmason.api.knowledge.GuideTopic;
             import com.openmason.api.mcp.McpToolContribution;
             import com.openmason.api.menu.MenuItem;
@@ -107,6 +108,11 @@ class PluginModuleAcceptanceTest {
                             .withSave("project", "Greetings", "greeting")
                             .withBrowse(".HELLO Greeting", 50, "", "Greetings"));
                     c.fileOpeners().register(new FileOpener("hello", path -> greet(c, "open " + path.getFileName())));
+
+                    c.fxExporters().register(new FxExportTarget("hello.fx", "Hello FX (.hellofx)",
+                            FileType.of("hellofx", "Hello FX", ".hellofx").withSave("target", "hellofx", "fx"),
+                            "hello", in -> ("HELLOFX " + in.id() + " x" + in.system().emitters().size())
+                                    .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
                 }
 
                 private static void greet(PluginContext c, String what) {
@@ -213,6 +219,34 @@ class PluginModuleAcceptanceTest {
         McpGuide guide = new McpGuide(registries.guideTopics().all());
         assertEquals(List.of("hello"), guide.topics());
         assertTrue(guide.topic("hello").contains("Greet politely"));
+    }
+
+    @Test
+    void itsFxExporterIsListedAndTheEditorWritesThroughIt() throws Exception {
+        loadPlugin();
+        assertEquals(List.of("hello.fx"), registries.fxExporters().all().stream()
+                .map(com.openmason.api.fx.FxExportTarget::id).toList());
+        assertEquals("hello", registries.fxExporters().ownerOf("hello.fx").orElseThrow());
+
+        // the Export FX window over the editor's registries, a project targeting the plugin's game
+        com.openmason.main.systems.particles.export.FxExportService.setSource(registries.fxExporters()::all);
+        try {
+            Path game = Files.createDirectories(project.resolve("game"));
+            var helloGame = com.openmason.api.target.GameTarget.builder("hello", "Hello Game")
+                    .resources(com.openmason.api.target.ResourceRoot.at(game))
+                    .folders(com.openmason.api.target.AssetFolders.builder().base("hellofx", "fx").build()).build();
+            var service = new com.openmason.main.systems.particles.export.FxExportService(
+                    com.openmason.main.systems.io.WriteRoots.forTarget(project, helloGame, project.resolve("exports")));
+            var window = new com.openmason.main.systems.particles.export.FxExportController(service);
+            window.open(com.openmason.engine.rendering.particles.omfx.OmfxDocument.of(
+                    com.openmason.engine.rendering.particles.FxPresets.EXPLOSION), List.of());
+            assertEquals("hello.fx", window.target().id(), "listed and preselected");
+            window.deploy();
+            assertEquals("HELLOFX explosion x4", Files.readString(game.resolve("fx/explosion.hellofx")),
+                    () -> window.message());
+        } finally {
+            com.openmason.main.systems.particles.export.FxExportService.setSource(null);
+        }
     }
 
     @Test

@@ -25,6 +25,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -236,6 +237,65 @@ class FxToolsEndToEndTest {
         Exception e = assertThrows(IllegalStateException.class,
                 () -> registry.get("fx_capture").handler().call(mapper.readTree("{\"size\":128}")));
         assertTrue(e.getMessage().contains("needs the editor's GL context"), e.getMessage());
+    }
+
+    @Test
+    void anAgentExportsThroughAGamesContainerWithItsGameData() throws Exception {
+        Path game = Files.createDirectories(tmp.resolve("game-tree"));
+        var testGame = com.openmason.api.target.GameTarget.builder("testgame", "Test")
+                .resources(com.openmason.api.target.ResourceRoot.at(game))
+                .folders(com.openmason.api.target.AssetFolders.builder().base("tfx", "fx").build()).build();
+        AssetWriteService writes = new AssetWriteService(null, new WriteSandbox(WriteRoots.forTarget(project, testGame,
+                Files.createDirectories(tmp.resolve("exports")))), () -> WritePolicy.NEVER_ASK);
+        McpToolRegistry tools = new McpToolRegistry();
+        new FxToolDefinitions(new FxDocumentService(writes), new FxCaptureService(), mapper).registerAll(tools);
+        var container = new com.openmason.api.fx.FxExportTarget("testgame.tfx", "Test FX",
+                com.openmason.api.files.FileType.of("tfx", "Test FX", ".tfx").withSave("target", "tfx", "fx"),
+                "testgame", in -> (in.id() + " " + in.document().extensions().tree("testgame:fx").orElse(null))
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        com.openmason.main.systems.particles.export.FxExportService.setSource(() -> List.of(container));
+        try {
+            java.util.function.BiFunction<String, String, JsonNode> run = (tool, json) -> {
+                try {
+                    return mapper.valueToTree(tools.get(tool).handler().call(mapper.readTree(json)));
+                } catch (Exception e) {
+                    throw new IllegalArgumentException(e.getMessage(), e);
+                }
+            };
+            assertEquals("testgame.tfx", run.apply("fx_presets", "{}").get("exporters").get(0).get("id").asText());
+            run.apply("fx_new", "{\"id\":\"burst\",\"preset\":\"sparks\"}");
+            run.apply("fx_set", "{\"extensions\":{\"testgame:fx\":{\"trigger\":\"break\"}}}");
+            assertEquals("break", run.apply("fx_get", "{\"section\":\"light\"}").get("extensions")
+                    .get("testgame:fx").get("trigger").asText());
+
+            JsonNode exported = run.apply("fx_export", "{}");
+            assertEquals("testgame.tfx", exported.get("exporter").asText());
+            assertEquals("burst {\"trigger\":\"break\"}", Files.readString(game.resolve("fx/burst.tfx")),
+                    "deployed into the game's fx folder with the game data");
+
+            JsonNode elsewhere = run.apply("fx_export", "{\"path\":\"exports:copy.tfx\"}");
+            assertTrue(elsewhere.get("saved").asText().endsWith("copy.tfx"));
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> run.apply("fx_export", "{\"exporter\":\"testgame.tfz\"}"));
+            assertTrue(e.getMessage().contains("Did you mean 'testgame.tfx'"), e.getMessage());
+        } finally {
+            com.openmason.main.systems.particles.export.FxExportService.setSource(null);
+        }
+    }
+
+    @Test
+    void exportWithoutAGameTargetSaysWhy() throws Exception {
+        var container = new com.openmason.api.fx.FxExportTarget("testgame.tfx", "Test FX",
+                com.openmason.api.files.FileType.of("tfx", "Test FX", ".tfx").withSave("target", "tfx", "fx"),
+                "testgame", in -> new byte[]{1});
+        com.openmason.main.systems.particles.export.FxExportService.setSource(() -> List.of(container));
+        try {
+            call("fx_new", "{\"id\":\"x\",\"preset\":\"sparks\"}");
+            assertTrue(fails("fx_export", "{}").getMessage().contains("the project has no game target"));
+        } finally {
+            com.openmason.main.systems.particles.export.FxExportService.setSource(null);
+        }
+        assertTrue(fails("fx_export", "{}").getMessage().contains("No FX export target is registered"));
     }
 
     // ------------------------------------------------------------------------------------------------

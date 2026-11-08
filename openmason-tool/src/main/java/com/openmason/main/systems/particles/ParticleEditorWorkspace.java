@@ -61,6 +61,8 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
     private final FileDialogService fileDialogs;
     private final StatusService status;
     private final WorkspaceState workspaces;
+    /** Export FX (#102): the selected effect through the registered export targets. */
+    private final com.openmason.main.systems.particles.export.FxExportWindow exportWindow;
     private Runnable resetLayout = () -> { };
     private ParticlePreview preview;
 
@@ -82,6 +84,10 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
     private ParticleEffect.Builder edit;
 
     public ParticleEditorWorkspace(FileDialogService fileDialogs, StatusService status, WorkspaceState workspaces) {
+        this.exportWindow = new com.openmason.main.systems.particles.export.FxExportWindow(
+                new com.openmason.main.systems.particles.export.FxExportController(
+                        new com.openmason.main.systems.particles.export.FxExportService(
+                                com.openmason.main.systems.io.WriteRoots.forInterface(null))), fileDialogs);
         this.fileDialogs = fileDialogs;
         this.status = status;
         this.workspaces = workspaces;
@@ -189,6 +195,13 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
             });
         }
         ImGui.sameLine();
+        if (ImGui.button("Export FX...") && hasSelection) {
+            model.selected().ifPresent(this::openExport);
+        }
+        if (ImGui.isItemHovered()) {
+            ImGui.setTooltip("Export the selected effect as an FX system: .omfx v2, or a game's own format");
+        }
+        ImGui.sameLine();
         if (ImGui.button("Reset Layout")) {
             resetLayout.run();
         }
@@ -223,7 +236,25 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
             wasShown = true;
             ImGui.setWindowFocus(PREVIEW_WINDOW);
         }
+        exportWindow.render();
         renderUnsavedDialog();
+    }
+
+    /** Opens Export FX on {@code effect} (a one-emitter system, its sprite files embedded). */
+    void openExport(ParticleEffect effect) {
+        FxExportSource source = FxExportSource.of(effect, documentFolder());
+        List<String> notes = new java.util.ArrayList<>();
+        notes.add("Exports '" + effect.name() + "' as a one-emitter FX system.");
+        if (!source.missing().isEmpty()) {
+            notes.add("Sprite files not found, exported as names the game must provide: "
+                    + String.join(", ", source.missing()));
+        }
+        exportWindow.show(source.document(), notes);
+    }
+
+    /** The Export FX window's state (tests). */
+    com.openmason.main.systems.particles.export.FxExportController exportController() {
+        return exportWindow.controller();
     }
 
     /** The user closes the tab: unsaved changes ask Save / Don't Save / Cancel first. */
@@ -247,6 +278,7 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
         if (model.isDirty() || model.file().isPresent()) {
             model.newDocument();
         }
+        exportWindow.controller().close();
         error = null;
     }
 

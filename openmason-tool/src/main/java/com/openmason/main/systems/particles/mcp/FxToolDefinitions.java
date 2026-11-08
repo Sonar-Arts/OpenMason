@@ -34,22 +34,19 @@ public final class FxToolDefinitions {
 
     public void registerAll(McpToolRegistry registry) {
         registry.register(new McpTool("fx_presets",
-                "Built-in FX systems (campfire, explosion, firework) and particle effects (smoke, fire, sparks...) "
-                        + "to start an FX document from (fx_new preset).",
+                "Built-in FX systems and effects (fx_new preset), and registered export containers.",
                 schema().build(),
                 args -> docs.presets()));
 
         registry.register(new McpTool("fx_new",
-                "New in-memory FX system document (.omfx v2) named 'id': a copy of 'preset' (FX system, or an "
-                        + "effect as a one-emitter system), else one default emitter. Shapes: describe_api "
+                "New in-memory FX document (.omfx v2) 'id', copied from 'preset'. Guide: describe_api "
                         + "topic:'particles'.",
                 schema().str("id", "System name / document id").str("preset", "Preset name (fx_presets)")
                         .required("id").build(),
                 args -> docs.create(McpArgs.reqString(args, "id"), optString(args, "preset"))));
 
         registry.register(new McpTool("fx_open",
-                "Open an .omfx: v2 as one document (saved back in place), v1 particle library migrated to one "
-                        + "document per effect (sprites embedded from files beside it; warnings listed).",
+                "Open an .omfx: v2 as one document; a v1 library migrates to one document per effect.",
                 schema().str("path", "File (absolute or project:/exports:/target: path)").required("path").build(),
                 args -> docs.open(McpArgs.reqString(args, "path"))));
 
@@ -59,17 +56,14 @@ public final class FxToolDefinitions {
                 args -> docs.documents()));
 
         registry.register(new McpTool("fx_get",
-                "Read a document as its system.json (the file's own JSON; fx_set takes the same shape), or one "
-                        + "'section' (effects, emitters, parameters, bindings, events, light, sounds, cues, "
-                        + "effect:<name>). Also sprites and external texture names.",
+                "A document as its system.json (fx_set's shape), or one 'section' (emitters, light, "
+                        + "effect:<name>...), plus sprites and game data.",
                 schema().str("id", "Document (omit when one is open)").str("section", "One section only").build(),
                 args -> docs.get(optString(args, "id"), optString(args, "section"))));
 
         registry.register(new McpTool("fx_set",
-                "Edit a document atomically (validated like a file; one undo step). effects/emitters/parameters: "
-                        + "entries upserted by 'name' (given members replace; 'rename' renames and fixes references). "
-                        + "remove:{effects:[..],emitters:[..],parameters:[..]}. bindings/events/cues/sounds: replace "
-                        + "the section. light: object, or null to remove.",
+                "Edit atomically (one undo step). effects/emitters/parameters upsert by name ('rename' fixes "
+                        + "references); remove:{section:[names]}; other sections replace whole.",
                 schema().str("id", "Document (omit when one is open)")
                         .arr("effects", "object", "Effect patches {name, ...members, rename?}")
                         .arr("emitters", "object", "Emitter patches {name, ...members, rename?}")
@@ -81,6 +75,7 @@ public final class FxToolDefinitions {
                         .arr("sounds", "object", "Whole sounds section")
                         .obj("light", "The light (null removes)")
                         .str("author", "Author")
+                        .obj("extensions", "Game data {\"ns:name\": value | null}")
                         .build(),
                 args -> docs.set(optString(args, "id"), args)));
 
@@ -99,17 +94,15 @@ public final class FxToolDefinitions {
                 args -> docs.undo(optString(args, "id"), optBool(args, "redo", false))));
 
         registry.register(new McpTool("fx_simulate",
-                "Run a document headlessly in the engine FX runtime and report per-time-sample live counts per "
-                        + "effect, bounds (min/max), light, host events, sounds, finish time and warnings (emitters "
-                        + "that never spawned, budget drops). Particles collide with a floor at y=0 unless no_floor.",
+                "Run a document headlessly in the engine FX runtime: live counts per effect over time, bounds, "
+                        + "light, host events, sounds, warnings. Floor at y=0 unless no_floor.",
                 simulationSchema().intg("samples", "Timeline samples (default 8)").build(),
                 args -> FxSimulation.report(docs.document(docs.resolveId(optString(args, "id"))),
                         simulation(args, 3f))));
 
         registry.register(new McpTool("fx_capture",
-                "PNG of a document after 'seconds' of simulation (same options as fx_simulate), drawn by the engine "
-                        + "particle renderer over a 1-block floor grid; the camera frames the particles unless yaw/"
-                        + "pitch (radians), distance or target are given.",
+                "PNG of a document after 'seconds' (fx_simulate options), drawn by the engine renderer; "
+                        + "auto-framed unless yaw/pitch/distance/target.",
                 simulationSchema().intg("size", "Image size px (128..1024, default 512)")
                         .num("yaw", "Orbit yaw, radians").num("pitch", "Orbit pitch, radians")
                         .num("distance", "Camera distance, blocks").vec3("target", "Look-at point").build(),
@@ -126,12 +119,20 @@ public final class FxToolDefinitions {
                 }));
 
         registry.register(new McpTool("fx_save",
-                "Save a document as .omfx v2: to its own file, else 'path' (bare name -> project Particles/ folder), "
-                        + "or let the user pick (prompt:true). Existing files need overwrite:true.",
+                "Save as .omfx v2: its own file, else 'path' (bare name -> project Particles/), or prompt:true.",
                 schema().str("id", "Document (omit when one is open)").str("path", "Target file")
                         .bool("prompt", "Ask the user where").bool("overwrite", "Replace an existing file").build(),
                 args -> docs.save(optString(args, "id"), optString(args, "path"), optBool(args, "prompt", false),
                         optBool(args, "overwrite", false))));
+
+        registry.register(new McpTool("fx_export",
+                "Export a document through a registered container (fx_presets exporters; omit when one game format "
+                        + "is registered). Without path a game format deploys into the game target's asset folder.",
+                schema().str("id", "Document (omit when one is open)").str("exporter", "Exporter id")
+                        .str("path", "Target file").bool("prompt", "Ask the user where")
+                        .bool("overwrite", "Replace an existing file").build(),
+                args -> docs.export(optString(args, "id"), optString(args, "exporter"), optString(args, "path"),
+                        optBool(args, "prompt", false), optBool(args, "overwrite", false))));
 
         registry.register(new McpTool("fx_close",
                 "Close a document (unsaved changes need discard:true).",

@@ -88,4 +88,45 @@ class ParticleEditorWorkspaceTest {
         editor.openFile(file);
         assertTrue(editor.model().library().contains("mine"), "the unsaved document is not replaced yet");
     }
+
+    @Test
+    void exportFxListsTheGamesContainerAndDeploysTheSelectedEffectWithItsSprites(@TempDir Path dir) throws Exception {
+        // a library with an effect whose sprite file sits next to it
+        Path lib = dir.resolve("lib/mine.omfx");
+        Files.createDirectories(lib.getParent());
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(2, 2,
+                java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        javax.imageio.ImageIO.write(img, "png", lib.resolveSibling("dot.png").toFile());
+        Files.writeString(lib, "{ \"effects\": [ { \"name\": \"glow\", \"sprite\": \"texture\", "
+                + "\"textures\": [\"dot.png\", \"gone.png\"] } ] }");
+        editor.openFile(lib);
+        editor.model().select("glow");
+
+        Path game = Files.createDirectories(dir.resolve("game"));
+        com.openmason.api.target.GameTarget testGame = com.openmason.api.target.GameTarget.builder("testgame", "Test")
+                .resources(com.openmason.api.target.ResourceRoot.at(game))
+                .folders(com.openmason.api.target.AssetFolders.builder().base("tfx", "fx").build()).build();
+        com.openmason.api.fx.FxExportTarget container = new com.openmason.api.fx.FxExportTarget("testgame.tfx", null,
+                com.openmason.api.files.FileType.of("tfx", "Test FX", ".tfx").withSave("target", "tfx", "fx"),
+                "testgame", in -> (in.id() + " " + in.sprites().keySet() + " " + in.externalTextures())
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var targets = com.openmason.main.systems.target.GameTargets.shared();
+        targets.setSource(() -> java.util.List.of(testGame));
+        targets.projectOpened("testgame");
+        com.openmason.main.systems.particles.export.FxExportService.setSource(() -> java.util.List.of(container));
+        try {
+            editor.openExport(editor.model().selected().orElseThrow());
+            var export = editor.exportController();
+            assertTrue(export.isOpen());
+            assertEquals("Test FX (.tfx)", export.target().displayName());
+            assertTrue(export.notes().get(1).contains("gone.png"), "missing sprite files are reported");
+            export.deploy();
+            assertFalse(export.failed(), export.message());
+            assertEquals("glow [dot.png] [gone.png]", Files.readString(game.resolve("fx/glow.tfx")));
+        } finally {
+            com.openmason.main.systems.particles.export.FxExportService.setSource(null);
+            targets.projectClosed();
+            targets.setSource(java.util.List::of);
+        }
+    }
 }

@@ -348,6 +348,11 @@ public final class CoreFeatures {
                 editor::show));
         context.fileTypes().register(BuiltinFileTypes.OMFX);
         context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMFX.id(), editor::openFile));
+        // The neutral source format is itself an export target (#102): Export works without a game plugin, and the
+        // plugin point is exercised by the core. Game plugins add their shipped containers the same way.
+        context.fxExporters().register(new com.openmason.api.fx.FxExportTarget("openmason.omfx",
+                "Open Mason FX (.omfx v2)", BuiltinFileTypes.OMFX, null,
+                in -> com.openmason.engine.rendering.particles.omfx.OmfxCodec.write(in.document())));
         // Agents author FX systems (.omfx v2) headlessly; the tab still edits v1 libraries until OM #104.
         context.mcpTools().register(BuiltinMcpTools.PARTICLES);
         context.guideTopics().register(BuiltinKnowledge.topic("particles"));

@@ -14,7 +14,8 @@ public interface AssetSectionHost {
 
     /**
      * The SBO object type in lower case ({@code block}, {@code item}, {@code entity},
-     * {@code decoration}, {@code particle}, {@code other}); empty on the SBE surfaces.
+     * {@code decoration}, {@code particle}, {@code other}); empty on the SBE surfaces; {@code fx} on the
+     * Export FX surface (the object id is then the FX system's name).
      */
     String objectType();
 

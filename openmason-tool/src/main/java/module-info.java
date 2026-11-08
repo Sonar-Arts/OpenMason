@@ -91,6 +91,7 @@ module com.openmason {
     exports com.openmason.api;
     exports com.openmason.api.asset;
     exports com.openmason.api.files;
+    exports com.openmason.api.fx;
     exports com.openmason.api.knowledge;
     exports com.openmason.api.lifecycle;
     exports com.openmason.api.mcp;

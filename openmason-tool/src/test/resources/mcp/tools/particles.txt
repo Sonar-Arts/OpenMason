@@ -1,6 +1,7 @@
 fx_capture
 fx_close
 fx_documents
+fx_export
 fx_get
 fx_new
 fx_open

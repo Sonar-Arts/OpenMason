@@ -1,5 +1,6 @@
 package com.openmason.api.asset;
 
+import com.openmason.engine.rendering.particles.omfx.OmfxDocument;
 import com.openmason.engine.format.sbe.SBEFormat;
 import com.openmason.engine.format.sbo.SBOFormat;
 
@@ -29,6 +30,14 @@ public final class AssetSurface<M> {
     public static final AssetSurface<SBEFormat.ExportParameters> SBE_EXPORT =
             new AssetSurface<>("sbe.export", "Export SBE", SBEFormat.ExportParameters.class);
 
+    /**
+     * The Export FX window (#102): the FX system being exported, as its {@code .omfx} v2 document. Sections keep
+     * their game data in the document's manifest extensions ({@code OmfxDocument.withExtensions}) under their own
+     * namespace; the game's {@code FxExporter} reads it back from there.
+     */
+    public static final AssetSurface<OmfxDocument> FX_EXPORT =
+            new AssetSurface<>("fx.export", "Export FX", OmfxDocument.class);
+
     private final String id;
     private final String displayName;
     private final Class<M> modelType;
@@ -53,7 +62,7 @@ public final class AssetSurface<M> {
 
     /** Every surface, in a stable order. */
     public static List<AssetSurface<?>> all() {
-        return List.of(SBO_EDITOR, SBO_EXPORT, SBE_EDITOR, SBE_EXPORT);
+        return List.of(SBO_EDITOR, SBO_EXPORT, SBE_EDITOR, SBE_EXPORT, FX_EXPORT);
     }
 
     @Override

@@ -48,6 +48,8 @@ public final class EditorRegistries {
     private final Contributions<PreferencePage> preferencePages = new Contributions<>("preference page", PreferencePage::id);
     private final Contributions<AssetSectionContribution<?>> assetSections =
             new Contributions<>("asset section", AssetSectionContribution::id);
+    private final Contributions<com.openmason.api.fx.FxExportTarget> fxExporters =
+            new Contributions<>("FX export target", com.openmason.api.fx.FxExportTarget::id);
     private final Contributions<ViewportContentProvider> viewportContent =
             new Contributions<>("viewport content", ViewportContentProvider::id);
     private final Contributions<ProjectTemplate> templates = new Contributions<>("project template", ProjectTemplate::getId);
@@ -107,6 +109,10 @@ public final class EditorRegistries {
         return assetSections;
     }
 
+    public Contributions<com.openmason.api.fx.FxExportTarget> fxExporters() {
+        return fxExporters;
+    }
+
     public Contributions<ViewportContentProvider> viewportContent() {
         return viewportContent;
     }
@@ -130,7 +136,8 @@ public final class EditorRegistries {
     /** Every contribution list, for owner-wide operations. */
     public List<Contributions<?>> all() {
         return List.of(workspaces, menus, menuEntries, commands, fileTypes, fileOpeners, mcpTools, guideTopics,
-                knowledgePacks, preferencePages, assetSections, viewportContent, templates, gameTargets, themes, lifecycle);
+                knowledgePacks, preferencePages, assetSections, fxExporters, viewportContent, templates, gameTargets, themes,
+                lifecycle);
     }
 
     /**
@@ -223,6 +230,11 @@ public final class EditorRegistries {
             @Override
             public Registrar<AssetSectionContribution<?>> assetSections() {
                 return assetSections.registrar(owner);
+            }
+
+            @Override
+            public Registrar<com.openmason.api.fx.FxExportTarget> fxExporters() {
+                return fxExporters.registrar(owner);
             }
 
             @Override

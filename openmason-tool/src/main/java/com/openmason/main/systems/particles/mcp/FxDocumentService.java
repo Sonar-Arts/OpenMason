@@ -3,6 +3,8 @@ package com.openmason.main.systems.particles.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.openmason.api.fx.FxExportTarget;
+import com.openmason.engine.format.ext.FormatExtensions;
 import com.openmason.engine.format.omt.OMTReader;
 import com.openmason.engine.format.omt.TextureBytes;
 import com.openmason.engine.rendering.particles.FxEmitter;
@@ -21,6 +23,7 @@ import com.openmason.main.systems.io.BuiltinFileTypes;
 import com.openmason.main.systems.io.WriteKind;
 import com.openmason.main.systems.mcp.McpAck;
 import com.openmason.main.systems.mcp.McpErrors;
+import com.openmason.main.systems.particles.export.FxExportService;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -95,7 +98,19 @@ public final class FxDocumentService {
             }
             effects.add(m);
         }
-        return Map.of("systems", systems, "effects", effects);
+        List<Map<String, Object>> exporters = new ArrayList<>();
+        for (FxExportTarget t : FxExportService.registered()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", t.id());
+            m.put("name", t.displayName());
+            m.put("extension", t.fileType().extension());
+            m.put("deploys", t.deploys());
+            if (t.gameTargetId() != null) {
+                m.put("gameTarget", t.gameTargetId());
+            }
+            exporters.add(m);
+        }
+        return Map.of("systems", systems, "effects", effects, "exporters", exporters);
     }
 
     /**
@@ -233,7 +248,11 @@ public final class FxDocumentService {
             out.put("externalTextures", external);
         }
         if (!s.doc.extensions().keys().isEmpty()) {
-            out.put("extensions", s.doc.extensions().keys());
+            Map<String, Object> ext = new LinkedHashMap<>();
+            for (String key : s.doc.extensions().keys()) {
+                ext.put(key, s.doc.extensions().tree(key).orElse(null));
+            }
+            out.put("extensions", ext);
         }
         return out;
     }
@@ -286,6 +305,19 @@ public final class FxDocumentService {
         if (edit.hasNonNull("author")) {
             next = next.withAuthor(edit.get("author").asText());
             changed.add("author");
+        }
+        JsonNode ext = edit.get("extensions");
+        if (ext != null && !ext.isNull()) {
+            if (!ext.isObject()) {
+                throw new IllegalArgumentException("'extensions' must be {\"<namespace>:<name>\": value | null}");
+            }
+            FormatExtensions data = next.extensions();
+            for (var it = ext.fields(); it.hasNext(); ) {
+                var f = it.next();
+                data = f.getValue().isNull() ? data.without(f.getKey()) : data.withTree(f.getKey(), f.getValue());
+            }
+            next = next.withExtensions(data);
+            changed.add("extensions");
         }
         if (changed.isEmpty()) {
             throw new IllegalArgumentException("Nothing to change: pass effects, emitters, parameters, remove, "
@@ -389,6 +421,72 @@ public final class FxDocumentService {
         }
         return McpAck.ok().with("id", docId).with("saved", outcome.path())
                 .with("promptedUser", Boolean.TRUE.equals(outcome.promptedUser()));
+    }
+
+    /**
+     * Exports the document through a registered FX export target (#102): a game plugin's container, or the neutral
+     * {@code openmason.omfx}. Without a path a deploying target writes into the game target's checkout (its asset
+     * folder; the write policy decides whether the user is asked), any other target into its default folder.
+     */
+    public Object export(String id, String exporterId, String path, boolean prompt, boolean overwrite)
+            throws IOException {
+        if (writes == null) {
+            throw new IllegalStateException("file access is unavailable (no write sandbox)");
+        }
+        FxExportTarget target = exporter(exporterId);
+        OmfxDocument snapshot;
+        String docId;
+        synchronized (this) {
+            Session s = session(id);
+            snapshot = s.doc;
+            docId = idOf(s);
+        }
+        FxExportService service = new FxExportService(writes.sandbox().roots());
+        if (path == null && !prompt && target.deploys()) {
+            FxExportService.Deployment d = service.deployment(target);
+            if (!d.deployable()) {
+                throw new IllegalArgumentException("Cannot deploy: " + d.reason() + ". Pass path (e.g. exports:"
+                        + FxExportService.fileName(target, docId) + ") to export elsewhere.");
+            }
+        }
+        FxExportService.Plan plan = service.plan(target, snapshot);
+        if (!plan.ok()) {
+            throw new IllegalArgumentException(target.displayName() + " cannot carry '" + docId + "': "
+                    + String.join("; ", plan.problems()));
+        }
+        WriteKind kind = WriteKind.of(target.fileType());
+        String raw = path != null ? path : (prompt ? null : plan.fileName());
+        WriteOutcome outcome = writes.save(WriteRequest.of(kind, raw, prompt, overwrite, plan.fileName())
+                .withDetails(List.of("FX system " + docId + " as " + target.displayName())), t -> {
+            service.writeTo(plan, t);
+            return true;
+        });
+        if (!outcome.ok()) {
+            return outcome;
+        }
+        return McpAck.ok().with("id", docId).with("exporter", target.id()).with("saved", outcome.path())
+                .with("bytes", plan.bytes().length)
+                .with("externalTextures", plan.input().externalTextures().isEmpty() ? null
+                        : plan.input().externalTextures())
+                .with("promptedUser", Boolean.TRUE.equals(outcome.promptedUser()));
+    }
+
+    /** The target {@code id}, or the only game container when omitted. */
+    private static FxExportTarget exporter(String id) {
+        List<FxExportTarget> all = FxExportService.registered();
+        List<String> ids = all.stream().map(FxExportTarget::id).toList();
+        if (id != null && !id.isBlank()) {
+            return all.stream().filter(t -> t.id().equals(id)).findFirst()
+                    .orElseThrow(() -> McpErrors.unknownEntity("exporter", id, ids, "fx_presets"));
+        }
+        List<FxExportTarget> games = all.stream().filter(FxExportTarget::deploys).toList();
+        if (games.size() == 1) {
+            return games.get(0);
+        }
+        if (all.isEmpty()) {
+            throw new IllegalArgumentException("No FX export target is registered; fx_save writes .omfx");
+        }
+        throw new IllegalArgumentException("Pass exporter (one of " + String.join(", ", ids) + "; see fx_presets)");
     }
 
     public synchronized Object close(String id, boolean discard) {
