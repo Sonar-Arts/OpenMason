@@ -183,6 +183,7 @@ public record FxSystem(String name, List<FxEmitter> emitters, List<FxParameter> 
         public Builder emitter(FxEmitter e) { emitters.add(e); return this; }
         public Builder emitters(List<FxEmitter> list) { emitters.clear(); emitters.addAll(list); return this; }
         public Builder parameter(FxParameter p) { parameters.add(p); return this; }
+        public Builder parameters(List<FxParameter> list) { parameters.clear(); parameters.addAll(list); return this; }
         public Builder bind(FxBinding b) { bindings.add(b); return this; }
         public Builder on(FxEventHandler h) { handlers.add(h); return this; }
         public Builder light(FxLight l) { this.light = l; return this; }

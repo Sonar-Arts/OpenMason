@@ -315,6 +315,26 @@ public final class ParticleSystem {
         }
     }
 
+    /**
+     * Re-points the particles of one FX instance at a new emitter layout ({@link FxInstance#retarget}): every live
+     * particle tagged {@code (slotTag << 8) | e} with {@code e < map.length} becomes {@code (slotTag << 8) | map[e]},
+     * or a derived particle ({@link #OWNER_DERIVED}: still counted, fires no handlers) when {@code map[e] < 0}.
+     */
+    void retagOwners(int slotTag, int[] map) {
+        for (int i = 0; i < live; i++) {
+            int o = owner[i];
+            if (o >>> 8 != slotTag) {
+                continue;
+            }
+            int e = o & 0xFF;
+            if (e == OWNER_DERIVED) {
+                continue;
+            }
+            int to = e < map.length ? map[e] : -1;
+            owner[i] = (slotTag << 8) | (to < 0 ? OWNER_DERIVED : to);
+        }
+    }
+
     /** Forgets every live particle's owner (the FX world that tagged them is gone). */
     void clearOwners() {
         Arrays.fill(owner, 0, live, 0);

@@ -162,6 +162,29 @@ public final class FxWorld implements AutoCloseable {
         return true;
     }
 
+    /** {@link FxInstance#retarget}: switch {@code inst} to {@code next}, keeping its clock and live particles. */
+    void retarget(FxInstance inst, FxSystem next) {
+        checkOpen();
+        CompiledFx old = inst.fx;
+        if (old.source == next) {
+            return;
+        }
+        CompiledFx c = compile(next);
+        int[] map = new int[old.emitters];
+        for (int e = 0; e < old.emitters; e++) {
+            map[e] = c.emitterIndex(old.source.emitters().get(e).name());
+        }
+        inst.adopt(c, map, maxEmitters, maxParams);
+        system.retagOwners(inst.slot + 1, map);
+        boolean stillUsed = false;
+        for (int k = 0; k < activeCount && !stillUsed; k++) {
+            stillUsed = slots[active[k]].fx == old;
+        }
+        if (!stillUsed) {
+            compiled.remove(old.source); // an editor retargets on every edit: do not keep each version
+        }
+    }
+
     /** Stops every instance (see {@link FxInstance#stop}). */
     public void stopAll(float fadeSeconds) {
         for (int k = 0; k < activeCount; k++) {

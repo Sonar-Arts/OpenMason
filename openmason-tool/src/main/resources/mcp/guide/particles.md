@@ -5,8 +5,8 @@ particle **effect** with its own offset and timeline. Systems expose **parameter
 **bindings** wire them to values, **events** react to particle deaths/impacts/custom raises, plus an
 optional **light** and **sounds**. Units: blocks, seconds, degrees; colours `#RRGGBBAA` (straight alpha).
 
-`fx_*` documents are the agent's own (in memory until `fx_save`); the Particles tab still edits v1
-libraries. Start: `fx_presets` -> `fx_new {id, preset}` -> `fx_get` -> `fx_set` -> `fx_simulate` /
+`fx_*` documents are the agent's own (in memory until `fx_save`); the Particles tab edits the same v2 files
+through the same JSON view (open a saved file there to show it to the user). Start: `fx_presets` -> `fx_new {id, preset}` -> `fx_get` -> `fx_set` -> `fx_simulate` /
 `fx_capture` -> `fx_save`. Tools take `id`; omit it when one document is open.
 
 ## fx_get / fx_set shape (the file's own system.json)

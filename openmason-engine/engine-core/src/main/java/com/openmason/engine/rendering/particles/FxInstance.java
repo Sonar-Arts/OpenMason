@@ -1,5 +1,8 @@
 package com.openmason.engine.rendering.particles;
 
+import java.util.Arrays;
+import java.util.Objects;
+
 /**
  * One playing {@link FxSystem}: a pooled handle from {@link FxWorld#play}. Move it, drive its exposed parameters,
  * raise custom events and stop it with a fade; it reports whether it is still alive (emitting, or particles of it
@@ -218,6 +221,21 @@ public final class FxInstance {
     }
 
     /**
+     * Switches this running instance to {@code next} (an editor changing the system live) without restarting it:
+     * the clock, the position and every live particle stay. Emitters are matched by name - a kept emitter keeps
+     * its timeline state (current cycle, accumulated emission) under its new settings, a new emitter joins as if it
+     * had been there from the start (only the cycle due now fires, not every cycle it missed), and the particles
+     * of a removed emitter finish their lives without firing its handlers. Parameters are matched by name and
+     * type (values set on this instance are kept, others start at their defaults). Changed effects are the
+     * particle system's business: replace them there ({@link ParticleSystem#replace}) before retargeting.
+     */
+    public FxInstance retarget(FxSystem next) {
+        check();
+        world.retarget(this, Objects.requireNonNull(next, "next"));
+        return this;
+    }
+
+    /**
      * Gives the handle back: the instance plays on to its natural end, then returns to the pool. Stop it first if it
      * should end. Do not use this object afterwards.
      */
@@ -229,6 +247,105 @@ public final class FxInstance {
     // ------------------------------------------------------------------------------------------------
     // Runtime (FxWorld)
     // ------------------------------------------------------------------------------------------------
+
+    /**
+     * Adopts {@code next} ({@link #retarget}): {@code map[old emitter] = new emitter or -1}; arrays grow to the
+     * world's sizes like {@link #assign}.
+     */
+    void adopt(CompiledFx next, int[] map, int minEmitters, int minParams) {
+        CompiledFx old = fx;
+        int n = next.emitters;
+        int[] oldCycle = Arrays.copyOf(cycle, old.emitters);
+        double[] oldStart = Arrays.copyOf(cycleStart, old.emitters);
+        boolean[] oldActive = Arrays.copyOf(active, old.emitters);
+        boolean[] oldDone = Arrays.copyOf(done, old.emitters);
+        float[] oldAcc = Arrays.copyOf(acc, old.emitters);
+        float[] oldParams = Arrays.copyOf(params, old.paramDefaults.length);
+        if (cycle.length < n) {
+            int cap = Math.max(n, minEmitters);
+            cycle = new int[cap];
+            cycleStart = new double[cap];
+            active = new boolean[cap];
+            done = new boolean[cap];
+            acc = new float[cap];
+            ch = new float[cap * CompiledFx.CHANNELS];
+            tintCh = new int[cap];
+            dirCh = new float[cap * 3];
+            offCh = new float[cap * 3];
+        }
+        for (int e = 0; e < n; e++) {
+            cycle[e] = 0;
+            cycleStart[e] = 0.0;
+            active[e] = false;
+            done[e] = false;
+            acc[e] = 0f;
+        }
+        fx = next;
+        for (int o = 0; o < map.length; o++) {
+            int e = map[o];
+            if (e >= 0) {
+                cycle[e] = oldCycle[o];
+                cycleStart[e] = oldStart[o];
+                active[e] = oldActive[o];
+                done[e] = oldDone[o];
+                acc[e] = oldAcc[o];
+            }
+        }
+        for (int e = 0; e < n; e++) {
+            catchUp(e);
+        }
+
+        int pn = next.paramDefaults.length;
+        if (params.length < pn) {
+            params = new float[Math.max(pn, minParams * 4)];
+        }
+        System.arraycopy(next.paramDefaults, 0, params, 0, pn);
+        for (int p = 0; p < next.paramNames.length; p++) {
+            int q = old.paramIndex(next.paramNames[p]);
+            if (q >= 0 && old.paramTypes[q] == next.paramTypes[p]) {
+                System.arraycopy(oldParams, q * 4, params, p * 4, 4);
+            }
+        }
+        if (!stopping) {
+            tracksDone = allDone();
+            if (!tracksDone) {
+                stopCuesFired = false;
+            }
+        } else if (tracksDone) {
+            endTracks();
+        }
+        resolve();
+    }
+
+    /**
+     * Skips the cycles of emitter {@code e} that started and ended before now (a new emitter, or a timeline edit),
+     * so the next frame fires at most the one cycle in progress instead of a burst for every cycle missed.
+     */
+    private void catchUp(int e) {
+        if (done[e]) {
+            return;
+        }
+        CompiledFx f = fx;
+        double first = f.delay[e];
+        if (time < first) {
+            return; // nothing due yet
+        }
+        double period = (double) f.duration[e] + f.interval[e];
+        long latest = period > 0.0 && !Double.isInfinite(period) ? (long) Math.floor((time - first) / period) : 0L;
+        if (f.loops[e] != 0 && latest >= f.loops[e]) {
+            latest = f.loops[e] - 1L;
+            if (cycle[e] <= latest && first + latest * period + f.duration[e] <= time) {
+                cycle[e] = f.loops[e]; // every cycle is over
+                active[e] = false;
+                done[e] = true;
+                return;
+            }
+        }
+        if (cycle[e] < latest) {
+            cycle[e] = (int) Math.min(latest, Integer.MAX_VALUE - 1L); // the next frame starts cycle `latest`
+            active[e] = false;
+        }
+    }
 
     /** Continuous emission and light multiplier: 1, ramping to 0 over a stop fade, 0 once stopped. */
     float emissionMul() {

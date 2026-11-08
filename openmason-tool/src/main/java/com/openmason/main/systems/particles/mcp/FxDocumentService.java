@@ -40,8 +40,8 @@ import java.util.Set;
  * The MCP's FX documents (OM #101 {@code .omfx} v2): open in memory by id (the system name), edited through the
  * format's own editable {@code system.json} view ({@link OmfxCodec#toSystemJson}/{@link OmfxCodec#withSystemJson}),
  * so an agent reads and writes exactly the file's JSON and every edit passes the file reader's validation
- * (all-or-nothing: a rejected edit changes nothing). Undo/redo per document. GL-free and editor-free: the Particles
- * tab edits v1 libraries until OM #104, so these documents are the agent's own; files are written through the
+ * (all-or-nothing: a rejected edit changes nothing). Undo/redo per document. GL-free and editor-free: these are
+ * the agent's own documents (the Particles tab edits the same v2 files the same way, OM #104); files go through the
  * {@link AssetWriteService} sandbox. Thread-safe (one lock; saves wait on the main thread outside it).
  */
 public final class FxDocumentService {
@@ -539,48 +539,6 @@ public final class FxDocumentService {
         }
     }
 
-    /** After a rename, every place the old name was referenced from follows it. */
-    private static void rewriteReferences(ObjectNode view, String section, String from, String to) {
-        switch (section) {
-            case "effects" -> {
-                for (JsonNode e : view.get("emitters")) {
-                    replaceText((ObjectNode) e, "effect", from, to);
-                }
-                for (JsonNode e : view.get("effects")) {
-                    for (JsonNode sub : e.path("subEmitters")) {
-                        replaceText((ObjectNode) sub, "effect", from, to);
-                    }
-                }
-            }
-            case "emitters" -> {
-                for (JsonNode b : view.get("bindings")) {
-                    replaceText((ObjectNode) b, "emitter", from, to);
-                }
-                for (JsonNode h : view.get("events")) {
-                    if (!"custom".equalsIgnoreCase(h.path("trigger").asText())) {
-                        replaceText((ObjectNode) h, "source", from, to);
-                    }
-                    replaceText((ObjectNode) h, "spawnInto", from, to);
-                }
-                for (JsonNode c : view.get("cues")) {
-                    replaceText((ObjectNode) c, "emitter", from, to);
-                }
-            }
-            case "parameters" -> {
-                for (JsonNode b : view.get("bindings")) {
-                    replaceText((ObjectNode) b, "parameter", from, to);
-                }
-            }
-            default -> { }
-        }
-    }
-
-    private static void replaceText(ObjectNode n, String key, String from, String to) {
-        if (from.equals(n.path(key).asText(null))) {
-            n.put(key, to);
-        }
-    }
-
     private static void removeNamed(ObjectNode view, String section, JsonNode names) {
         if (!names.isArray()) {
             throw new IllegalArgumentException("remove." + section + " must be an array of names");
@@ -603,23 +561,15 @@ public final class FxDocumentService {
     }
 
     private static JsonNode find(JsonNode list, String name) {
-        if (list == null) {
-            return null;
-        }
-        for (JsonNode n : list) {
-            if (name.equals(n.path("name").asText())) {
-                return n;
-            }
-        }
-        return null;
+        return com.openmason.main.systems.particles.fx.FxSystemViews.find(list, name);
     }
 
     private static List<String> names(JsonNode list) {
-        List<String> out = new ArrayList<>();
-        if (list != null) {
-            list.forEach(n -> out.add(n.path("name").asText()));
-        }
-        return out;
+        return com.openmason.main.systems.particles.fx.FxSystemViews.names(list);
+    }
+
+    private static void rewriteReferences(ObjectNode view, String section, String from, String to) {
+        com.openmason.main.systems.particles.fx.FxSystemViews.rewriteReferences(view, section, from, to);
     }
 
     // ------------------------------------------------------------------------------------------------

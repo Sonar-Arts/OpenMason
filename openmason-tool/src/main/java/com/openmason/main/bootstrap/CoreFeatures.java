@@ -335,7 +335,7 @@ public final class CoreFeatures {
         // A closable workspace tab like the Texture Editor: exists while open, ends only on the user's close
         // (its guard asks about unsaved changes), can pop out into its own window.
         context.workspaces().register(WorkspaceDescriptor.builder(BuiltinWorkspaces.PARTICLES, "Particles")
-                .description("Particle Editor: author .omfx particle libraries with a live preview")
+                .description("FX Editor: author .omfx FX systems (emitters, module stacks, graphs) with a live preview")
                 .closable(true)
                 .minSize(900f, 560f)
                 .layoutVersion(ParticleEditorWorkspace.LAYOUT_VERSION)
@@ -353,7 +353,7 @@ public final class CoreFeatures {
         context.fxExporters().register(new com.openmason.api.fx.FxExportTarget("openmason.omfx",
                 "Open Mason FX (.omfx v2)", BuiltinFileTypes.OMFX, null,
                 in -> com.openmason.engine.rendering.particles.omfx.OmfxCodec.write(in.document())));
-        // Agents author FX systems (.omfx v2) headlessly; the tab still edits v1 libraries until OM #104.
+        // Agents author FX systems (.omfx v2) headlessly through the same JSON view the tab edits (OM #104).
         context.mcpTools().register(BuiltinMcpTools.PARTICLES);
         context.guideTopics().register(BuiltinKnowledge.topic("particles"));
         // The preview's GL resources go while GL still exists.

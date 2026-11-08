@@ -494,8 +494,8 @@ public class mainOpenMason {
      * Transition to main interface from home screen.
      */
     /**
-     * Dev hook for live runs: {@code -Dopenmason.particles.editor=<effect name | library.omfx>} opens the
-     * Particle Editor on that built-in effect or library file.
+     * Dev hook for live runs: {@code -Dopenmason.particles.editor=<preset | file.omfx>} opens the FX editor on a
+     * new document from that preset (FX system or effect) or on that file.
      */
     private void devOpenParticleEditor() {
         String spec = System.getProperty("openmason.particles.editor");
@@ -509,7 +509,12 @@ public class mainOpenMason {
         if (spec.endsWith(".omfx")) {
             editor.openFile(java.nio.file.Path.of(spec));
         } else if (!spec.isBlank() && !"true".equals(spec)) {
-            editor.select(spec.trim());
+            editor.newFromPreset(spec.trim());
+        }
+        // -Dopenmason.particles.graph=<effect>:<stage>:<index> also opens that custom module in the FX Graph.
+        String graph = System.getProperty("openmason.particles.graph");
+        if (graph != null && !graph.isBlank()) {
+            editor.openGraph(graph.trim());
         }
     }
 

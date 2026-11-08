@@ -159,6 +159,17 @@ final class CompiledFx {
     }
 
     /** Index of the custom event {@code name}'s handler group, or -1. */
+    /** Index of the emitter called {@code name}, or -1. */
+    int emitterIndex(String name) {
+        List<FxEmitter> list = source.emitters();
+        for (int e = 0; e < list.size(); e++) {
+            if (list.get(e).name().equals(name)) {
+                return e;
+            }
+        }
+        return -1;
+    }
+
     int customIndex(String name) {
         for (int c = 0; c < customNames.length; c++) {
             if (customNames[c].equals(name)) {
