@@ -46,12 +46,14 @@ import java.util.Objects;
  *       {@link com.openmason.engine.format.ext.FormatExtensions}): game data the engine keeps as
  *       written, unknown members byte for byte; foreign top-level fields are kept too. The
  *       {@code entityType} is a free-form name (the engine's MOB/NPC/... enum moved to the game).</li>
+ *   <li>1.6 - Optional {@code fx[]} block (#103, shared with SBO 1.12, see
+ *       {@link com.openmason.engine.format.fx.FxData}): which FX play on which events.</li>
  * </ul>
  */
 public final class SBEFormat {
 
     /** Current format version */
-    public static final String FORMAT_VERSION = "1.5";
+    public static final String FORMAT_VERSION = "1.6";
 
     /** File extension for SBE files */
     public static final String FILE_EXTENSION = ".sbe";
@@ -249,6 +251,9 @@ public final class SBEFormat {
      * @param sounds       optional sound bindings (1.4+): event name → audio
      *                     sample (embedded or resource-referenced). {@code null}
      *                     means the entity declares no sounds.
+     * @param fx           optional FX bindings (1.6+): event name → FX id; {@code null}
+     *                     means the entity declares none.
+     * @param extensions   namespaced game data (1.5+) and foreign top-level fields; never null
      */
     public record Document(
             String version,
@@ -264,8 +269,19 @@ public final class SBEFormat {
             List<StateEntry> states,
             List<VariantEntry> variants,
             com.openmason.engine.format.sound.SoundData sounds,
+            com.openmason.engine.format.fx.FxData fx,
             com.openmason.engine.format.ext.FormatExtensions extensions
     ) {
+        /** A document without FX bindings (the pre-1.6 shape). */
+        public Document(String version, String objectId, String objectName, String entityType, String objectPack,
+                        String checksum, String author, String description, String createdAt, String omoFilename,
+                        List<StateEntry> states, List<VariantEntry> variants,
+                        com.openmason.engine.format.sound.SoundData sounds,
+                        com.openmason.engine.format.ext.FormatExtensions extensions) {
+            this(version, objectId, objectName, entityType, objectPack, checksum, author, description, createdAt,
+                    omoFilename, states, variants, sounds, null, extensions);
+        }
+
         public Document {
             extensions = extensions == null ? com.openmason.engine.format.ext.FormatExtensions.EMPTY : extensions;
             Objects.requireNonNull(version, "version cannot be null");
@@ -287,13 +303,19 @@ public final class SBEFormat {
         /** Copy with {@code entityType} replaced (#431: the entity-type picker is a game section). */
         public Document withEntityType(String value) {
             return new Document(version, objectId, objectName, value, objectPack, checksum, author,
-                    description, createdAt, omoFilename, states, variants, sounds, extensions);
+                    description, createdAt, omoFilename, states, variants, sounds, fx, extensions);
         }
 
         /** Copy with the extensions (and foreign legacy fields) replaced. */
         public Document withExtensions(com.openmason.engine.format.ext.FormatExtensions value) {
             return new Document(version, objectId, objectName, entityType, objectPack, checksum, author,
-                    description, createdAt, omoFilename, states, variants, sounds, value);
+                    description, createdAt, omoFilename, states, variants, sounds, fx, value);
+        }
+
+        /** Copy with the FX bindings replaced (null = none). */
+        public Document withFx(com.openmason.engine.format.fx.FxData value) {
+            return new Document(version, objectId, objectName, entityType, objectPack, checksum, author,
+                    description, createdAt, omoFilename, states, variants, sounds, value, extensions);
         }
 
         /** The typed extension {@code codec} reads. */
@@ -311,6 +333,9 @@ public final class SBEFormat {
 
         /** True when this SBE declares one or more sound bindings (1.4+). */
         public boolean hasSounds() { return sounds != null && !sounds.isEmpty(); }
+
+        /** True when this SBE declares one or more FX bindings (1.6+). */
+        public boolean hasFx() { return fx != null && !fx.isEmpty(); }
     }
 
     /**
@@ -352,6 +377,11 @@ public final class SBEFormat {
         private final List<StateBinding> states = new ArrayList<>();
         private final List<VariantBinding> variants = new ArrayList<>();
         private final List<com.openmason.engine.format.sound.SoundSpec> sounds = new ArrayList<>();
+        private com.openmason.engine.format.fx.FxData fx;
+
+        /** FX bindings written into the new file (1.6+); null = none. */
+        public com.openmason.engine.format.fx.FxData getFx() { return fx; }
+        public void setFx(com.openmason.engine.format.fx.FxData fx) { this.fx = fx; }
 
         public ExportParameters() {}
 

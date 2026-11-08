@@ -16,6 +16,10 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Stream;
 
+import com.openmason.engine.format.fx.FxData;
+import com.openmason.engine.format.fx.FxDef;
+import com.openmason.engine.format.fx.FxParamValue;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -48,7 +52,7 @@ class AssetContainerRoundTripTest {
     static SBOFormat.Document comparable(SBOFormat.Document d) {
         return new SBOFormat.Document("-", d.objectId(), d.objectName(), d.objectType(), d.objectPack(),
                 "-", d.author(), d.description(), d.createdAt(), d.omoFilename(), d.textureFilename(),
-                d.rendering(), d.states(), d.defaultStateName(), d.sounds(), d.extensions());
+                d.rendering(), d.states(), d.defaultStateName(), d.sounds(), d.fx(), d.extensions());
     }
 
     /**
@@ -62,7 +66,7 @@ class AssetContainerRoundTripTest {
     static SBEFormat.Document comparable(SBEFormat.Document d) {
         return new SBEFormat.Document("-", d.objectId(), d.objectName(), d.entityType(), d.objectPack(),
                 "-", d.author(), d.description(), d.createdAt(), d.omoFilename(), d.states(), d.variants(),
-                d.sounds(), d.extensions());
+                d.sounds(), d.fx(), d.extensions());
     }
 
     @Test
@@ -81,11 +85,57 @@ class AssetContainerRoundTripTest {
             Path out = tmp.resolve(file.getFileName());
             assertTrue(editor.writeDocumentTo(out.toString()), file.toString());
             assertEquals(comparable(original), comparable(parser.parseRaw(out).manifest()), "re-saved " + file);
+            if (!original.hasFx()) {
+                assertFalse(manifestText(out).contains("\"fx\""), "no fx key appears in " + file);
+            }
             if (!original.extensions().isEmpty()) {
                 withGameData++;
             }
         }
         assertTrue(withGameData > 0, "the shipped assets carry game data to preserve");
+    }
+
+    static final FxData FX = new FxData(List.of(
+            new FxDef("break", "debris", 0f, 0.5f, 0f, java.util.Map.of("count", FxParamValue.scalar(8f)), true),
+            FxDef.of("ambient", "mygame:campfire")));
+
+    static String manifestText(Path archive) throws IOException {
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive.toFile())) {
+            return new String(zip.getInputStream(zip.getEntry("manifest.json")).readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+
+    /** FX bindings (#103) added in the editor survive save → reopen, and nothing else changes. */
+    @Test
+    void fxBindingsSurviveTheEditors() throws IOException {
+        Path sbo = shipped("sbo", ".sbo").get(0);
+        SBOParser sboParser = new SBOParser();
+        SBOFormat.Document sboOriginal = sboParser.parseRaw(sbo).manifest();
+        SBOEditorWindow sboEditor = new SBOEditorWindow(null, null);
+        assertTrue(sboEditor.openFile(sbo.toString()));
+        sboEditor.applyDocument(sboEditor.snapshotDocument().withFx(FX));
+        assertEquals(null, sboEditor.validateForWrite());
+        Path sboOut = tmp.resolve("fx-" + sbo.getFileName());
+        assertTrue(sboEditor.writeDocumentTo(sboOut.toString()));
+        SBOFormat.Document sboSaved = sboParser.parseRaw(sboOut).manifest();
+        assertEquals(FX, sboSaved.fx());
+        assertEquals(comparable(sboOriginal.withFx(FX)), comparable(sboSaved));
+        SBOEditorWindow sboReopened = new SBOEditorWindow(null, null);
+        assertTrue(sboReopened.openFile(sboOut.toString()));
+        assertEquals(FX, sboReopened.snapshotDocument().fx());
+
+        Path sbe = shipped("sbe", ".sbe").get(0);
+        SBEParser sbeParser = new SBEParser();
+        SBEFormat.Document sbeOriginal = sbeParser.parseRaw(sbe).manifest();
+        SBEEditorWindow sbeEditor = new SBEEditorWindow(null, null);
+        assertTrue(sbeEditor.openFile(sbe.toString()));
+        sbeEditor.applyDocument(sbeEditor.snapshotDocument().withFx(FX));
+        Path sbeOut = tmp.resolve("fx-" + sbe.getFileName());
+        assertTrue(sbeEditor.writeDocumentTo(sbeOut.toString()));
+        SBEFormat.Document sbeSaved = sbeParser.parseRaw(sbeOut).manifest();
+        assertEquals(FX, sbeSaved.fx());
+        assertEquals(comparable(sbeOriginal.withFx(FX)), comparable(sbeSaved));
     }
 
     @Test
@@ -103,6 +153,9 @@ class AssetContainerRoundTripTest {
             Path out = tmp.resolve(file.getFileName());
             assertTrue(editor.writeDocumentTo(out.toString()), file.toString());
             assertEquals(comparable(original), comparable(parser.parseRaw(out).manifest()), "re-saved " + file);
+            if (!original.hasFx()) {
+                assertFalse(manifestText(out).contains("\"fx\""), "no fx key appears in " + file);
+            }
         }
     }
 }

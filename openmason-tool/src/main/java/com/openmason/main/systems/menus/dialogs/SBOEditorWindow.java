@@ -26,7 +26,7 @@ import java.util.List;
  *
  * <p>Loads an existing SBO from disk via {@link SBOParser#parseRaw(Path)}, exposes the generic
  * container data (identity, classification, render layer and transparency, states and clips,
- * sounds) as editable tabs, and writes the result back via {@link SBOSerializer#exportFromDocument}.
+ * sounds, FX bindings) as editable tabs, and writes the result back via {@link SBOSerializer#exportFromDocument}.
  * Game data (properties, recipes, drops, tools...) is edited by the {@link AssetEditorSection}s a
  * game plugin contributes for {@link AssetSurface#SBO_EDITOR} (#431); without one, that data is
  * carried through a save unchanged. The embedded OMO/OMT bytes are passed through unchanged.
@@ -43,6 +43,9 @@ public class SBOEditorWindow {
     private final SBOSerializer serializer = new SBOSerializer();
     private final SBOStatesEditor statesEditor;
     private final SoundsEditor soundsEditor;
+    private final FxBindingsEditor fxEditor;
+    /** The open project's folder (FX the bindings are checked against); null = presets only. */
+    private java.util.function.Supplier<String> projectDirectory = () -> null;
     /** Game-data sections contributed by plugins (#431). */
     private final AssetSectionSet<SBOFormat.Document> sections;
     private List<AssetSectionSet.Tab> tabs = CORE_TABS;
@@ -75,10 +78,12 @@ public class SBOEditorWindow {
     private static final String TAB_METADATA = "core.metadata";
     private static final String TAB_STATES = "core.states";
     private static final String TAB_SOUNDS = "core.sounds";
+    private static final String TAB_FX = "core.fx";
     private static final List<AssetSectionSet.Tab> CORE_TABS = List.of(
             new AssetSectionSet.Tab(TAB_METADATA, "Metadata", 0, null),
             new AssetSectionSet.Tab(TAB_STATES, "States", 200, null),
-            new AssetSectionSet.Tab(TAB_SOUNDS, "Sounds", 500, null));
+            new AssetSectionSet.Tab(TAB_SOUNDS, "Sounds", 500, null),
+            new AssetSectionSet.Tab(TAB_FX, "FX", 550, null));
 
     /** Mortar window chrome (action bar + tab strip); ImGui fallback inside. */
     private final EditorChrome chrome = new EditorChrome("sbo");
@@ -106,6 +111,8 @@ public class SBOEditorWindow {
         this.soundsEditor = new SoundsEditor(
                 () -> dirty = true,
                 cb -> { if (fileDialogService != null) fileDialogService.showOpenAudioDialog(cb::accept); });
+        this.fxEditor = new FxBindingsEditor(() -> dirty = true,
+                () -> com.openmason.main.systems.particles.FxCatalog.scan(projectRoot()));
         this.sections = new AssetSectionSet<>(AssetSurface.SBO_EDITOR, new AssetSectionHost() {
             @Override
             public AssetSurface<?> surface() {
@@ -132,6 +139,16 @@ public class SBOEditorWindow {
                 dirty = true;
             }
         });
+    }
+
+    /** Where the open project lives (wired by MainImGuiInterface); its FX are what the FX tab offers. */
+    public void setProjectDirectorySupplier(java.util.function.Supplier<String> supplier) {
+        this.projectDirectory = supplier != null ? supplier : () -> null;
+    }
+
+    private Path projectRoot() {
+        String dir = projectDirectory.get();
+        return dir == null || dir.isBlank() ? null : Path.of(dir);
     }
 
     /** Link the states editor to the Animation Editor (in-memory clip round trips). */
@@ -199,6 +216,7 @@ public class SBOEditorWindow {
         if (loadedManifest == null) return "nothing is loaded in the SBO editor";
         String err = statesEditor.validate();
         if (err == null) err = soundsEditor.validate();
+        if (err == null) err = fxEditor.validate();
         if (err != null) return err;
         AssetSectionSet.Problem problem = sections.firstError();
         if (problem != null) return problem.message();
@@ -250,6 +268,8 @@ public class SBOEditorWindow {
         statesEditor.load(doc, loadedStateBytes, loadedStateClipBytes, loadedDefaultBytes);
         soundsEditor.load(doc.sounds(),
                 loadedSoundBytes != null ? loadedSoundBytes::get : f -> null);
+        fxEditor.load(doc.fx());
+        fxEditor.rescan();
         sections.load(doc);
         tabs = sections.tabs(CORE_TABS);
         if (selectedTab >= tabs.size()) selectedTab = 0;
@@ -282,6 +302,7 @@ public class SBOEditorWindow {
                         case TAB_METADATA -> renderMetadataTab();
                         case TAB_STATES -> statesEditor.render();
                         case TAB_SOUNDS -> soundsEditor.render();
+                        case TAB_FX -> fxEditor.render();
                         default -> { }
                     }
                 }
@@ -357,6 +378,8 @@ public class SBOEditorWindow {
         if (stateError != null) { rejectSave(stateError, TAB_STATES); return; }
         String soundError = soundsEditor.validate();
         if (soundError != null) { rejectSave(soundError, TAB_SOUNDS); return; }
+        String fxError = fxEditor.validate();
+        if (fxError != null) { rejectSave(fxError, TAB_FX); return; }
         AssetSectionSet.Problem problem = sections.firstError();
         if (problem != null) { rejectSave(problem.message(), problem.section()); return; }
         validationMessage = "";
@@ -443,6 +466,7 @@ public class SBOEditorWindow {
                 statesEditor.toStateEntries(),
                 statesEditor.defaultStateName(),
                 soundsEditor.toSoundData(),
+                fxEditor.toFxData(),
                 loadedManifest.extensions() // game data: kept as loaded unless a section changes it
         );
         return sections.write(core);
@@ -465,6 +489,7 @@ public class SBOEditorWindow {
         chrome.close();
         statesEditor.close();
         soundsEditor.close();
+        fxEditor.close();
         sections.close();
     }
 }

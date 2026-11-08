@@ -44,6 +44,7 @@ module openmason.engine.core {
     exports com.openmason.engine.diagnostics;
     exports com.openmason.engine.entity.sbe;
     exports com.openmason.engine.format.ext;
+    exports com.openmason.engine.format.fx;
     exports com.openmason.engine.format.mesh;
     exports com.openmason.engine.format.oma;
     exports com.openmason.engine.format.omo;

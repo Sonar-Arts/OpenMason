@@ -94,6 +94,12 @@ public record SBOParseResult(
     /** The manifest sound bindings, or null when the SBO declares none (1.7+). */
     public com.openmason.engine.format.sound.SoundData sounds() { return manifest.sounds(); }
 
+    /** True when this SBO declares one or more FX bindings (1.12+). */
+    public boolean hasFx() { return manifest.hasFx(); }
+
+    /** The manifest FX bindings, or null when the SBO declares none (1.12+). */
+    public com.openmason.engine.format.fx.FxData fx() { return manifest.fx(); }
+
     /** Bytes of an embedded sound sample by entry filename, or null (1.7+). */
     public byte[] soundBytesFor(String filename) { return soundBytes.get(filename); }
 }

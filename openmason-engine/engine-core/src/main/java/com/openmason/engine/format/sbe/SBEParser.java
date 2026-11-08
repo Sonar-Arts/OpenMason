@@ -270,7 +270,7 @@ public class SBEParser {
     static final java.util.Set<String> CORE_FIELDS = java.util.Set.of(
             "version", "objectId", "objectName", "entityType", "objectPack", "checksum", "checksumAlgorithm",
             "author", "description", "createdAt", "omoFile", "states", "variants", "sounds",
-            com.openmason.engine.format.ext.ManifestJson.EXTENSIONS_FIELD);
+            com.openmason.engine.format.fx.FxJson.FIELD, com.openmason.engine.format.ext.ManifestJson.EXTENSIONS_FIELD);
 
     private SBEFormat.Document readManifest(byte[] manifestBytes) throws IOException {
         JsonNode root;
@@ -306,6 +306,7 @@ public class SBEParser {
                     objectPack, checksum, author, description, createdAt,
                     omoFile, states, variants,
                     SoundJson.read(root),
+                    com.openmason.engine.format.fx.FxJson.read(root),
                     com.openmason.engine.format.ext.ManifestJson.readExtensions(manifestText, CORE_FIELDS)
             );
         } catch (NullPointerException e) {

@@ -344,6 +344,7 @@ public class MainImGuiInterface implements ProjectBrowserListener {
             // SBO editor — for opening and editing existing .sbo files
             this.sboEditorWindow = new SBOEditorWindow(fileDialogService, statusService);
             assetExportActions.setSBOEditorWindow(sboEditorWindow);
+            sboEditorWindow.setProjectDirectorySupplier(getProjectDirectorySupplier());
             sboEditorWindow.setOpenModelHandler((omoBytes, name) -> {
                 if (modelOperations != null) {
                     modelOperations.openExtractedAssetModel(omoBytes, name, name);
@@ -353,6 +354,7 @@ public class MainImGuiInterface implements ProjectBrowserListener {
             // SBE editor — for opening and editing existing .sbe files
             this.sbeEditorWindow = new SBEEditorWindow(fileDialogService, statusService);
             assetExportActions.setSBEEditorWindow(sbeEditorWindow);
+            sbeEditorWindow.setProjectDirectorySupplier(getProjectDirectorySupplier());
             sbeEditorWindow.setOpenModelHandler((omoBytes, name) -> {
                 if (modelOperations != null) {
                     modelOperations.openExtractedAssetModel(omoBytes, name, name);

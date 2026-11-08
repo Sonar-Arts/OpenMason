@@ -41,11 +41,13 @@ public class SBEEditorWindow {
     private static final String TAB_STATES = "core.states";
     private static final String TAB_VARIANTS = "core.variants";
     private static final String TAB_SOUNDS = "core.sounds";
+    private static final String TAB_FX = "core.fx";
     private static final java.util.List<AssetSectionSet.Tab> CORE_TABS = java.util.List.of(
             new AssetSectionSet.Tab(TAB_METADATA, "Metadata", 0, null),
             new AssetSectionSet.Tab(TAB_STATES, "States", 100, null),
             new AssetSectionSet.Tab(TAB_VARIANTS, "Variants", 200, null),
-            new AssetSectionSet.Tab(TAB_SOUNDS, "Sounds", 300, null));
+            new AssetSectionSet.Tab(TAB_SOUNDS, "Sounds", 300, null),
+            new AssetSectionSet.Tab(TAB_FX, "FX", 350, null));
 
     private final ImBoolean visible = new ImBoolean(false);
     private final FileDialogService fileDialogService;
@@ -55,6 +57,9 @@ public class SBEEditorWindow {
     private final SBEStatesEditor statesEditor;
     private final SBEVariantsEditor variantsEditor;
     private final SoundsEditor soundsEditor;
+    private final FxBindingsEditor fxEditor;
+    /** The open project's folder (FX the bindings are checked against); null = presets only. */
+    private java.util.function.Supplier<String> projectDirectory = () -> null;
     /** Game-data sections contributed by plugins (#431; Stonebreak: the entity type). */
     private final AssetSectionSet<SBEFormat.Document> sections;
     private java.util.List<AssetSectionSet.Tab> tabs = CORE_TABS;
@@ -106,6 +111,8 @@ public class SBEEditorWindow {
         this.soundsEditor = new SoundsEditor(
                 () -> dirty = true,
                 cb -> { if (fileDialogService != null) fileDialogService.showOpenAudioDialog(cb::accept); });
+        this.fxEditor = new FxBindingsEditor(() -> dirty = true,
+                () -> com.openmason.main.systems.particles.FxCatalog.scan(projectRoot()));
         this.sections = new AssetSectionSet<>(AssetSurface.SBE_EDITOR, new AssetSectionHost() {
             @Override
             public AssetSurface<?> surface() {
@@ -132,6 +139,16 @@ public class SBEEditorWindow {
                 dirty = true;
             }
         });
+    }
+
+    /** Where the open project lives (wired by MainImGuiInterface); its FX are what the FX tab offers. */
+    public void setProjectDirectorySupplier(java.util.function.Supplier<String> supplier) {
+        this.projectDirectory = supplier != null ? supplier : () -> null;
+    }
+
+    private java.nio.file.Path projectRoot() {
+        String dir = projectDirectory.get();
+        return dir == null || dir.isBlank() ? null : java.nio.file.Path.of(dir);
     }
 
     /** Link the states editor to the Animation Editor (in-memory clip round trips). */
@@ -197,6 +214,7 @@ public class SBEEditorWindow {
         String err = statesEditor.validate();
         if (err == null) err = variantsEditor.validate();
         if (err == null) err = soundsEditor.validate();
+        if (err == null) err = fxEditor.validate();
         if (err != null) return err;
         AssetSectionSet.Problem problem = sections.firstError();
         if (problem != null) return problem.message();
@@ -243,6 +261,8 @@ public class SBEEditorWindow {
         variantsEditor.load(doc, stateAssetBytes);
         soundsEditor.load(doc.sounds(),
                 stateAssetBytes != null ? stateAssetBytes::get : f -> null);
+        fxEditor.load(doc.fx());
+        fxEditor.rescan();
         sections.load(doc);
         tabs = sections.tabs(CORE_TABS);
         if (selectedTab >= tabs.size()) selectedTab = 0;
@@ -280,6 +300,7 @@ public class SBEEditorWindow {
                         case TAB_STATES -> statesEditor.render();
                         case TAB_VARIANTS -> variantsEditor.render();
                         case TAB_SOUNDS -> soundsEditor.render();
+                        case TAB_FX -> fxEditor.render();
                         default -> { }
                     }
                 }
@@ -393,6 +414,8 @@ public class SBEEditorWindow {
         if (variantError != null) { rejectSave(variantError, TAB_VARIANTS); return; }
         String soundError = soundsEditor.validate();
         if (soundError != null) { rejectSave(soundError, TAB_SOUNDS); return; }
+        String fxError = fxEditor.validate();
+        if (fxError != null) { rejectSave(fxError, TAB_FX); return; }
         AssetSectionSet.Problem problem = sections.firstError();
         if (problem != null) { rejectSave(problem.message(), sectionTab(problem.section())); return; }
         validationMessage = "";
@@ -461,6 +484,7 @@ public class SBEEditorWindow {
                 statesEditor.toStateEntries(),
                 variantsEditor.toVariantEntries(),
                 soundsEditor.toSoundData(),
+                fxEditor.toFxData(),
                 loadedManifest.extensions() // game data: kept as loaded unless a section changes it
         ));
     }
@@ -474,6 +498,7 @@ public class SBEEditorWindow {
         statesEditor.close();
         variantsEditor.close();
         soundsEditor.close();
+        fxEditor.close();
         sections.close();
     }
 }

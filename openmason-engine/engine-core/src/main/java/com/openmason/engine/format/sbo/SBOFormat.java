@@ -47,12 +47,14 @@ import com.openmason.engine.format.ext.FormatExtensions;
  *       {@code rendering} object ({@link Rendering}); older files' {@code gameProperties} still
  *       supply them. Top-level fields of older files the format no longer owns are kept and
  *       written back unchanged until the game that owns them moves them into its extension.</li>
+ *   <li>1.12 - Optional {@code fx[]} block (#103, shared with SBE 1.6, see
+ *       {@link com.openmason.engine.format.fx.FxData}): which FX play on which events.</li>
  * </ul>
  */
 public final class SBOFormat {
 
     /** Current format version */
-    public static final String FORMAT_VERSION = "1.11";
+    public static final String FORMAT_VERSION = "1.12";
 
     /** File extension for SBO files */
     public static final String FILE_EXTENSION = ".sbo";
@@ -296,6 +298,8 @@ public final class SBOFormat {
      * @param sounds           optional sound bindings (1.7+): event name → audio
      *                         sample (embedded or resource-referenced).
      *                         {@code null} means the object declares no sounds.
+     * @param fx               optional FX bindings (1.12+): event name → FX id;
+     *                         {@code null} means the object declares none.
      * @param extensions       namespaced game data (1.11+) and the top-level fields older
      *                         files wrote that the format no longer owns; never null
      */
@@ -315,8 +319,19 @@ public final class SBOFormat {
             List<StateEntry> states,
             String defaultStateName,
             com.openmason.engine.format.sound.SoundData sounds,
+            com.openmason.engine.format.fx.FxData fx,
             FormatExtensions extensions
     ) {
+        /** A document without FX bindings (the pre-1.12 shape). */
+        public Document(String version, String objectId, String objectName, String objectType, String objectPack,
+                        String checksum, String author, String description, String createdAt, String omoFilename,
+                        String textureFilename, Rendering rendering, List<StateEntry> states,
+                        String defaultStateName, com.openmason.engine.format.sound.SoundData sounds,
+                        FormatExtensions extensions) {
+            this(version, objectId, objectName, objectType, objectPack, checksum, author, description, createdAt,
+                    omoFilename, textureFilename, rendering, states, defaultStateName, sounds, null, extensions);
+        }
+
         public Document {
             rendering = rendering == null ? Rendering.DEFAULT : rendering;
             extensions = extensions == null ? FormatExtensions.EMPTY : extensions;
@@ -365,12 +380,17 @@ public final class SBOFormat {
 
         /** Copy with the rendering fields replaced. */
         public Document withRendering(Rendering value) {
-            return new Document(version, objectId, objectName, objectType, objectPack, checksum, author, description, createdAt, omoFilename, textureFilename, value, states, defaultStateName, sounds, extensions);
+            return new Document(version, objectId, objectName, objectType, objectPack, checksum, author, description, createdAt, omoFilename, textureFilename, value, states, defaultStateName, sounds, fx, extensions);
         }
 
         /** Copy with the extensions (and foreign legacy fields) replaced. */
         public Document withExtensions(FormatExtensions value) {
-            return new Document(version, objectId, objectName, objectType, objectPack, checksum, author, description, createdAt, omoFilename, textureFilename, rendering, states, defaultStateName, sounds, value);
+            return new Document(version, objectId, objectName, objectType, objectPack, checksum, author, description, createdAt, omoFilename, textureFilename, rendering, states, defaultStateName, sounds, fx, value);
+        }
+
+        /** Copy with the FX bindings replaced (null = none). */
+        public Document withFx(com.openmason.engine.format.fx.FxData value) {
+            return new Document(version, objectId, objectName, objectType, objectPack, checksum, author, description, createdAt, omoFilename, textureFilename, rendering, states, defaultStateName, sounds, value, extensions);
         }
 
         /** The typed extension {@code codec} reads (see {@link FormatExtensions#get}). */
@@ -413,6 +433,11 @@ public final class SBOFormat {
         /** True when this SBO declares one or more sound bindings (1.7+). */
         public boolean hasSounds() {
             return sounds != null && !sounds.isEmpty();
+        }
+
+        /** True when this SBO declares one or more FX bindings (1.12+). */
+        public boolean hasFx() {
+            return fx != null && !fx.isEmpty();
         }
 
 
@@ -485,8 +510,13 @@ public final class SBOFormat {
         private final List<StateSpec> states = new ArrayList<>();
         private String defaultStateName = "";
         private final List<com.openmason.engine.format.sound.SoundSpec> sounds = new ArrayList<>();
+        private com.openmason.engine.format.fx.FxData fx;
 
         public ExportParameters() {}
+
+        /** FX bindings written into the new file (1.12+); null = none. */
+        public com.openmason.engine.format.fx.FxData getFx() { return fx; }
+        public void setFx(com.openmason.engine.format.fx.FxData fx) { this.fx = fx; }
 
         public Rendering getRendering() { return rendering; }
         public void setRendering(Rendering rendering) { this.rendering = rendering != null ? rendering : Rendering.DEFAULT; }

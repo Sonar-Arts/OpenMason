@@ -214,7 +214,7 @@ public final class SbeEntityLoader {
                 doc.objectName(), doc.objectId(), sourceId, variants.size(), clips.size(),
                 doc.hasSounds() ? doc.sounds().sounds().size() : 0);
         return new SbeEntityAsset(doc.objectId(), variants, clips,
-                doc.sounds(), parsed.soundBytes());
+                doc.sounds(), parsed.soundBytes(), doc.fx());
     }
 
     private static List<String> partIds(SbeModelGeometry geometry) {

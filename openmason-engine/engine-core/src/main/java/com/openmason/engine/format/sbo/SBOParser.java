@@ -226,7 +226,8 @@ public class SBOParser {
     static final java.util.Set<String> CORE_FIELDS = java.util.Set.of(
             "version", "objectId", "objectName", "objectType", "objectPack", "checksum", "checksumAlgorithm",
             "author", "description", "createdAt", "omoFile", "textureFile", "rendering", "states",
-            "defaultState", "sounds", ManifestJson.EXTENSIONS_FIELD);
+            "defaultState", "sounds", com.openmason.engine.format.fx.FxJson.FIELD,
+            ManifestJson.EXTENSIONS_FIELD);
 
     private SBOFormat.Document parseManifest(byte[] jsonBytes) throws IOException {
         String json = new String(jsonBytes, StandardCharsets.UTF_8);
@@ -290,6 +291,7 @@ public class SBOParser {
                 states,
                 defaultState,
                 sounds,
+                com.openmason.engine.format.fx.FxJson.read(root),
                 ManifestJson.readExtensions(json, CORE_FIELDS)
         );
     }

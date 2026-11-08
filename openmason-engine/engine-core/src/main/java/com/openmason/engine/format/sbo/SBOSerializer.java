@@ -259,6 +259,7 @@ public class SBOSerializer {
                 stateEntries,
                 defaultStateName,
                 sounds.data(),
+                params.getFx(),
                 params.getExtensions()
         );
 
@@ -433,6 +434,7 @@ public class SBOSerializer {
                 rebuiltStates,
                 rebuiltStates.isEmpty() ? null : document.defaultStateName(),
                 rebuiltSounds.data(),
+                document.fx(),
                 document.extensions()
         );
 
@@ -702,6 +704,9 @@ public class SBOSerializer {
         public List<StateEntryDTO> states;
         public String defaultState;
         public List<SoundJson.SoundDefDTO> sounds;
+        /** FX bindings (1.12+); left out of the manifest when there are none. */
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        public com.fasterxml.jackson.databind.JsonNode fx;
 
         public ManifestDTO(SBOFormat.Document doc) {
             this.version = doc.version();
@@ -728,6 +733,7 @@ public class SBOSerializer {
                 this.defaultState = null;
             }
             this.sounds = SoundJson.toDto(doc.sounds());
+            this.fx = com.openmason.engine.format.fx.FxJson.toJson(doc.fx());
         }
     }
 

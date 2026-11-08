@@ -1,6 +1,7 @@
 package com.openmason.engine.entity.sbe;
 
 import com.openmason.engine.format.oma.ParsedAnimClip;
+import com.openmason.engine.format.fx.FxData;
 import com.openmason.engine.format.sound.SoundData;
 
 import java.util.Map;
@@ -21,13 +22,15 @@ import java.util.Map;
  *                   none; resolved for playback by the audio layer
  * @param soundBytes embedded sound sample bytes keyed by archive entry
  *                   filename (1.4+); empty when no def embeds audio
+ * @param fx         the SBE's FX bindings (1.6+), or null when it declares none
  */
 public record SbeEntityAsset(
         String objectId,
         Map<String, SbeModelGeometry> variants,
         Map<String, ParsedAnimClip> clips,
         SoundData sounds,
-        Map<String, byte[]> soundBytes
+        Map<String, byte[]> soundBytes,
+        FxData fx
 ) {
     /** The variant used when a requested name is unknown. */
     public static final String DEFAULT_VARIANT = "Default";
@@ -38,11 +41,20 @@ public record SbeEntityAsset(
         soundBytes = soundBytes == null ? Map.of() : Map.copyOf(soundBytes);
     }
 
+    /** An asset without FX bindings. */
+    public SbeEntityAsset(String objectId,
+                          Map<String, SbeModelGeometry> variants,
+                          Map<String, ParsedAnimClip> clips,
+                          SoundData sounds,
+                          Map<String, byte[]> soundBytes) {
+        this(objectId, variants, clips, sounds, soundBytes, null);
+    }
+
     /** Soundless convenience constructor (bare OMO/SBO attachables, tests). */
     public SbeEntityAsset(String objectId,
                           Map<String, SbeModelGeometry> variants,
                           Map<String, ParsedAnimClip> clips) {
-        this(objectId, variants, clips, null, Map.of());
+        this(objectId, variants, clips, null, Map.of(), null);
     }
 
     /**

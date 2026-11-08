@@ -108,6 +108,7 @@ public class SBESerializer {
                     stateEntries,
                     variantEntries,
                     resolvedSounds.data(),
+                    params.getFx(),
                     params.getExtensions()
             );
 
@@ -230,6 +231,7 @@ public class SBESerializer {
                     rebuilt,
                     rebuiltVariants,
                     rebuiltSounds.data(),
+                    document.fx(),
                     document.extensions()
             );
 
@@ -617,6 +619,9 @@ public class SBESerializer {
         public List<StateEntryDTO> states;
         public List<VariantEntryDTO> variants;
         public List<SoundJson.SoundDefDTO> sounds;
+        /** FX bindings (1.6+); left out of the manifest when there are none. */
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        public com.fasterxml.jackson.databind.JsonNode fx;
 
         public ManifestDTO(SBEFormat.Document doc) {
             this.version = doc.version();
@@ -639,6 +644,7 @@ public class SBESerializer {
                 this.variants.add(new VariantEntryDTO(e));
             }
             this.sounds = SoundJson.toDto(doc.sounds());
+            this.fx = com.openmason.engine.format.fx.FxJson.toJson(doc.fx());
         }
     }
 
