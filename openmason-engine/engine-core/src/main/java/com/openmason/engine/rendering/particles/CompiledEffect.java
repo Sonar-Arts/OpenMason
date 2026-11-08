@@ -81,10 +81,21 @@ final class CompiledEffect {
     /** Live particles of this effect in the owning system. */
     int live;
 
-    /** {@code exp(-drag·dt)} for the current update. */
+    /** {@code exp(-drag·dt)} for the current update (reference integrator only). */
     float dragMul = 1f;
 
-    CompiledEffect(ParticleEffect e, int id, CompiledEffect[] subTargets) {
+    // ---- FX graph programs (OM #99) ----
+    /** Runs over newly spawned particles after the built-in initialize; null = no custom spawn modules. */
+    final FxProgram spawnProgram;
+    /** The PARTICLE_UPDATE stage (built-in modules + custom ones), run by the CPU backend every step. */
+    final FxProgram updateProgram;
+    /** Computes an emitter's spawn rate; null = the effect's rate. */
+    final FxProgram emitterProgram;
+    /** System column of each custom attribute component the programs use (program column BUILTIN_COLUMNS + k). */
+    final int[] customColumns;
+    final float[] customDefaults;
+
+    CompiledEffect(ParticleEffect e, int id, CompiledEffect[] subTargets, ParticleSystem system) {
         this.source = e;
         this.id = id;
         lifeMin = e.lifetime().min();
@@ -202,6 +213,13 @@ final class CompiledEffect {
         hasDeath = death;
         hasCollision = collision;
         hasTrail = trail;
+
+        FxCompiler.Result programs = FxCompiler.compile(FxCompiler.Input.of(e));
+        spawnProgram = programs.spawn;
+        updateProgram = programs.update;
+        emitterProgram = programs.emitter;
+        customColumns = system.customColumns(programs.customNames);
+        customDefaults = programs.customDefaults;
 
         maxLive = e.maxLive() == 0 ? Integer.MAX_VALUE : e.maxLive();
         budgetFraction = e.priority().budgetFraction;

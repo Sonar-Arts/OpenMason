@@ -45,7 +45,8 @@ import java.util.Set;
  *                  "collision": { "enabled": true, "bounce": 0.3, "friction": 0.7 },
  *                  "subEmitters": [ { "effect": "smoke", "trigger": "death", "count": 1, "inherit": 0.2 },
  *                                   { "effect": "embers", "trigger": "trail", "rate": 8 } ],
- *                  "maxLive": 500, "priority": "normal", "lodDistance": 64 } ] }
+ *                  "maxLive": 500, "priority": "normal", "lodDistance": 64,
+ *                  "graph": { ... FX graph IR, see FxGraphJson; omitted = the default module stacks ... } } ] }
  * }</pre>
  * Every member but {@code name} is optional and defaults to the {@link ParticleEffect.Builder} value; a
  * scalar is accepted wherever a range is. Angles are degrees, colours {@code #RRGGBB} or {@code #RRGGBBAA}.
@@ -330,6 +331,13 @@ public final class ParticleLibrary {
         if (n.has("maxLive")) b.maxLive(n.get("maxLive").asInt());
         if (n.has("priority")) b.priority(parseEnum(ParticleEffect.Priority.class, n.get("priority").asText()));
         if (n.has("lodDistance")) b.lodDistance(f(n, "lodDistance"));
+        if (n.has("graph") && !n.get("graph").isNull()) {
+            try {
+                b.graph(com.openmason.engine.rendering.particles.graph.FxGraphJson.fromJson(n.get("graph")));
+            } catch (IOException ex) {
+                throw new IllegalArgumentException(name + ": " + ex.getMessage(), ex);
+            }
+        }
         return b.build();
     }
 
@@ -392,6 +400,9 @@ public final class ParticleLibrary {
         n.put("maxLive", e.maxLive());
         n.put("priority", lower(e.priority()));
         n.put("lodDistance", e.lodDistance());
+        if (e.graph() != null) {
+            n.set("graph", com.openmason.engine.rendering.particles.graph.FxGraphJson.toJson(e.graph()));
+        }
         return n;
     }
 

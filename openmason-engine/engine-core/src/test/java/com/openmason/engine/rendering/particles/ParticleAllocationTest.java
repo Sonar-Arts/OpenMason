@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  */
 class ParticleAllocationTest {
 
-    private static final Method ALLOCATED = findMeter();
+    static final Method ALLOCATED = findMeter();
 
     @Test
     void steadyStateFramesAllocateNothing() {
@@ -122,7 +122,7 @@ class ParticleAllocationTest {
      * recompilation (deoptimization re-materialises scalar-replaced objects, e.g. after another test trained the
      * shared code differently) settles after the first. The meter's own cost is measured and subtracted.
      */
-    private static long steadyBytes(java.util.function.IntConsumer frames) {
+    static long steadyBytes(java.util.function.IntConsumer frames) {
         long m0 = allocated();
         long meterCost = allocated() - m0;
         long best = Long.MAX_VALUE;

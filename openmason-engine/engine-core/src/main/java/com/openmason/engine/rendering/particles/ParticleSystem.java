@@ -105,6 +105,16 @@ public final class ParticleSystem {
     private final short[] evEffect = new short[EVENT_CAPACITY];
     private final int[] evCount = new int[EVENT_CAPACITY];
     private final int[] evOwner = new int[EVENT_CAPACITY];
+    /** Order key: the old per-particle loop's position of the event (2 × index, +1 for a survivor's events). */
+    private final int[] evKey = new int[EVENT_CAPACITY];
+    /** TRAIL events of the batch path: expected count, rounded when ordered ({@code NaN} = fixed count). */
+    private final float[] evExpected = new float[EVENT_CAPACITY];
+    /** The queue holds batch-path events that must be put in the old loop's order before flushing. */
+    private boolean keyedEvents;
+    private final int[] sortA = new int[EVENT_CAPACITY], sortB = new int[EVENT_CAPACITY];
+    private final int[] sortCount = new int[1 << 11];
+    private final int[] scratchI = new int[EVENT_CAPACITY];
+    private final float[] scratchF = new float[EVENT_CAPACITY];
     private final float[] evX = new float[EVENT_CAPACITY], evY = new float[EVENT_CAPACITY], evZ = new float[EVENT_CAPACITY];
     private final float[] evVx = new float[EVENT_CAPACITY], evVy = new float[EVENT_CAPACITY], evVz = new float[EVENT_CAPACITY];
     private int evTail;
@@ -117,6 +127,24 @@ public final class ParticleSystem {
     private ParticleCollider collider = ParticleCollider.NONE;
     private ParticleSpriteLayers sprites = ParticleSpriteLayers.NONE;
     private final ParticleRandom random;
+    /** Random numbers of FX graph programs (RANDOM ops): their own stream, so built-in draws stay where they were. */
+    private final ParticleRandom programRandom;
+    private final FxVm vm;
+    /**
+     * True = the old hand-written per-particle loop instead of the compiled programs. Kept as the reference the
+     * CPU backend is checked against bit for bit (tests, benchmarks); custom modules are ignored in this mode.
+     */
+    boolean referenceIntegrator;
+    private float stepDt;
+
+    // ---- custom attribute columns (FX graphs), shared by name across effects ----
+    private String[] customNames = new String[0];
+    private float[][] custom = new float[0][];
+
+    // ---- per-step grouping of particles by effect (batch path) ----
+    private int[] order = new int[0];
+    private int[] groupStart = new int[8];
+    private int[] groupFill = new int[8];
 
     // ---- stats ----
     private long spawnedTotal, droppedTotal, lodSkippedTotal, eventsDroppedTotal;
@@ -130,8 +158,10 @@ public final class ParticleSystem {
             throw new IllegalArgumentException("capacity must be in [1, " + MAX_CAPACITY + "]: " + capacity);
         }
         this.capacity = capacity;
-        allocate(Math.min(capacity, INITIAL_SLOTS));
         random = new ParticleRandom(seed);
+        programRandom = new ParticleRandom(seed ^ 0x6A09E667F3BCC909L);
+        vm = new FxVm(this, programRandom);
+        allocate(Math.min(capacity, INITIAL_SLOTS));
     }
 
     private void allocate(int n) {
@@ -152,6 +182,37 @@ public final class ParticleSystem {
         effectId = effectId == null ? new short[n] : Arrays.copyOf(effectId, n);
         frameOffset = frameOffset == null ? new short[n] : Arrays.copyOf(frameOffset, n);
         owner = owner == null ? new int[n] : Arrays.copyOf(owner, n);
+        order = new int[n];
+        for (int c = 0; c < custom.length; c++) {
+            custom[c] = Arrays.copyOf(custom[c], n);
+        }
+    }
+
+    /** System columns for custom attribute components (existing names are shared), allocated on first use. */
+    int[] customColumns(String[] names) {
+        int[] cols = new int[names.length];
+        for (int k = 0; k < names.length; k++) {
+            int found = -1;
+            for (int c = 0; c < customNames.length; c++) {
+                if (customNames[c].equals(names[k])) {
+                    found = c;
+                    break;
+                }
+            }
+            if (found < 0) {
+                found = customNames.length;
+                customNames = Arrays.copyOf(customNames, found + 1);
+                customNames[found] = names[k];
+                custom = Arrays.copyOf(custom, found + 1);
+                custom[found] = new float[slots];
+            }
+            cols[k] = found;
+        }
+        return cols;
+    }
+
+    float[] customColumn(int c) {
+        return custom[c];
     }
 
     private static float[] grow(float[] a, int n) {
@@ -183,7 +244,7 @@ public final class ParticleSystem {
     /** Sub-emitter events that did not fit the per-step queue. */
     public long eventsDroppedTotal() { return eventsDroppedTotal; }
     /** Heap bytes held by particle state (diagnostics). */
-    public long memoryBytes() { return (long) slots * (12 * 4 + 4 + 2 + 2 + 4); }
+    public long memoryBytes() { return (long) slots * (12 * 4 + 4 + 2 + 2 + 4 + 4 + 4L * custom.length); }
 
     /** Live particles of {@code effect} in this system. */
     public int liveCount(ParticleEffect effect) {
@@ -238,12 +299,14 @@ public final class ParticleSystem {
     /** Reseeds the spawn randomness (deterministic replays and tests). */
     public void setSeed(long seed) {
         random.setSeed(seed);
+        programRandom.setSeed(seed ^ 0x6A09E667F3BCC909L);
     }
 
     /** Kills every particle (emitters stay; no death sub-emitters fire). */
     public void clearParticles() {
         live = 0;
         evTail = 0;
+        keyedEvents = false;
         for (int k = 0; k < effectCount; k++) {
             effects[k].live = 0;
         }
@@ -297,7 +360,8 @@ public final class ParticleSystem {
         if (effectCount >= Short.MAX_VALUE) {
             throw new IllegalStateException("too many distinct effects in one particle system");
         }
-        c = new CompiledEffect(effect, effectCount, targets);
+        c = new CompiledEffect(effect, effectCount, targets, this);
+        reserve(c);
         c.resolve(sprites);
         if (effectCount == effects.length) {
             effects = Arrays.copyOf(effects, effects.length * 2);
@@ -325,7 +389,8 @@ public final class ParticleSystem {
             ParticleEffect child = updated.subEmitters().get(i).effect();
             targets[i] = child == old ? null : compile(child);
         }
-        CompiledEffect c = new CompiledEffect(updated, previous.id, targets);
+        CompiledEffect c = new CompiledEffect(updated, previous.id, targets, this);
+        reserve(c);
         c.resolve(sprites);
         for (int i = 0; i < targets.length; i++) {
             if (targets[i] == null) {
@@ -370,6 +435,22 @@ public final class ParticleSystem {
 
     public ParticleSpriteLayers sprites() {
         return sprites;
+    }
+
+    private void reserve(CompiledEffect c) {
+        vm.reserve(c.spawnProgram);
+        vm.reserve(c.updateProgram);
+        vm.reserve(c.emitterProgram);
+        // Called before the new effect is counted: room for it plus the prefix-sum sentinel.
+        if (groupStart.length < effectCount + 2) {
+            groupStart = Arrays.copyOf(groupStart, Math.max(groupStart.length * 2, effectCount + 2));
+            groupFill = Arrays.copyOf(groupFill, groupStart.length);
+        }
+    }
+
+    /** Particles/s an emitter of {@code c} spawns at {@code emitterAge}: the effect's rate, or its EMITTER_UPDATE program. */
+    float emitterRate(CompiledEffect c, float emitterAge, float dt) {
+        return c.emitterProgram == null ? c.rate : vm.runEmitter(c.emitterProgram, c, emitterAge, dt, windX, windY, windZ);
     }
 
     CompiledEffect effect(int id) {
@@ -523,6 +604,7 @@ public final class ParticleSystem {
         }
         float oneMinusCos = 1f - e.cosSpread;
         short id = (short) e.id;
+        int first = live;
 
         for (int k = 0; k < n; k++) {
             int i = live++;
@@ -580,8 +662,15 @@ public final class ParticleSystem {
             owner[i] = ownerTag;
             frameOffset[i] = (short) (e.textured && !e.animate && e.frameCount > 1 ? r.nextInt(e.frameCount) : 0);
             if (e.hasBirth) {
-                queueSubs(e, CompiledEffect.TRIGGER_BIRTH, i, 0f);
+                queueSubs(e, CompiledEffect.TRIGGER_BIRTH, i, 0f, 0);
             }
+        }
+        float[] defaults = e.customDefaults;
+        for (int k = 0; k < defaults.length; k++) {
+            Arrays.fill(custom[e.customColumns[k]], first, first + n, defaults[k]);
+        }
+        if (e.spawnProgram != null) {
+            vm.runParticles(e.spawnProgram, e, null, first, n, stepDt, windX, windY, windZ);
         }
         return n;
     }
@@ -591,7 +680,7 @@ public final class ParticleSystem {
     // ------------------------------------------------------------------------------------------------
 
     /** Queues every sub-emitter of {@code e} with {@code trigger} at particle {@code i}. */
-    private void queueSubs(CompiledEffect e, int trigger, int i, float dt) {
+    private void queueSubs(CompiledEffect e, int trigger, int i, float dt, int key) {
         int[] triggers = e.subTrigger;
         for (int s = 0; s < triggers.length; s++) {
             if (triggers[s] != trigger) {
@@ -619,6 +708,8 @@ public final class ParticleSystem {
             evCount[q] = count;
             int o = owner[i];
             evOwner[q] = o == 0 ? 0 : o | OWNER_DERIVED;
+            evKey[q] = key;
+            evExpected[q] = Float.NaN;
             evX[q] = px[i];
             evY[q] = py[i];
             evZ[q] = pz[i];
@@ -628,8 +719,138 @@ public final class ParticleSystem {
         }
     }
 
+    /**
+     * Batch path TRAIL events: queued with their expected count and rounded (one random draw each) only once the
+     * queue is in the old loop's order, so the draws happen in the same sequence as the per-particle loop's.
+     */
+    void queueTrail(CompiledEffect e, int i, float dt) {
+        int[] triggers = e.subTrigger;
+        for (int s = 0; s < triggers.length; s++) {
+            if (triggers[s] != CompiledEffect.TRIGGER_TRAIL) {
+                continue;
+            }
+            float expected = e.subRate[s] * dt;
+            if (evTail == EVENT_CAPACITY) {
+                eventsDroppedTotal++;
+                droppedTotal += (int) expected;
+                continue;
+            }
+            int q = evTail++;
+            float inherit = e.subInherit[s];
+            evEffect[q] = (short) e.subTarget[s].id;
+            evCount[q] = 0;
+            int o = owner[i];
+            evOwner[q] = o == 0 ? 0 : o | OWNER_DERIVED;
+            evKey[q] = 2 * i + 1;
+            evExpected[q] = expected;
+            evX[q] = px[i];
+            evY[q] = py[i];
+            evZ[q] = pz[i];
+            evVx[q] = vx[i] * inherit;
+            evVy[q] = vy[i] * inherit;
+            evVz[q] = vz[i] * inherit;
+        }
+    }
+
+    /**
+     * Puts the batch path's events in the order the per-particle loop produced them (stable radix sort on the key),
+     * then rounds TRAIL counts in that order and drops the ones that round to zero.
+     */
+    private void orderKeyedEvents() {
+        int n = evTail;
+        boolean sorted = true;
+        for (int q = 1; q < n && sorted; q++) {
+            sorted = evKey[q - 1] <= evKey[q];
+        }
+        if (!sorted) {
+            int[] src = sortA, dst = sortB;
+            for (int q = 0; q < n; q++) {
+                src[q] = q;
+            }
+            for (int shift = 0; shift < 22; shift += 11) {
+                int[] count = sortCount;
+                Arrays.fill(count, 0);
+                for (int q = 0; q < n; q++) {
+                    count[(evKey[src[q]] >>> shift) & 2047]++;
+                }
+                int sum = 0;
+                for (int b = 0; b < count.length; b++) {
+                    int c = count[b];
+                    count[b] = sum;
+                    sum += c;
+                }
+                for (int q = 0; q < n; q++) {
+                    int e = src[q];
+                    dst[count[(evKey[e] >>> shift) & 2047]++] = e;
+                }
+                int[] t = src;
+                src = dst;
+                dst = t;
+            }
+            permute(src, n);
+        }
+        int w = 0;
+        for (int q = 0; q < n; q++) {
+            float expected = evExpected[q];
+            if (!Float.isNaN(expected)) {
+                int count = (int) expected;
+                if (random.nextFloat() < expected - count) {
+                    count++;
+                }
+                if (count == 0) {
+                    continue;
+                }
+                evCount[q] = count;
+            }
+            if (w != q) {
+                evEffect[w] = evEffect[q];
+                evCount[w] = evCount[q];
+                evOwner[w] = evOwner[q];
+                evKey[w] = evKey[q];
+                evExpected[w] = evExpected[q];
+                evX[w] = evX[q];
+                evY[w] = evY[q];
+                evZ[w] = evZ[q];
+                evVx[w] = evVx[q];
+                evVy[w] = evVy[q];
+                evVz[w] = evVz[q];
+            }
+            w++;
+        }
+        evTail = w;
+    }
+
+    private void permute(int[] perm, int n) {
+        int[] ti = scratchI;
+        float[] tf = scratchF;
+        for (int q = 0; q < n; q++) ti[q] = evEffect[perm[q]];
+        for (int q = 0; q < n; q++) evEffect[q] = (short) ti[q];
+        for (int q = 0; q < n; q++) ti[q] = evCount[perm[q]];
+        System.arraycopy(ti, 0, evCount, 0, n);
+        for (int q = 0; q < n; q++) ti[q] = evOwner[perm[q]];
+        System.arraycopy(ti, 0, evOwner, 0, n);
+        for (int q = 0; q < n; q++) ti[q] = evKey[perm[q]];
+        System.arraycopy(ti, 0, evKey, 0, n);
+        permute(evExpected, perm, n, tf);
+        permute(evX, perm, n, tf);
+        permute(evY, perm, n, tf);
+        permute(evZ, perm, n, tf);
+        permute(evVx, perm, n, tf);
+        permute(evVy, perm, n, tf);
+        permute(evVz, perm, n, tf);
+    }
+
+    private static void permute(float[] a, int[] perm, int n, float[] tmp) {
+        for (int q = 0; q < n; q++) tmp[q] = a[perm[q]];
+        System.arraycopy(tmp, 0, a, 0, n);
+    }
+
     /** Spawns every queued sub-emitter event (including ones queued by those spawns). */
     private void flushEvents() {
+        if (keyedEvents) {
+            keyedEvents = false;
+            orderKeyedEvents();
+        }
         for (int q = 0; q < evTail; q++) {
             CompiledEffect target = effects[evEffect[q]];
             spawn(target, evX[q], evY[q], evZ[q], target.dirX, target.dirY, target.dirZ, evCount[q],
@@ -650,11 +871,16 @@ public final class ParticleSystem {
         if (dt > MAX_STEP) {
             dt = MAX_STEP;
         }
-        for (int k = 0; k < effectCount; k++) {
-            CompiledEffect c = effects[k];
-            c.dragMul = c.drag == 0f ? 1f : (float) Math.exp(-c.drag * dt);
+        stepDt = dt;
+        if (referenceIntegrator) {
+            for (int k = 0; k < effectCount; k++) {
+                CompiledEffect c = effects[k];
+                c.dragMul = c.drag == 0f ? 1f : (float) Math.exp(-c.drag * dt);
+            }
+            integrate(dt);
+        } else {
+            step(dt);
         }
-        integrate(dt);
         flushEvents();
         runEmitters(dt);
         flushEvents();
@@ -676,7 +902,9 @@ public final class ParticleSystem {
                 }
                 em.remaining -= dt;
             }
-            em.accumulator += em.effect.rate * em.rateScale * step;
+            float rate = em.effect.emitterProgram == null ? em.effect.rate : emitterRate(em.effect, em.age, step);
+            em.age += dt;
+            em.accumulator += rate * em.rateScale * step;
             int n = (int) em.accumulator;
             if (n > 0) {
                 em.accumulator -= n;
@@ -692,6 +920,74 @@ public final class ParticleSystem {
         }
     }
 
+    /**
+     * The CPU backend's step (OM #99): (1) the built-in {@code lifetime} module natively — ages, deaths with their
+     * events, swap-removal exactly like the old loop; (2) survivors grouped by effect; (3) each effect's compiled
+     * PARTICLE_UPDATE program over its group, one instruction across a chunk at a time. Events carry the old loop's
+     * order key and are re-ordered before flushing, so the result matches {@link #integrate} bit for bit.
+     */
+    private void step(float dt) {
+        final CompiledEffect[] effects = this.effects;
+        int i = 0;
+        while (i < live) {
+            CompiledEffect e = effects[effectId[i]];
+            float a = age[i] + dt;
+            if (a * invLife[i] >= 1f) {
+                if (e.hasDeath) {
+                    queueSubs(e, CompiledEffect.TRIGGER_DEATH, i, 0f, 2 * i);
+                }
+                int o = owner[i];
+                if (o != 0 && ownerListener != null) {
+                    ownerListener.died(o, px[i], py[i], pz[i], vx[i], vy[i], vz[i]);
+                }
+                kill(i);
+                continue;
+            }
+            age[i] = a;
+            i++;
+        }
+        keyedEvents = true;
+        int n = live;
+        if (n == 0) {
+            return;
+        }
+        int[] start = groupStart, fill = groupFill;
+        Arrays.fill(start, 0, effectCount + 1, 0);
+        for (int k = 0; k < n; k++) {
+            start[effectId[k] + 1]++;
+        }
+        for (int k = 0; k < effectCount; k++) {
+            start[k + 1] += start[k];
+        }
+        System.arraycopy(start, 0, fill, 0, effectCount);
+        int[] ord = order;
+        for (int k = 0; k < n; k++) {
+            ord[fill[effectId[k]]++] = k;
+        }
+        for (int k = 0; k < effectCount; k++) {
+            int count = start[k + 1] - start[k];
+            if (count > 0) {
+                CompiledEffect e = effects[k];
+                vm.runParticles(e.updateProgram, e, ord, start[k], count, dt, windX, windY, windZ);
+            }
+        }
+    }
+
+    /** The built-in {@code move} module's COLLIDE: through the collider (if any) or freely, writing position and velocity. */
+    void moveParticle(int i, CompiledEffect e, float nvx, float nvy, float nvz, float dt) {
+        if (collider != ParticleCollider.NONE) {
+            collide(i, e, age[i] * invLife[i], nvx, nvy, nvz, dt);
+        } else {
+            px[i] += nvx * dt;
+            py[i] += nvy * dt;
+            pz[i] += nvz * dt;
+            vx[i] = nvx;
+            vy[i] = nvy;
+            vz[i] = nvz;
+        }
+    }
+
+    /** The old hand-written per-particle loop (the reference for {@link #step}). */
     private void integrate(float dt) {
         final CompiledEffect[] effects = this.effects;
         final boolean anyCollider = collider != ParticleCollider.NONE;
@@ -702,7 +998,7 @@ public final class ParticleSystem {
             float a = age[i] + dt;
             if (a * invLife[i] >= 1f) {
                 if (e.hasDeath) {
-                    queueSubs(e, CompiledEffect.TRIGGER_DEATH, i, 0f);
+                    queueSubs(e, CompiledEffect.TRIGGER_DEATH, i, 0f, 0);
                 }
                 int o = owner[i];
                 if (o != 0 && ownerListener != null) {
@@ -728,7 +1024,7 @@ public final class ParticleSystem {
             }
             rot[i] += spin[i] * dt;
             if (e.hasTrail) {
-                queueSubs(e, CompiledEffect.TRIGGER_TRAIL, i, dt);
+                queueSubs(e, CompiledEffect.TRIGGER_TRAIL, i, dt, 0);
             }
             i++;
         }
@@ -799,7 +1095,7 @@ public final class ParticleSystem {
         vz[i] = nvz;
         if (impact > IMPACT_SPEED) {
             if (e.hasCollision) {
-                queueSubs(e, CompiledEffect.TRIGGER_COLLISION, i, 0f);
+                queueSubs(e, CompiledEffect.TRIGGER_COLLISION, i, 0f, 2 * i + 1);
             }
             int o = owner[i];
             if (o != 0 && ownerListener != null) {
@@ -845,6 +1141,9 @@ public final class ParticleSystem {
         effectId[i] = effectId[last];
         frameOffset[i] = frameOffset[last];
         owner[i] = owner[last];
+        for (float[] c : custom) {
+            c[i] = c[last];
+        }
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -861,6 +1160,18 @@ public final class ParticleSystem {
     /** Owner tag of live particle {@code i} (0 = not spawned by an FX instance). */
     int ownerOf(int i) { return owner[checkLive(i)]; }
     CompiledEffect compiled(ParticleEffect effect) { return compile(effect); }
+    /** The compiled programs of {@code effect} in this system (diagnostics, tests). */
+    public FxProgram updateProgram(ParticleEffect effect) { return compile(effect).updateProgram; }
+    /** Value of custom attribute component {@code name} ("heat", "swirl.x") of live particle {@code i}. */
+    public float customAttribute(int i, String name) {
+        checkLive(i);
+        for (int c = 0; c < customNames.length; c++) {
+            if (customNames[c].equals(name)) {
+                return custom[c][i];
+            }
+        }
+        throw new IllegalArgumentException("no custom attribute '" + name + "'");
+    }
     ParticleRandom random() { return random; }
 
     private int checkLive(int i) {

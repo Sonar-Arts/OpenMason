@@ -23,6 +23,8 @@ public final class ParticleEmitter {
     float remaining;
     boolean removeWhenStopped;
     float accumulator;
+    /** Seconds since the emitter was created (EMITTER_UPDATE programs read it as {@code emitterAge}). */
+    float age;
 
     ParticleEmitter(ParticleSystem system, CompiledEffect effect, double x, double y, double z) {
         this.system = system;

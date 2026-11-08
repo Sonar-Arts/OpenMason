@@ -1,5 +1,7 @@
 package com.openmason.engine.rendering.particles;
 
+import com.openmason.engine.rendering.particles.graph.FxGraph;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -73,6 +75,9 @@ import java.util.Objects;
  * @param maxLive       cap on this effect's live particles (0 = only the system budget)
  * @param priority      share of the system budget this effect may fill
  * @param lodDistance   full spawning within this distance of the viewer, thinning to none at twice it (0 = off)
+ * @param graph         the effect's behaviour as an FX graph (OM #99): stage stacks of built-in modules (lowered from
+ *                      the fields above) and custom operator modules; null = the default stacks, i.e. exactly the
+ *                      fields above. Validated (compiled) when the effect is built.
  */
 public record ParticleEffect(
         String name,
@@ -112,7 +117,8 @@ public record ParticleEffect(
         List<SubEmitter> subEmitters,
         int maxLive,
         Priority priority,
-        float lodDistance) {
+        float lodDistance,
+        FxGraph graph) {
 
     /** Where particles appear relative to their emitter. */
     public enum EmitterShape { POINT, SPHERE, BOX, DISC }
@@ -317,6 +323,14 @@ public record ParticleEffect(
         if (subEmitters.size() > MAX_SUB_EMITTERS) {
             throw new IllegalArgumentException(name + ": at most " + MAX_SUB_EMITTERS + " sub-emitters");
         }
+        if (graph != null) {
+            boolean trail = false;
+            for (SubEmitter s : subEmitters) {
+                trail |= s.trigger() == Trigger.TRAIL;
+            }
+            FxCompiler.compile(new FxCompiler.Input(name, graph, gravityX, gravityY, gravityZ, windInfluence, drag,
+                    collides, trail, rate));
+        }
     }
 
     private static void checkKeys(String name, String field, int size, java.util.function.IntToDoubleFunction t) {
@@ -386,6 +400,7 @@ public record ParticleEffect(
         b.maxLive = maxLive;
         b.priority = priority;
         b.lodDistance = lodDistance;
+        b.graph = graph;
         return b;
     }
 
@@ -429,6 +444,7 @@ public record ParticleEffect(
         private int maxLive;
         private Priority priority = Priority.NORMAL;
         private float lodDistance;
+        private FxGraph graph;
 
         private Builder(String name) {
             this.name = name;
@@ -515,6 +531,8 @@ public record ParticleEffect(
         public Builder maxLive(int v) { this.maxLive = v; return this; }
         public Builder priority(Priority p) { this.priority = p; return this; }
         public Builder lodDistance(float blocks) { this.lodDistance = blocks; return this; }
+        /** The effect's FX graph (custom modules); null = the default built-in stacks. */
+        public Builder graph(FxGraph g) { this.graph = g; return this; }
 
         public ParticleEffect build() {
             return new ParticleEffect(name, lifetime, rate, shape, radius, halfX, halfY, halfZ, speed,
@@ -522,7 +540,7 @@ public record ParticleEffect(
                     startSize, endSize, sizeKeys, colorStart, colorEnd, colorKeys, colorJitter, fadeIn, fadeOut,
                     additive, emissive, softness, orientation, stretch, rotation, spin, sprite, textures,
                     animateFrames, collides, bounce, friction, subEmitters, maxLive, priority,
-                    lodDistance);
+                    lodDistance, graph);
         }
     }
 }

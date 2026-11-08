@@ -260,7 +260,8 @@ public final class FxWorld implements AutoCloseable {
                 if (span > 0f) {
                     float rate = inst.ch[e * CompiledFx.CHANNELS + CompiledFx.CH_RATE] * mul;
                     CompiledEffect c = system.compiled(f.effects[e]);
-                    inst.acc[e] += c.rate * rate * span;
+                    float spawnRate = system.emitterRate(c, (float) (t0 - start), dt);
+                    inst.acc[e] += spawnRate * rate * span;
                     int n = (int) inst.acc[e];
                     if (n > 0) {
                         inst.acc[e] -= n;
