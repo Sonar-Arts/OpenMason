@@ -209,6 +209,19 @@ public final class McpRequestRouter {
             return errorContent(e.getClass().getSimpleName() + ": " + e.getMessage());
         }
 
+        if (result instanceof McpImageWithData both) {
+            ObjectNode image = mapper.createObjectNode();
+            image.put("type", "image");
+            image.put("data", both.image().base64Data());
+            image.put("mimeType", both.image().mimeType());
+            ObjectNode data = mapper.createObjectNode();
+            data.put("type", "text");
+            data.put("text", mapper.writeValueAsString(both.data()));
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("content", List.of(image, data));
+            response.put("isError", false);
+            return response;
+        }
         ObjectNode content;
         if (result instanceof McpImageContent img) {
             content = mapper.createObjectNode();

@@ -62,7 +62,8 @@ public final class MetaToolDefinitions {
                         + "cheatsheet), texture_editor (summoning the editor, layers, noise, "
                         + "tex_describe/tex_paint_grid text pixel art), recipes (workflows like "
                         + "'build a quadruped mob'), assets, saving, ui_editor (UI documents: keys, "
-                        + "overrides, ui_ops, Preview). Read "
+                        + "overrides, ui_ops, Preview), particles (FX systems: .omfx v2 JSON, "
+                        + "fx_set edits, fx_simulate/fx_capture checks). Read "
                         + "overview once per session; other topics on demand."
                         + pluginTopics(),
                 McpSchema.of(mapper)

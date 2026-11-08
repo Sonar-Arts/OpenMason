@@ -348,6 +348,9 @@ public final class CoreFeatures {
                 editor::show));
         context.fileTypes().register(BuiltinFileTypes.OMFX);
         context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMFX.id(), editor::openFile));
+        // Agents author FX systems (.omfx v2) headlessly; the tab still edits v1 libraries until OM #104.
+        context.mcpTools().register(BuiltinMcpTools.PARTICLES);
+        context.guideTopics().register(BuiltinKnowledge.topic("particles"));
         // The preview's GL resources go while GL still exists.
         context.lifecycle().register(new LifecycleListener() {
             @Override

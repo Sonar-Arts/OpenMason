@@ -33,4 +33,5 @@ attach (sockets), anim. The five histories are separate.
 ## Topics
 `parts`, `face_textures`, `bones`, `attachments`, `animation`, `scripting`,
 `texture_editor` (summon/drive the layered editor; text pixel art via
-`tex_describe`/`tex_paint_grid` for vision-less reading), `recipes`
+`tex_describe`/`tex_paint_grid` for vision-less reading), `recipes`,
+`particles` (FX systems / particle effects: `fx_*` tools, .omfx v2)

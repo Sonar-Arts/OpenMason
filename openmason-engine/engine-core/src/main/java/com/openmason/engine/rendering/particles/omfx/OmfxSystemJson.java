@@ -340,6 +340,14 @@ final class OmfxSystemJson {
     // ------------------------------------------------------------------------------------------------
 
     static Written write(OmfxDocument doc) {
+        return write(doc, false);
+    }
+
+    /**
+     * {@code inline}: the editable view ({@link OmfxCodec#toSystemJson}) — graphs as JSON objects in their effects,
+     * no sprites table, no files; otherwise the archive form.
+     */
+    static Written write(OmfxDocument doc, boolean inline) {
         FxSystem system = doc.system();
         Map<String, byte[]> files = new LinkedHashMap<>();
         Set<String> taken = new HashSet<>();
@@ -351,7 +359,9 @@ final class OmfxSystemJson {
         ArrayNode effects = root.putArray("effects");
         for (ParticleEffect e : doc.effects()) {
             ObjectNode n = ParticleLibrary.toJsonNode(e);
-            if (e.graph() != null) {
+            if (e.graph() != null && inline) {
+                n.set("graph", FxGraphJson.toJson(e.graph()));
+            } else if (e.graph() != null) {
                 String path = OmfxCodec.uniquePath(OmfxCodec.GRAPHS_DIR, OmfxCodec.fileStem(e.name()), ".json", taken);
                 files.put(path, FxGraphJson.write(e.graph()).getBytes(StandardCharsets.UTF_8));
                 n.put("graph", path);
@@ -463,6 +473,9 @@ final class OmfxSystemJson {
             n.put("volume", c.volume());
         }
 
+        if (inline) {
+            return new Written(root, Map.of());
+        }
         ArrayNode sprites = root.putArray("sprites");
         for (OmfxSprite s : doc.sprites()) {
             String path = OmfxCodec.uniquePath(OmfxCodec.TEXTURES_DIR, OmfxCodec.fileStem(s.name()),

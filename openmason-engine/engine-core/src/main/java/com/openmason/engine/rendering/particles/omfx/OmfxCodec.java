@@ -322,6 +322,45 @@ public final class OmfxCodec {
     }
 
     // ------------------------------------------------------------------------------------------------
+    // Editable view (editors, MCP tools)
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * The document's system as an editable {@code system.json} tree: the archive form with every graph inline (a
+     * {@code openmason.fxgraph} object in its effect) and no {@code sprites} table — the document's sprites and
+     * sound files are its own, untouched by edits of this view. Feed an edited copy to {@link #withSystemJson}.
+     */
+    public static ObjectNode toSystemJson(OmfxDocument doc) {
+        try {
+            return OmfxSystemJson.write(doc, true).json();
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(doc.id() + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * {@code doc} with its system replaced by {@code system} (the {@link #toSystemJson} shape; graphs inline or
+     * omitted), read by the same strict reader as a file. The id, author, sprites, extensions and extra files are
+     * kept; embedded sound defs must name sound files the document already holds (files no def uses any more are
+     * dropped); a {@code sprites} member is ignored. Fails with a reason, leaving {@code doc} as it was.
+     */
+    public static OmfxDocument withSystemJson(OmfxDocument doc, JsonNode system) throws IOException {
+        if (system == null || !system.isObject()) {
+            throw new IOException(SYSTEM + " must be a JSON object");
+        }
+        ObjectNode copy = ((ObjectNode) system).deepCopy();
+        copy.remove("sprites");
+        Map<String, byte[]> entries = new LinkedHashMap<>(doc.soundFiles());
+        OmfxSystemJson.Parsed parsed = OmfxSystemJson.read(doc.id(), copy, entries);
+        try {
+            return new OmfxDocument(doc.author(), parsed.system(), doc.sprites(), parsed.soundFiles(),
+                    doc.extensions(), doc.extraFiles());
+        } catch (IllegalArgumentException e) {
+            throw new IOException("invalid .omfx document: " + e.getMessage(), e);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------
     // Entry names
     // ------------------------------------------------------------------------------------------------
 

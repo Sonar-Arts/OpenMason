@@ -31,6 +31,9 @@ class McpRequestRouterTest {
         registry.register(new McpTool("echo_image", "returns an image",
                 McpSchema.of(mapper).build(),
                 args -> new McpImageContent("QUJD", "image/png")));
+        registry.register(new McpTool("echo_image_data", "returns an image and its data",
+                McpSchema.of(mapper).build(),
+                args -> new McpImageWithData(new McpImageContent("QUJD", "image/png"), Map.of("live", 7))));
         registry.register(new McpTool("throws_iae", "teaching error",
                 McpSchema.of(mapper).build(),
                 args -> {
@@ -69,6 +72,20 @@ class McpRequestRouterTest {
         assertNotNull(instructions);
         assertTrue(instructions.contains("model_summary"));
         assertTrue(instructions.contains("run_python_script"));
+    }
+
+    @Test
+    void imageWithDataBecomesAnImageBlockThenATextBlock() {
+        McpJsonRpc.Response response = call("echo_image_data");
+        List<?> blocks = (List<?>) resultMap(response).get("content");
+        assertEquals(2, blocks.size());
+        Map<?, ?> image = (Map<?, ?>) blocks.get(0);
+        Map<?, ?> text = (Map<?, ?>) blocks.get(1);
+        assertEquals("image", image.get("type"));
+        assertEquals("QUJD", image.get("data"));
+        assertEquals("text", text.get("type"));
+        assertEquals("{\"live\":7}", text.get("text"));
+        assertTrue(!isError(response));
     }
 
     @Test

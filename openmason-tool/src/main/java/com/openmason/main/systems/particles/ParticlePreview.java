@@ -60,7 +60,7 @@ final class ParticlePreview implements AutoCloseable {
     private final float[] clearScratch = new float[4];
     private int width, height;
     private int fbo, colorTex, depthRb, depthCopyFbo, depthCopyTex;
-    private final int groundProgram, groundVao, groundViewProj;
+    private final PreviewGround ground = new PreviewGround();
 
     // ---- user controls ----
     boolean playing = true;
@@ -76,9 +76,6 @@ final class ParticlePreview implements AutoCloseable {
     float yaw = 0.6f, pitch = 0.35f, distance = 4.5f;
 
     ParticlePreview() {
-        groundProgram = compileGround();
-        groundViewProj = glGetUniformLocation(groundProgram, "u_viewProj");
-        groundVao = glGenVertexArrays();
     }
 
     /**
@@ -216,7 +213,7 @@ final class ParticlePreview implements AutoCloseable {
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LESS);
             if (showGround) {
-                drawGround();
+                ground.draw(viewProjection);
             }
             frame.depthTexture = 0;
             if (softParticles) {
@@ -322,76 +319,10 @@ final class ParticlePreview implements AutoCloseable {
         fbo = depthCopyFbo = colorTex = depthCopyTex = depthRb = 0;
     }
 
-    private void drawGround() {
-        int prevProgram = glGetInteger(GL_CURRENT_PROGRAM);
-        int prevVao = glGetInteger(GL_VERTEX_ARRAY_BINDING);
-        boolean prevBlend = glIsEnabled(GL_BLEND);
-        boolean prevCull = glIsEnabled(GL_CULL_FACE);
-        glDisable(GL_BLEND);
-        glDisable(GL_CULL_FACE);
-        glUseProgram(groundProgram);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            glUniformMatrix4fv(groundViewProj, false, viewProjection.get(stack.mallocFloat(16)));
-        }
-        glBindVertexArray(groundVao);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        glBindVertexArray(prevVao);
-        glUseProgram(prevProgram);
-        if (prevBlend) glEnable(GL_BLEND);
-        if (prevCull) glEnable(GL_CULL_FACE);
-    }
-
-    private static int compileGround() {
-        String vs = """
-                #version 330 core
-                uniform mat4 u_viewProj;
-                out vec2 v_xz;
-                void main() {
-                    vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 40.0 - 20.0;
-                    v_xz = c;
-                    gl_Position = u_viewProj * vec4(c.x, 0.0, c.y, 1.0);
-                }
-                """;
-        String fs = """
-                #version 330 core
-                in vec2 v_xz;
-                out vec4 o;
-                void main() {
-                    vec2 g = abs(fract(v_xz) - 0.5);
-                    float line = step(0.47, max(g.x, g.y));
-                    float fade = clamp(1.0 - length(v_xz) / 20.0, 0.0, 1.0);
-                    vec3 base = vec3(0.16, 0.18, 0.15);
-                    o = vec4(mix(vec3(0.07, 0.08, 0.11), base * (1.0 + 0.35 * line), fade), 1.0);
-                }
-                """;
-        int program = glCreateProgram();
-        int v = shader(GL_VERTEX_SHADER, vs), f = shader(GL_FRAGMENT_SHADER, fs);
-        glAttachShader(program, v);
-        glAttachShader(program, f);
-        glLinkProgram(program);
-        glDeleteShader(v);
-        glDeleteShader(f);
-        if (glGetProgrami(program, GL_LINK_STATUS) != GL_TRUE) {
-            throw new IllegalStateException("particle preview floor: " + glGetProgramInfoLog(program));
-        }
-        return program;
-    }
-
-    private static int shader(int type, String src) {
-        int s = glCreateShader(type);
-        glShaderSource(s, src);
-        glCompileShader(s);
-        if (glGetShaderi(s, GL_COMPILE_STATUS) != GL_TRUE) {
-            throw new IllegalStateException("particle preview floor: " + glGetShaderInfoLog(s));
-        }
-        return s;
-    }
-
     @Override
     public void close() {
         releaseTarget();
-        glDeleteProgram(groundProgram);
-        glDeleteVertexArrays(groundVao);
+        ground.close();
         renderer.close();
         if (sprites != null) {
             sprites.close();

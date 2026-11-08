@@ -86,6 +86,11 @@ public final class ToolBridge {
     }
 
     private DispatchResult marshal(Object result) {
+        if (result instanceof com.openmason.main.systems.mcp.McpImageWithData both) {
+            DispatchResult data = marshal(both.data());
+            return new DispatchResult("[image captured — shown to the user in the chat pane] " + data.text(),
+                    both.image(), false);
+        }
         if (result instanceof McpImageContent image) {
             return new DispatchResult("[image captured — shown to the user in the chat pane]",
                     image, false);

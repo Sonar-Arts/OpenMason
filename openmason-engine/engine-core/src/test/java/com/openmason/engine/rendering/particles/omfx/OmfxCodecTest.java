@@ -1,6 +1,7 @@
 package com.openmason.engine.rendering.particles.omfx;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.openmason.engine.format.ext.FormatExtensions;
 import com.openmason.engine.format.sound.SoundData;
@@ -248,6 +249,54 @@ class OmfxCodecTest {
         assertEquals(FxParameter.scalar("k", 0f), doc.system().parameters().get(0));
         assertEquals(FxParameter.color("c", 0xFFFFFFFF), doc.system().parameters().get(1));
         assertNull(doc.system().light());
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Editable view
+    // ------------------------------------------------------------------------------------------------
+
+    @Test
+    void theEditableViewReadsBackToTheSameDocument() throws IOException {
+        OmfxDocument doc = kitchenSink();
+        ObjectNode view = OmfxCodec.toSystemJson(doc);
+        assertTrue(findByName(view.get("effects"), "swirl").get("graph").isObject(), "graphs are inline");
+        assertFalse(view.has("sprites"), "sprites belong to the document, not the view");
+        assertEquals(doc, OmfxCodec.withSystemJson(doc, view));
+    }
+
+    @Test
+    void editsThroughTheViewChangeOnlyWhatTheyTouch() throws IOException {
+        OmfxDocument doc = kitchenSink();
+        ObjectNode view = OmfxCodec.toSystemJson(doc);
+        ((ObjectNode) findByName(view.get("emitters"), "aimed")).put("delay", 2.5f);
+        ((ObjectNode) findByName(view.get("effects"), "omt")).put("rate", 7f);
+        OmfxDocument edited = OmfxCodec.withSystemJson(doc, view);
+        assertEquals(2.5f, edited.system().emitter("aimed").delay());
+        assertEquals(7f, edited.system().emitter("aimed").effect().rate());
+        assertEquals(doc.sprites(), edited.sprites());
+        assertEquals(doc.extensions(), edited.extensions());
+        assertEquals(doc.extraFiles().keySet(), edited.extraFiles().keySet());
+        assertEquals(doc.system().handlers(), edited.system().handlers());
+    }
+
+    @Test
+    void droppingAnEmbeddedSoundDefDropsItsFileAndBadEditsFailWithAReason() throws IOException {
+        OmfxDocument doc = kitchenSink();
+        ObjectNode view = OmfxCodec.toSystemJson(doc);
+        view.putArray("sounds").addObject().put("event", "ignite").put("resource", "/sounds/Ignite.ogg");
+        view.putArray("cues");
+        ((ArrayNode) view.get("events")).forEach(e -> ((ObjectNode) e).putNull("sound"));
+        OmfxDocument edited = OmfxCodec.withSystemJson(doc, view);
+        assertTrue(edited.soundFiles().isEmpty(), "the whoosh sample is no longer used");
+
+        ObjectNode bad = OmfxCodec.toSystemJson(doc);
+        ((ObjectNode) bad.get("emitters").get(0)).put("effect", "ghost");
+        IOException e = assertThrows(IOException.class, () -> OmfxCodec.withSystemJson(doc, bad));
+        assertTrue(e.getMessage().contains("plays effect 'ghost'"), e.getMessage());
+        ObjectNode newSound = OmfxCodec.toSystemJson(doc);
+        ((ArrayNode) newSound.get("sounds")).addObject().put("event", "x").put("file", "sounds/new.wav");
+        e = assertThrows(IOException.class, () -> OmfxCodec.withSystemJson(doc, newSound));
+        assertTrue(e.getMessage().contains("'sounds/new.wav' is missing"), e.getMessage());
     }
 
     // ------------------------------------------------------------------------------------------------

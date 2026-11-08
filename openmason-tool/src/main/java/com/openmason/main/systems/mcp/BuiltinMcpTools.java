@@ -1,6 +1,9 @@
 package com.openmason.main.systems.mcp;
 
 import com.openmason.api.mcp.McpToolContribution;
+import com.openmason.main.systems.particles.mcp.FxCaptureService;
+import com.openmason.main.systems.particles.mcp.FxDocumentService;
+import com.openmason.main.systems.particles.mcp.FxToolDefinitions;
 import com.openmason.main.systems.scripting.mcp.ScriptLibraryService;
 import com.openmason.main.systems.scripting.mcp.ScriptLibraryToolDefinitions;
 import com.openmason.main.systems.scripting.mcp.ScriptingService;
@@ -94,9 +97,16 @@ public final class BuiltinMcpTools {
             c -> new ScriptLibraryToolDefinitions(new ScriptLibraryService(McpSharedServices.of(c).editor()),
                     c.mapper()).registerAll(c.registry()));
 
+    // ── openmason.particles ─────────────────────────────────────────────────
+
+    /** FX systems (OM #101): .omfx v2 documents, edits, sprites, headless simulation, capture, files. */
+    public static final McpToolContribution PARTICLES = new McpToolContribution("particles", c ->
+            new FxToolDefinitions(new FxDocumentService(McpSharedServices.of(c).writes()), new FxCaptureService(),
+                    c.mapper()).registerAll(c.registry()));
+
     /** Every built-in group, in the order the built-in plugins register them. */
     public static List<McpToolContribution> all() {
         return List.of(SAVE, MODEL_FILES, MODEL, BONES, ATTACHMENTS, VIEWPORT, SCENE, INSPECTION, KNOWLEDGE, META,
-                TEXTURE, FACE_TEXTURES, ANIMATION, UI, SCRIPTING, SCRIPT_LIBRARY);
+                TEXTURE, FACE_TEXTURES, ANIMATION, UI, SCRIPTING, SCRIPT_LIBRARY, PARTICLES);
     }
 }

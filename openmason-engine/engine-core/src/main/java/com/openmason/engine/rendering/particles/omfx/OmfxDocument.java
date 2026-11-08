@@ -192,6 +192,19 @@ public record OmfxDocument(String author, FxSystem system, List<OmfxSprite> spri
         return new OmfxDocument(author, system, next, soundFiles, extensions, extraFiles);
     }
 
+    /** Without the embedded sprite {@code name} (the name, if effects list it, becomes the host's to resolve). */
+    public OmfxDocument withoutSprite(String name) {
+        List<OmfxSprite> next = new ArrayList<>(sprites);
+        next.removeIf(s -> s.name().equals(name));
+        return next.size() == sprites.size() ? this
+                : new OmfxDocument(author, system, next, soundFiles, extensions, extraFiles);
+    }
+
+    /** With {@code name} as the author. */
+    public OmfxDocument withAuthor(String name) {
+        return new OmfxDocument(name, system, sprites, soundFiles, extensions, extraFiles);
+    }
+
     /** Decodes the embedded sprite {@code name}, or null when it is not embedded. */
     public ParticleImage decodeSprite(String name) throws IOException {
         OmfxSprite s = sprite(name);

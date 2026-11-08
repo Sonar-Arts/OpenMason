@@ -1,0 +1,12 @@
+fx_capture
+fx_close
+fx_documents
+fx_get
+fx_new
+fx_open
+fx_presets
+fx_save
+fx_set
+fx_simulate
+fx_sprite
+fx_undo
