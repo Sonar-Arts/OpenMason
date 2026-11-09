@@ -1,5 +1,9 @@
 package com.openmason.main.systems.particles;
 
+import com.openmason.api.fx.FxCatalogSource;
+import com.openmason.api.target.GameTarget;
+import com.openmason.main.systems.target.GameTargets;
+
 import com.openmason.engine.format.fx.FxParamValue;
 import com.openmason.engine.rendering.particles.FxParameter;
 import com.openmason.engine.rendering.particles.FxPresets;
@@ -22,17 +26,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * The FX a project knows (#103), what the SBO/SBE editors' FX bindings are checked against: every {@code .omfx}
- * in the project (a v2 system by its id, a v1 library by its effect names) plus the engine's FX and effect presets.
- * GL-free. A project entry wins over a preset of the same id; a binding id {@code ns:name} also matches an entry
+ * in the project (a v2 system by its id, a v1 library by its effect names), the FX plugins contribute
+ * ({@link FxCatalogSource}: a game's shipped FX, while its game target is active) and the engine's FX and effect
+ * presets, in that order. GL-free. A project entry wins over a preset of the same id; a binding id {@code ns:name} also matches an entry
  * named {@code name} (games namespace the FX they ship).
  */
 public final class FxCatalog {
 
     /** Where an entry came from. */
-    public enum Source { PROJECT, PRESET }
+    public enum Source { PROJECT, PLUGIN, PRESET }
 
     /**
      * One parameter an FX declares.
@@ -58,7 +64,7 @@ public final class FxCatalog {
     /**
      * One known FX.
      *
-     * @param origin the project-relative file it came from, or "engine preset"
+     * @param origin the project-relative file it came from, "<plugin source>: <origin>", or "engine preset"
      */
     public record Entry(String id, Source source, String origin, List<Param> params) {
         public Entry {
@@ -79,6 +85,9 @@ public final class FxCatalog {
     static final int MAX_FILES = 512;
 
     private static final FxCatalog EMPTY = new FxCatalog(Map.of(), List.of());
+
+    /** The plugins' catalog sources (set once at start-up from the plugin registries; none in tests). */
+    private static volatile Supplier<List<FxCatalogSource>> pluginSources = List::of;
 
     private final Map<String, Entry> byId;
     private final List<String> problems;
@@ -108,11 +117,34 @@ public final class FxCatalog {
         return new FxCatalog(byId, List.of());
     }
 
+    /** Where {@link #scan(Path)} finds the plugins' {@link FxCatalogSource}s (null = none). */
+    public static void setPluginSources(Supplier<List<FxCatalogSource>> sources) {
+        pluginSources = sources != null ? sources : List::of;
+    }
+
     /**
-     * The FX of the project at {@code projectRoot} (null = presets only). Files that cannot be read are skipped and
-     * listed in {@link #problems()}.
+     * The FX of the project at {@code projectRoot} (null = no project files) plus the registered plugin sources that
+     * apply to the active game target. Files and sources that cannot be read are skipped and listed in
+     * {@link #problems()}.
      */
     public static FxCatalog scan(Path projectRoot) {
+        String active = null;
+        try {
+            active = GameTargets.shared().active().map(GameTarget::id).orElse(null);
+        } catch (RuntimeException e) {
+            // no target registry (headless): only target-independent sources apply
+        }
+        List<FxCatalogSource> sources;
+        try {
+            sources = pluginSources.get();
+        } catch (RuntimeException e) {
+            sources = List.of();
+        }
+        return scan(projectRoot, sources, active);
+    }
+
+    /** As {@link #scan(Path)} with explicit plugin sources and active game target id (null = none). */
+    public static FxCatalog scan(Path projectRoot, List<FxCatalogSource> sources, String activeTargetId) {
         Map<String, Entry> byId = new LinkedHashMap<>();
         List<String> problems = new ArrayList<>();
         if (projectRoot != null && Files.isDirectory(projectRoot)) {
@@ -125,8 +157,32 @@ public final class FxCatalog {
                 }
             }
         }
+        addPluginSources(byId, problems, sources, activeTargetId);
         addPresets(byId);
         return new FxCatalog(byId, problems);
+    }
+
+    private static void addPluginSources(Map<String, Entry> byId, List<String> problems,
+                                         List<FxCatalogSource> sources, String activeTargetId) {
+        if (sources == null) return;
+        for (FxCatalogSource source : sources) {
+            if (source == null || !source.appliesTo(activeTargetId)) continue;
+            List<FxCatalogSource.Entry> listed;
+            try {
+                listed = source.lister().list();
+            } catch (IOException | RuntimeException ex) {
+                problems.add(source.displayName() + ": " + ex.getMessage());
+                continue;
+            }
+            if (listed == null) continue;
+            for (FxCatalogSource.Entry e : listed) {
+                if (e == null) continue;
+                List<Param> params = new ArrayList<>();
+                for (FxParameter p : e.parameters()) params.add(Param.of(p));
+                String origin = e.origin().isEmpty() ? source.displayName() : source.displayName() + ": " + e.origin();
+                byId.putIfAbsent(e.id(), new Entry(e.id(), Source.PLUGIN, origin, params));
+            }
+        }
     }
 
     private static List<Path> omfxFiles(Path root, List<String> problems) {
@@ -196,7 +252,7 @@ public final class FxCatalog {
         }
     }
 
-    /** Every known FX, project files first. */
+    /** Every known FX: project files, then plugin sources, then presets. */
     public List<Entry> entries() {
         return List.copyOf(byId.values());
     }

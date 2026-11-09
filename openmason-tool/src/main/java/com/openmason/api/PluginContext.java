@@ -69,6 +69,9 @@ public interface PluginContext {
     /** Containers FX systems export to: a game's own shipped FX format (#102). */
     Registrar<com.openmason.api.fx.FxExportTarget> fxExporters();
 
+    /** FX the plugin knows beyond the project's .omfx files (a game's shipped FX), for the FX bindings check. */
+    Registrar<com.openmason.api.fx.FxCatalogSource> fxCatalogSources();
+
     /** Non-model content for the Model Editor viewport. */
     Registrar<ViewportContentProvider> viewportContent();
 

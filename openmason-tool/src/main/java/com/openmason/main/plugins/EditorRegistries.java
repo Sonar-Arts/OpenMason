@@ -50,6 +50,8 @@ public final class EditorRegistries {
             new Contributions<>("asset section", AssetSectionContribution::id);
     private final Contributions<com.openmason.api.fx.FxExportTarget> fxExporters =
             new Contributions<>("FX export target", com.openmason.api.fx.FxExportTarget::id);
+    private final Contributions<com.openmason.api.fx.FxCatalogSource> fxCatalogSources =
+            new Contributions<>("FX catalog source", com.openmason.api.fx.FxCatalogSource::id);
     private final Contributions<ViewportContentProvider> viewportContent =
             new Contributions<>("viewport content", ViewportContentProvider::id);
     private final Contributions<ProjectTemplate> templates = new Contributions<>("project template", ProjectTemplate::getId);
@@ -113,6 +115,10 @@ public final class EditorRegistries {
         return fxExporters;
     }
 
+    public Contributions<com.openmason.api.fx.FxCatalogSource> fxCatalogSources() {
+        return fxCatalogSources;
+    }
+
     public Contributions<ViewportContentProvider> viewportContent() {
         return viewportContent;
     }
@@ -136,7 +142,7 @@ public final class EditorRegistries {
     /** Every contribution list, for owner-wide operations. */
     public List<Contributions<?>> all() {
         return List.of(workspaces, menus, menuEntries, commands, fileTypes, fileOpeners, mcpTools, guideTopics,
-                knowledgePacks, preferencePages, assetSections, fxExporters, viewportContent, templates, gameTargets, themes,
+                knowledgePacks, preferencePages, assetSections, fxExporters, fxCatalogSources, viewportContent, templates, gameTargets, themes,
                 lifecycle);
     }
 
@@ -235,6 +241,11 @@ public final class EditorRegistries {
             @Override
             public Registrar<com.openmason.api.fx.FxExportTarget> fxExporters() {
                 return fxExporters.registrar(owner);
+            }
+
+            @Override
+            public Registrar<com.openmason.api.fx.FxCatalogSource> fxCatalogSources() {
+                return fxCatalogSources.registrar(owner);
             }
 
             @Override

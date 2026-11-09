@@ -115,6 +115,7 @@ public final class UiComposition {
             // Asset editor sections (#431): the SBO/SBE editor and export windows read them here.
             com.openmason.main.systems.menus.dialogs.AssetSectionSet.setSource(registries.assetSections()::all);
             com.openmason.main.systems.particles.export.FxExportService.setSource(registries.fxExporters()::all);
+            com.openmason.main.systems.particles.FxCatalog.setPluginSources(registries.fxCatalogSources()::all);
             registries.themes().addListener(new com.openmason.api.Contributions.Listener<>() {
                 @Override
                 public void added(com.openmason.main.systems.themes.core.ThemeDefinition theme) {

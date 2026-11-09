@@ -236,7 +236,7 @@ public final class FxBindingsEditor {
         }
         ImGui.textDisabled("Events: break, hit, place, step, ambient (runs while the asset exists), or any"
                 + " custom name the game raises.");
-        ImGui.textDisabled("Known FX: " + known.size() + " (project .omfx files + engine presets)");
+        ImGui.textDisabled("Known FX: " + known.size() + " (project .omfx files, plugin FX + engine presets)");
         ImGui.sameLine();
         if (ImGui.smallButton("Rescan")) {
             rescan();
