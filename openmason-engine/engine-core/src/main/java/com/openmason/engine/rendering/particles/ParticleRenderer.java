@@ -98,6 +98,10 @@ public final class ParticleRenderer implements AutoCloseable {
     private long uploadedBytesTotal;
     private long fenceWaits;
     private int reallocations;
+    /** GPU simulation of the system's GPU effects (OM #100); null until a GPU-enabled system is prepared. */
+    private ParticleGpuBackend gpu;
+    /** The last prepared system is the GPU backend's (its pools are part of this frame). */
+    private boolean gpuThisFrame;
 
     public ParticleRenderer() {
         this(ParticleShaderExtension.NONE);
@@ -189,13 +193,38 @@ public final class ParticleRenderer implements AutoCloseable {
         lastDrawCalls = 0;
         lastDrawn = 0;
         uploaded = false;
+        if (system.gpuEnabled() && !ParticleGpuBackend.isSupported()) {
+            system.fallBackToCpu(); // this context has no compute shaders: GPU effects run on the CPU
+        }
+        gpuThisFrame = system.gpuEnabled();
         int n = builder.prepare(system, frame);
         prepared = n;
         preparedBehind = builder.behindCount();
         trackUsage(n);
-        if (n == 0) {
-            return 0;
+        if (n > 0) {
+            upload(n);
         }
+        if (gpuThisFrame) {
+            if (gpu == null || gpu.system() != system) {
+                if (gpu != null) {
+                    gpu.close();
+                }
+                gpu = new ParticleGpuBackend(system);
+            }
+            // After the CPU upload: in a merged frame the CPU records join the GPU sort (copied on the GPU).
+            gpu.step(frame, buffer, segment * segmentBytes, uploaded ? n : 0, builder.sortedLastBuild());
+            if (gpu.merged() && uploaded) {
+                if (fences[segment] != 0L) {
+                    glDeleteSync(fences[segment]);
+                }
+                fences[segment] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+            }
+        }
+        return n;
+    }
+
+    /** Packs and uploads the CPU batch's {@code n} records into the next ring segment. */
+    private void upload(int n) {
         ensureSegment(n);
 
         segment = (segment + 1) % SEGMENTS;
@@ -224,26 +253,74 @@ public final class ParticleRenderer implements AutoCloseable {
         if (uploaded) {
             uploadedBytesTotal += bytes;
         }
-        return n;
     }
 
-    /** Draws every prepared particle. */
+    /** This frame's GPU pools and CPU batch are drawn as one sorted set (see {@link ParticleGpuBackend}). */
+    private boolean merged() {
+        return gpuThisFrame && gpu.merged();
+    }
+
+    /** Draws every prepared particle (GPU-simulated pools after the CPU batch). */
     public int drawAll() {
-        return drawRange(0, prepared);
+        if (merged()) {
+            return gpu.drawMerged(this, true) + gpu.drawMerged(this, false);
+        }
+        int n = drawRange(0, prepared);
+        if (gpuThisFrame) {
+            n += gpu.drawPools(this, true) + gpu.drawPools(this, false);
+        }
+        return n;
     }
 
     /** Draws the prepared particles across the split plane from the camera (all of them without a split). */
     public int drawBehind() {
-        return frame != null && frame.split ? drawRange(0, preparedBehind) : drawAll();
+        if (frame == null || !frame.split) {
+            return drawAll();
+        }
+        if (merged()) {
+            return gpu.drawMerged(this, true);
+        }
+        int n = drawRange(0, preparedBehind);
+        return gpuThisFrame ? n + gpu.drawPools(this, true) : n;
     }
 
     /** Draws the prepared particles on the camera's side of the split plane (none without a split). */
     public int drawFront() {
-        return frame != null && frame.split ? drawRange(preparedBehind, prepared - preparedBehind) : 0;
+        if (frame == null || !frame.split) {
+            return 0;
+        }
+        if (merged()) {
+            return gpu.drawMerged(this, false);
+        }
+        int n = drawRange(preparedBehind, prepared - preparedBehind);
+        return gpuThisFrame ? n + gpu.drawPools(this, false) : n;
+    }
+
+    /**
+     * The GPU backend simulating {@code system}'s {@link ParticleEffect.Simulation#GPU} effects (OM #100), created on
+     * the first {@link #prepare} of a GPU-enabled system; null otherwise. Host collision data
+     * ({@link ParticleGpuBackend#setHeightField}) goes here.
+     */
+    public ParticleGpuBackend gpu() {
+        return gpu;
     }
 
     private int drawRange(int first, int n) {
         if (!uploaded || n <= 0) {
+            return 0;
+        }
+        long base = segment * segmentBytes + (long) first * ParticleVertexFormat.STRIDE;
+        return drawInstances(buffer, base, n, 0, 0L);
+    }
+
+    /**
+     * One instanced draw of {@link ParticleVertexFormat} records in {@code vertexBuffer} from byte {@code base}:
+     * {@code n} instances, or — when {@code indirectBuffer} is non-zero — a {@code DrawArraysIndirectCommand} the GPU
+     * wrote at {@code indirectOffset} (GPU-simulated pools; {@code n} is then only the statistics' estimate).
+     * Sets and (optionally) restores the shared state: program, uniforms, sprite array, scene depth, blending.
+     */
+    int drawInstances(int vertexBuffer, long base, int n, int indirectBuffer, long indirectOffset) {
+        if (frame == null) {
             return 0;
         }
         ParticleFrame f = frame;
@@ -302,8 +379,7 @@ public final class ParticleRenderer implements AutoCloseable {
         glDisable(GL_CULL_FACE);
 
         glBindVertexArray(vao);
-        glBindBuffer(GL_ARRAY_BUFFER, buffer);
-        long base = segment * segmentBytes + (long) first * ParticleVertexFormat.STRIDE;
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
         int stride = ParticleVertexFormat.STRIDE;
         glVertexAttribPointer(ParticleVertexFormat.ATTRIB_POSITION, 3, GL_FLOAT, false, stride,
                 base + ParticleVertexFormat.OFFSET_POSITION);
@@ -315,12 +391,19 @@ public final class ParticleRenderer implements AutoCloseable {
                 base + ParticleVertexFormat.OFFSET_FRAME_FLAGS);
         glVertexAttribPointer(ParticleVertexFormat.ATTRIB_AXIS_SOFTNESS, 4, GL_HALF_FLOAT, false, stride,
                 base + ParticleVertexFormat.OFFSET_AXIS_SOFTNESS);
-        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
-        // A newer fence covers every earlier command, so it replaces this segment's previous one.
-        if (fences[segment] != 0L) {
-            glDeleteSync(fences[segment]);
+        if (indirectBuffer != 0) {
+            int prevIndirect = glGetInteger(org.lwjgl.opengl.GL40C.GL_DRAW_INDIRECT_BUFFER_BINDING);
+            glBindBuffer(org.lwjgl.opengl.GL40C.GL_DRAW_INDIRECT_BUFFER, indirectBuffer);
+            org.lwjgl.opengl.GL40C.glDrawArraysIndirect(GL_TRIANGLE_STRIP, indirectOffset);
+            glBindBuffer(org.lwjgl.opengl.GL40C.GL_DRAW_INDIRECT_BUFFER, prevIndirect);
+        } else {
+            glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
+            // A newer fence covers every earlier command, so it replaces this segment's previous one.
+            if (fences[segment] != 0L) {
+                glDeleteSync(fences[segment]);
+            }
+            fences[segment] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         }
-        fences[segment] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         lastDrawCalls++;
         lastDrawn += n;
 
@@ -455,6 +538,10 @@ public final class ParticleRenderer implements AutoCloseable {
             return;
         }
         closed = true;
+        if (gpu != null) {
+            gpu.close();
+            gpu = null;
+        }
         releaseBuffer();
         glDeleteVertexArrays(vao);
         glDeleteTextures(whiteTexture);

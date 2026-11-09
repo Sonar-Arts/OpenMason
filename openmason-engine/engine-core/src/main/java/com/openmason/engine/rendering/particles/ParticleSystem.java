@@ -88,6 +88,21 @@ public final class ParticleSystem {
 
         /** Every particle was removed at once ({@link #clearParticles()}). */
         void cleared();
+
+        /**
+         * {@code count} GPU-simulated particles of {@code owner}'s instance are certainly gone (OM #100: the GPU
+         * reports no per-particle deaths; the system retires whole batches once their longest lifetime passed).
+         * Only the slot ({@code owner >>> 8}) is meaningful.
+         */
+        default void retired(int owner, int count) {
+        }
+
+        /**
+         * A GPU particle's death, read back asynchronously: route handlers like {@link #died} but do not count it
+         * (its batch is retired through {@link #retired}).
+         */
+        default void deathEvent(int owner, float x, float y, float z, float vx, float vy, float vz) {
+        }
     }
 
     private OwnerListener ownerListener;
@@ -148,6 +163,17 @@ public final class ParticleSystem {
 
     // ---- stats ----
     private long spawnedTotal, droppedTotal, lodSkippedTotal, eventsDroppedTotal;
+
+    // ---- GPU simulation (OM #100) ----
+    /** {@link #gpuMode}: decide at the first GPU effect (the current thread's GL context), forced on, forced off. */
+    private static final int GPU_AUTO = 0, GPU_ON = 1, GPU_OFF = 2;
+    /** Updates without a GPU backend stepping this system before its GPU effects fall back to the CPU. */
+    static final int GPU_IDLE_LIMIT = 300;
+    private int gpuMode = GPU_AUTO;
+    /** Non-null while GPU effects simulate on the GPU: their spawns go here instead of the CPU pool. */
+    private ParticleGpuQueue gpu;
+    /** Simulation seconds since creation (drives the GPU liveness ledger). */
+    private double time;
 
     public ParticleSystem(int capacity) {
         this(capacity, 0x5EED_0F_FA57L);
@@ -302,8 +328,124 @@ public final class ParticleSystem {
         programRandom.setSeed(seed ^ 0x6A09E667F3BCC909L);
     }
 
+    /**
+     * Forces {@link ParticleEffect.Simulation#GPU} effects onto the GPU (OM #100). Not needed normally: a system
+     * decides by itself when its first GPU effect compiles — on the GPU when the compiling thread has an OpenGL 4.3
+     * context ({@link ParticleGpuBackend#isSupported()}), else on the CPU — and falls back to the CPU when no
+     * {@link ParticleRenderer} steps its GPU effects ({@link #GPU_IDLE_LIMIT} updates) or the renderer's context
+     * lacks compute. Effects compiled before this call switch too (their particles in flight finish on the CPU).
+     */
+    public void enableGpu() {
+        gpuMode = GPU_ON;
+        startGpu();
+    }
+
+    /** Forces every GPU effect onto the CPU (spawns not yet simulated are replayed there). */
+    public void disableGpu() {
+        gpuMode = GPU_OFF;
+        fallBackToCpu();
+    }
+
+    /** True while GPU effects simulate on the GPU. */
+    public boolean gpuEnabled() {
+        return gpu != null;
+    }
+
+    /** True when {@code effect} should simulate on the GPU in this system (decides AUTO on first use). */
+    boolean gpuFor(ParticleEffect effect) {
+        if (effect.simulation() != ParticleEffect.Simulation.GPU || gpuMode == GPU_OFF) {
+            return false;
+        }
+        if (gpu == null && gpuMode == GPU_AUTO) {
+            if (ParticleGpuBackend.isSupported()) {
+                startGpu();
+            } else {
+                gpuMode = GPU_OFF;
+            }
+        }
+        return gpu != null;
+    }
+
+    private void startGpu() {
+        if (gpu == null) {
+            gpu = new ParticleGpuQueue();
+        }
+        for (int k = 0; k < effectCount; k++) {
+            if (effects[k].source.simulation() == ParticleEffect.Simulation.GPU) {
+                promoteGpu(effects[k]);
+            }
+        }
+    }
+
+    /** {@code c} and (recursively) its sub-emitter targets simulate on the GPU: GPU particles spawn GPU children. */
+    private void promoteGpu(CompiledEffect c) {
+        c.gpu = true;
+        for (CompiledEffect t : c.subTarget) {
+            if (t != null && !t.gpu) {
+                promoteGpu(t);
+            }
+        }
+    }
+
+    /**
+     * Moves every GPU effect to the CPU: pending spawn requests are replayed on the CPU, the ledger's owners are
+     * settled (so instances count the replayed particles exactly once). Particles already on the GPU stay there.
+     */
+    void fallBackToCpu() {
+        if (gpu == null) {
+            if (gpuMode == GPU_AUTO) {
+                gpuMode = GPU_OFF;
+            }
+            return;
+        }
+        ParticleGpuQueue q = gpu;
+        gpu = null;
+        if (gpuMode == GPU_AUTO) {
+            gpuMode = GPU_OFF;
+        }
+        for (int k = 0; k < effectCount; k++) {
+            effects[k].gpu = false;
+        }
+        q.settle(ownerListener);
+        for (int r = 0; r < q.requests; r++) {
+            spawn(effects[q.effect[r]], rel(q.x[r], anchorX), rel(q.y[r], anchorY), rel(q.z[r], anchorZ),
+                    q.dx[r], q.dy[r], q.dz[r], q.count[r], q.tint[r], q.preAge[r], q.ivx[r], q.ivy[r], q.ivz[r],
+                    q.owner[r], q.sizeScale[r], q.speedScale[r]);
+        }
+        q.requests = 0;
+        flushEvents();
+    }
+
+    /** The hand-off to the GPU backend; null without {@link #enableGpu()}. */
+    ParticleGpuQueue gpuQueue() {
+        return gpu;
+    }
+
+    /** True while an {@link FxWorld} listens for owned particles (the GPU backend then writes events). */
+    boolean hasOwnerListener() {
+        return ownerListener != null;
+    }
+
+    /** Effects compiled so far (the GPU backend scans them for GPU effects). */
+    CompiledEffect[] compiledEffects() {
+        return effects;
+    }
+
+    /** Owned GPU particles that may still be alive (an upper bound; 0 without GPU). Diagnostics. */
+    public int gpuHeldParticles() {
+        return gpu == null ? 0 : gpu.held();
+    }
+
+    /** GPU spawn requests dropped because a frame's request table was full. */
+    public long gpuRequestsDroppedTotal() {
+        return gpu == null ? 0 : gpu.requestsDroppedTotal;
+    }
+
     /** Kills every particle (emitters stay; no death sub-emitters fire). */
     public void clearParticles() {
+        if (gpu != null) {
+            gpu.clear();
+        }
         live = 0;
         evTail = 0;
         keyedEvents = false;
@@ -381,6 +523,9 @@ public final class ParticleSystem {
             throw new IllegalStateException("too many distinct effects in one particle system");
         }
         c = new CompiledEffect(effect, effectCount, targets, this);
+        if (c.gpu) {
+            promoteGpu(c);
+        }
         reserve(c);
         c.resolve(sprites);
         if (effectCount == effects.length) {
@@ -410,6 +555,9 @@ public final class ParticleSystem {
             targets[i] = child == old ? null : compile(child);
         }
         CompiledEffect c = new CompiledEffect(updated, previous.id, targets, this);
+        if (c.gpu) {
+            promoteGpu(c);
+        }
         reserve(c);
         c.resolve(sprites);
         for (int i = 0; i < targets.length; i++) {
@@ -597,6 +745,10 @@ public final class ParticleSystem {
                 }
             }
         }
+        if (e.gpu) {
+            return spawnGpu(e, ox, oy, oz, dx, dy, dz, count, tintRgba, preAge, ivx, ivy, ivz, ownerTag,
+                    sizeScale, speedScale);
+        }
         int room = Math.min((int) (capacity * e.budgetFraction) - live, e.maxLive - e.live);
         int n = Math.max(0, Math.min(count, room));
         droppedTotal += count - n;
@@ -691,6 +843,29 @@ public final class ParticleSystem {
         }
         if (e.spawnProgram != null) {
             vm.runParticles(e.spawnProgram, e, null, first, n, stepDt, windX, windY, windZ);
+        }
+        return n;
+    }
+
+    /**
+     * A GPU effect's spawn (after distance thinning): one request for the backend; the GPU pool rations itself
+     * (its capacity is the effect's {@code maxLive}). The owner counts the particles now and the ledger retires
+     * them once they are certainly dead.
+     */
+    private int spawnGpu(CompiledEffect e, float ox, float oy, float oz, float dx, float dy, float dz, int count,
+                         int tintRgba, float preAge, float ivx, float ivy, float ivz, int ownerTag,
+                         float sizeScale, float speedScale) {
+        int n = Math.min(count, e.gpuCapacity);
+        if (!gpu.request(e, anchorX + ox, anchorY + oy, anchorZ + oz, dx, dy, dz, n, tintRgba, preAge, ivx, ivy,
+                ivz, ownerTag, sizeScale, speedScale)) {
+            droppedTotal += count;
+            return 0;
+        }
+        droppedTotal += count - n;
+        spawnedTotal += n;
+        if (ownerTag != 0 && ownerListener != null) {
+            ownerListener.spawned(ownerTag, n);
+            gpu.hold(ownerTag, n, time + e.gpuChainLife + stepDt + ParticleGpuQueue.READBACK_LATENCY);
         }
         return n;
     }
@@ -892,6 +1067,20 @@ public final class ParticleSystem {
             dt = MAX_STEP;
         }
         stepDt = dt;
+        time += dt;
+        if (gpu != null && ++gpu.idleUpdates > GPU_IDLE_LIMIT) {
+            System.getLogger(ParticleSystem.class.getName()).log(System.Logger.Level.WARNING,
+                    "No renderer steps this particle system's GPU effects; they run on the CPU from now on");
+            fallBackToCpu();
+        }
+        if (gpu != null) {
+            gpu.pendingDt += dt;
+            gpu.windX = windX;
+            gpu.windY = windY;
+            gpu.windZ = windZ;
+            gpu.deliver(ownerListener);
+            gpu.retire(time, ownerListener);
+        }
         if (referenceIntegrator) {
             for (int k = 0; k < effectCount; k++) {
                 CompiledEffect c = effects[k];

@@ -2,6 +2,7 @@ package com.openmason.engine.cearl;
 
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL43;
@@ -165,6 +166,25 @@ public final class CearlDispatcher implements AutoCloseable {
         }
         int groups = (elementCount + kernel.localSize() - 1) / kernel.localSize();
         GL43.glDispatchCompute(groups, 1, 1);
+    }
+
+    /** Dispatches exactly {@code groups} workgroups (a kernel that strides or computes its own extent). */
+    public void dispatchGroups(int groups) {
+        if (groups > 0) {
+            GL43.glDispatchCompute(groups, 1, 1);
+        }
+    }
+
+    /**
+     * Dispatches with the workgroup counts the GPU wrote itself: three u32 ({@code x, y, z}) at {@code offsetBytes}
+     * in {@code glBufferId} (a {@code DispatchIndirectCommand}). No CPU readback of the count; the producer must
+     * have been made visible with {@code GL_COMMAND_BARRIER_BIT}.
+     */
+    public void dispatchIndirect(int glBufferId, long offsetBytes) {
+        int previous = GL11.glGetInteger(GL43.GL_DISPATCH_INDIRECT_BUFFER_BINDING);
+        GL15.glBindBuffer(GL43.GL_DISPATCH_INDIRECT_BUFFER, glBufferId);
+        GL43.glDispatchComputeIndirect(offsetBytes);
+        GL15.glBindBuffer(GL43.GL_DISPATCH_INDIRECT_BUFFER, previous);
     }
 
     private int location(String name, String expectedType, int expectedArray) {

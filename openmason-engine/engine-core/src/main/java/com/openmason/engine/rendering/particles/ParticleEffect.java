@@ -118,7 +118,17 @@ public record ParticleEffect(
         int maxLive,
         Priority priority,
         float lodDistance,
-        FxGraph graph) {
+        FxGraph graph,
+        Simulation simulation) {
+
+    /**
+     * Which backend simulates the effect (OM #100). {@link #CPU} (default): the {@link ParticleSystem} itself — host
+     * collision, game events, sub-emitters. {@link #GPU}: compute shaders generated from the same compiled programs
+     * through CEARL ({@code ParticleGpuBackend}) — for dense effects (100k-1M particles), no CPU work per particle,
+     * collision against host voxel/height data, events read back asynchronously; its sub-emitter targets run on the
+     * GPU too. Where OpenGL 4.3 compute is missing (or nothing renders the system) a GPU effect runs on the CPU.
+     */
+    public enum Simulation { CPU, GPU }
 
     /** Where particles appear relative to their emitter. */
     public enum EmitterShape { POINT, SPHERE, BOX, DISC }
@@ -268,6 +278,7 @@ public record ParticleEffect(
         Objects.requireNonNull(sprite, "sprite");
         Objects.requireNonNull(orientation, "orientation");
         Objects.requireNonNull(priority, "priority");
+        simulation = simulation == null ? Simulation.CPU : simulation;
         sizeKeys = List.copyOf(sizeKeys == null ? List.of() : sizeKeys);
         colorKeys = List.copyOf(colorKeys == null ? List.of() : colorKeys);
         subEmitters = List.copyOf(subEmitters == null ? List.of() : subEmitters);
@@ -401,6 +412,7 @@ public record ParticleEffect(
         b.priority = priority;
         b.lodDistance = lodDistance;
         b.graph = graph;
+        b.simulation = simulation;
         return b;
     }
 
@@ -445,6 +457,7 @@ public record ParticleEffect(
         private Priority priority = Priority.NORMAL;
         private float lodDistance;
         private FxGraph graph;
+        private Simulation simulation = Simulation.CPU;
 
         private Builder(String name) {
             this.name = name;
@@ -533,6 +546,7 @@ public record ParticleEffect(
         public Builder lodDistance(float blocks) { this.lodDistance = blocks; return this; }
         /** The effect's FX graph (custom modules); null = the default built-in stacks. */
         public Builder graph(FxGraph g) { this.graph = g; return this; }
+        public Builder simulation(Simulation s) { this.simulation = s; return this; }
 
         public ParticleEffect build() {
             return new ParticleEffect(name, lifetime, rate, shape, radius, halfX, halfY, halfZ, speed,
@@ -540,7 +554,7 @@ public record ParticleEffect(
                     startSize, endSize, sizeKeys, colorStart, colorEnd, colorKeys, colorJitter, fadeIn, fadeOut,
                     additive, emissive, softness, orientation, stretch, rotation, spin, sprite, textures,
                     animateFrames, collides, bounce, friction, subEmitters, maxLive, priority,
-                    lodDistance, graph);
+                    lodDistance, graph, simulation);
         }
     }
 }

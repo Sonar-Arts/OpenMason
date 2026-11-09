@@ -81,6 +81,24 @@ final class CompiledEffect {
     /** Live particles of this effect in the owning system. */
     int live;
 
+    // ---- GPU simulation (OM #100) ----
+    /**
+     * Simulated by the GPU backend: the effect (or a GPU effect spawning it as a sub-emitter) asks for it and its
+     * system runs GPU effects on the GPU. Changes when the system switches backends.
+     */
+    boolean gpu;
+    /**
+     * Longest time (s) a particle of this effect and its sub-emitter descendants can live after its birth: what the
+     * liveness ledger waits for.
+     */
+    final float gpuChainLife;
+    /** Particles the effect's GPU pool holds (its {@code maxLive}, or {@link #DEFAULT_GPU_CAPACITY}); a power of 2. */
+    final int gpuCapacity;
+    /** GPU pool size of an effect without a {@code maxLive}. */
+    static final int DEFAULT_GPU_CAPACITY = 1 << 16;
+    /** Largest GPU pool. */
+    static final int MAX_GPU_CAPACITY = 1 << 22;
+
     /** {@code exp(-drag·dt)} for the current update (reference integrator only). */
     float dragMul = 1f;
 
@@ -222,6 +240,16 @@ final class CompiledEffect {
         customDefaults = programs.customDefaults;
 
         maxLive = e.maxLive() == 0 ? Integer.MAX_VALUE : e.maxLive();
+        gpu = system.gpuFor(e);
+        float children = 0f;
+        for (CompiledEffect t : subTargets) {
+            if (t != null) {
+                children = Math.max(children, t.gpuChainLife);
+            }
+        }
+        gpuChainLife = e.lifetime().max() + children;
+        int want = e.maxLive() == 0 ? DEFAULT_GPU_CAPACITY : Math.min(MAX_GPU_CAPACITY, e.maxLive());
+        gpuCapacity = want <= 64 ? 64 : Integer.highestOneBit(want - 1) << 1;
         budgetFraction = e.priority().budgetFraction;
         lodDistance = e.lodDistance();
     }

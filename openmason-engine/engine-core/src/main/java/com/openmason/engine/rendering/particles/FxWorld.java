@@ -440,6 +440,21 @@ public final class FxWorld implements AutoCloseable {
         }
 
         @Override
+        public void retired(int owner, int count) {
+            FxInstance inst = slots[(owner >>> 8) - 1];
+            inst.live = Math.max(0, inst.live - count);
+        }
+
+        @Override
+        public void deathEvent(int owner, float x, float y, float z, float vx, float vy, float vz) {
+            int e = owner & 0xFF;
+            if (e != ParticleSystem.OWNER_DERIVED) {
+                FxInstance inst = slots[(owner >>> 8) - 1];
+                route(inst, inst.fx.deathHandlers[e], x, y, z, vx, vy, vz);
+            }
+        }
+
+        @Override
         public void cleared() {
             for (int k = 0; k < activeCount; k++) {
                 slots[active[k]].live = 0;

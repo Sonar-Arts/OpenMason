@@ -163,6 +163,23 @@ final class CearlLexer {
 
     private Token lexNumber(int l, int c) {
         int start = pos;
+        if (source.charAt(pos) == '0' && pos + 1 < source.length()
+                && (source.charAt(pos + 1) == 'x' || source.charAt(pos + 1) == 'X')) {
+            // Hex integer: 0xFF, 0x9E37_79B9 (hash constants, bit masks). At most 32 bits: device ints are 32-bit.
+            advance();
+            advance();
+            int digits = pos;
+            while (pos < source.length()
+                    && (Character.digit(source.charAt(pos), 16) >= 0 || source.charAt(pos) == '_')) {
+                advance();
+            }
+            String hex = source.substring(digits, pos).replace("_", "");
+            if (hex.isEmpty() || hex.length() > 8) {
+                throw new CearlException(sourceName, l, c, "a hex literal has 1 to 8 digits (32 bits): '"
+                    + source.substring(start, pos) + "'");
+            }
+            return new Token(Type.NUMBER, source.substring(start, pos), (double) Long.parseLong(hex, 16), l, c);
+        }
         boolean seenDot = false;
         while (pos < source.length()) {
             char ch = source.charAt(pos);

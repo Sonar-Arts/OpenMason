@@ -6,6 +6,7 @@ import com.openmason.engine.rendering.particles.FxParameter;
 import com.openmason.engine.rendering.particles.FxSystem;
 import com.openmason.engine.rendering.particles.FxWorld;
 import com.openmason.engine.rendering.particles.ParticleFrame;
+import com.openmason.engine.rendering.particles.ParticleGpuBackend;
 import com.openmason.engine.rendering.particles.ParticleRenderer;
 import com.openmason.engine.rendering.particles.ParticleSpriteLayout;
 import com.openmason.engine.rendering.particles.ParticleSystem;
@@ -49,6 +50,10 @@ final class FxPreview implements AutoCloseable {
     private static final float REPLAY_PAUSE = 0.6f;
 
     private final ParticleRenderer renderer = new ParticleRenderer();
+    /** Half extent (blocks) of the GPU height field standing in for the preview floor. */
+    private static final int GROUND_HALF = 64;
+    /** The floor state last given to the GPU backend (null = not yet). */
+    private Boolean gpuGround;
     private final ParticleFrame frame = new ParticleFrame();
     private final Matrix4f view = new Matrix4f();
     private final Matrix4f projection = new Matrix4f();
@@ -98,6 +103,8 @@ final class FxPreview implements AutoCloseable {
             world.close();
         }
         particles = new ParticleSystem(BUDGET);
+        // GPU effects (OM #100) simulate on the GPU by themselves here (this thread has the GL context).
+        gpuGround = null;
         particles.setCollider((x, y, z) -> showGround && y < 0);
         if (sprites != null) {
             frame.sprites = sprites;
@@ -319,6 +326,7 @@ final class FxPreview implements AutoCloseable {
                 frame.depthTexture = depthCopyTex;
             }
             renderer.render(particles, frame);
+            syncGpuGround();
         } finally {
             glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
             glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
@@ -364,6 +372,21 @@ final class FxPreview implements AutoCloseable {
 
     int live() { return particles.liveCount(); }
     long dropped() { return particles.droppedTotal(); }
+    /** The preview floor (y = 0 where shown) as the GPU backend's height field. */
+    private void syncGpuGround() {
+        ParticleGpuBackend gpu = renderer.gpu();
+        if (gpu == null || Boolean.valueOf(showGround).equals(gpuGround)) {
+            return;
+        }
+        if (showGround) {
+            gpu.setHeightField(-GROUND_HALF, -GROUND_HALF, 1f, GROUND_HALF * 2, GROUND_HALF * 2,
+                    new float[GROUND_HALF * 2 * GROUND_HALF * 2]);
+        } else {
+            gpu.clearHeightField();
+        }
+        gpuGround = showGround;
+    }
+
     int drawn() { return renderer.lastDrawn(); }
     int drawCalls() { return renderer.lastDrawCalls(); }
     long gpuBytes() { return renderer.gpuBytes() + (sprites == null ? 0 : sprites.gpuBytes()); }

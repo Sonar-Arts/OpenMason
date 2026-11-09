@@ -46,12 +46,13 @@ import java.util.Set;
  *                  "subEmitters": [ { "effect": "smoke", "trigger": "death", "count": 1, "inherit": 0.2 },
  *                                   { "effect": "embers", "trigger": "trail", "rate": 8 } ],
  *                  "maxLive": 500, "priority": "normal", "lodDistance": 64,
+ *                  "simulation": "gpu",              // cpu (default, omitted on write) | gpu (OM #100)
  *                  "graph": { ... FX graph IR, see FxGraphJson; omitted = the default module stacks ... } } ] }
  * }</pre>
  * Every member but {@code name} is optional and defaults to the {@link ParticleEffect.Builder} value; a
  * scalar is accepted wherever a range is. Angles are degrees, colours {@code #RRGGBB} or {@code #RRGGBBAA}.
  * Sub-emitters name their effect: it may be defined anywhere in the same document or already be in the
- * library; reference cycles are rejected. {@link #write} emits every member, so a write/read round trip
+ * library; reference cycles are rejected. {@link #write} emits every member (but a default {@code simulation}), so a write/read round trip
  * reproduces each effect exactly.
  *
  * <p>Sprites name their own textures (#97); there are no atlas frame numbers. A legacy {@code "frames"} block is
@@ -338,6 +339,7 @@ public final class ParticleLibrary {
         if (n.has("maxLive")) b.maxLive(n.get("maxLive").asInt());
         if (n.has("priority")) b.priority(parseEnum(ParticleEffect.Priority.class, n.get("priority").asText()));
         if (n.has("lodDistance")) b.lodDistance(f(n, "lodDistance"));
+        if (n.has("simulation")) b.simulation(parseEnum(ParticleEffect.Simulation.class, n.get("simulation").asText()));
         if (n.has("graph") && !n.get("graph").isNull()) {
             try {
                 b.graph(com.openmason.engine.rendering.particles.graph.FxGraphJson.fromJson(n.get("graph")));
@@ -412,6 +414,9 @@ public final class ParticleLibrary {
         n.put("maxLive", e.maxLive());
         n.put("priority", lower(e.priority()));
         n.put("lodDistance", e.lodDistance());
+        if (e.simulation() != ParticleEffect.Simulation.CPU) {
+            n.put("simulation", lower(e.simulation())); // absent = cpu: older files and goldens stay byte-identical
+        }
         if (e.graph() != null) {
             n.set("graph", com.openmason.engine.rendering.particles.graph.FxGraphJson.toJson(e.graph()));
         }

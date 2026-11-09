@@ -219,6 +219,15 @@ final class FxEffectInspector {
             change(b -> b.priority(p));
         }
         dragFloat("LOD distance (0 = off)", current.lodDistance(), 0.5f, 0f, 2000f, v -> change(b -> b.lodDistance(v)));
+        ParticleEffect.Simulation sim = enumCombo("simulation", current.simulation(),
+                ParticleEffect.Simulation.values());
+        if (sim != current.simulation()) {
+            change(b -> b.simulation(sim));
+        }
+        if (current.simulation() == ParticleEffect.Simulation.GPU) {
+            ImGui.textDisabled("GPU: compute shaders (OM #100) for dense effects; sub-emitter targets run there too.");
+            ImGui.textDisabled("Events arrive a few frames late; runs on the CPU where GL 4.3 is missing.");
+        }
     }
 
     /** The texture list: flipbook frames in order. Names are embedded sprites or image files next to the document. */

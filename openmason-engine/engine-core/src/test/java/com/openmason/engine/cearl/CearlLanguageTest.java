@@ -454,4 +454,64 @@ class CearlLanguageTest {
         assertTrue(fails("craft while(x: f32) -> f32\n    give x\nend")
             .getMessage().contains("keyword"));
     }
+
+    // ---- bit operations, bit casts and packing (OM #100: GPU particle kernels) ----
+
+    @Test
+    void bitBuiltinsEmitGlslOperators() {
+        String glsl = compile("""
+            kernel bits(64)
+                take keys: u32[] inout
+                take values: f32[] in
+                fix i = gid.x
+                fix h = bit_xor(keys[i], shr(keys[i], 15))
+                fix m = bit_and(shl(h, 3), 0xFF)
+                keys[i] = bit_or(m, bits_u32(values[i]))
+                fix back = bits_f32(keys[i])
+                if back > 0.0
+                    keys[i] = pack_unorm4(vec4(back)) + pack_half2(vec2(back, 1.0))
+                end
+            end
+            """).kernel("bits").glsl();
+        assertTrue(glsl.contains("^"), glsl);
+        assertTrue(glsl.contains(">>"), glsl);
+        assertTrue(glsl.contains("<<"), glsl);
+        assertTrue(glsl.contains("&"), glsl);
+        assertTrue(glsl.contains("|"), glsl);
+        assertTrue(glsl.contains("floatBitsToUint("), glsl);
+        assertTrue(glsl.contains("uintBitsToFloat("), glsl);
+        assertTrue(glsl.contains("packUnorm4x8("), glsl);
+        assertTrue(glsl.contains("packHalf2x16("), glsl);
+    }
+
+    @Test
+    void bitOperationsNeedMatchingIntegers() {
+        CearlException e = fails("""
+            kernel bad(64)
+                take keys: u32[] inout
+                take values: f32[] in
+                keys[0] = bit_and(values[0], 1)
+            end
+            """);
+        assertTrue(e.getMessage().contains("i32/u32"), e.getMessage());
+        e = fails("""
+            kernel bad(64)
+                take keys: u32[] inout
+                take ints: i32[] in
+                keys[0] = bit_or(keys[0], ints[0])
+            end
+            """);
+        assertTrue(e.getMessage().contains("u32"), e.getMessage());
+    }
+
+    @Test
+    void packingTakesExactlySizedVectors() {
+        CearlException e = fails("""
+            kernel bad(64)
+                take keys: u32[] inout
+                keys[0] = pack_unorm4(vec3(1.0))
+            end
+            """);
+        assertTrue(e.getMessage().contains("vec4"), e.getMessage());
+    }
 }

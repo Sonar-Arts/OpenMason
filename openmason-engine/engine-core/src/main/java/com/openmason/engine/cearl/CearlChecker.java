@@ -78,6 +78,8 @@ public final class CearlChecker {
         "min", "max", "clamp", "abs", "floor", "ceil", "sqrt", "pow", "exp", "log",
         "sin", "cos", "mod", "mix", "dot", "cross", "normalize", "length", "barrier",
         "atomicAdd", "atomicMin", "atomicMax", "count", "pick",
+        "bit_and", "bit_or", "bit_xor", "shl", "shr", "bits_u32", "bits_f32", "pack_unorm4", "pack_half2",
+        "floatBitsToUint", "uintBitsToFloat", "packUnorm4x8", "packHalf2x16",
         "self", "gid", "lid", "wgid", "nwg");
 
     private static final Set<String> BUILTIN_VARS = Set.of("gid", "lid", "wgid", "nwg");
@@ -1212,6 +1214,37 @@ public final class CearlChecker {
                 yield a;
             }
             case "min", "max" -> minMaxCall(c, name);
+            case "bit_and", "bit_or", "bit_xor", "shl", "shr" -> bitCall(c, name);
+            case "bits_u32" -> {
+                // Reinterprets an f32's bits as u32 (GLSL floatBitsToUint) - for sortable keys and hashing.
+                requireArgCount(c, name, 1);
+                checkFloatish(c.args().getFirst(), name);
+                yield CearlType.U32;
+            }
+            case "bits_f32" -> {
+                requireArgCount(c, name, 1);
+                CearlType a = checkExpr(c.args().getFirst());
+                coerce(c.args().getFirst(), a, CearlType.U32, c.line(), "argument of bits_f32");
+                yield CearlType.F32;
+            }
+            case "pack_unorm4" -> {
+                // Four 0..1 floats -> one u32, x in the lowest byte (an RGBA8 vertex attribute in memory order).
+                requireArgCount(c, name, 1);
+                CearlType a = checkExpr(c.args().getFirst());
+                if (!a.equals(CearlType.vec(PrimKind.F32, 4))) {
+                    throw err(c.line(), "pack_unorm4(...) packs a vec4 (got " + a.display() + ")");
+                }
+                yield CearlType.U32;
+            }
+            case "pack_half2" -> {
+                // Two floats -> two IEEE halves in one u32, x in the low 16 bits.
+                requireArgCount(c, name, 1);
+                CearlType a = checkExpr(c.args().getFirst());
+                if (!a.equals(CearlType.vec(PrimKind.F32, 2))) {
+                    throw err(c.line(), "pack_half2(...) packs a vec2 (got " + a.display() + ")");
+                }
+                yield CearlType.U32;
+            }
             case "clamp" -> {
                 requireArgCount(c, name, 3);
                 CearlType x = checkExpr(c.args().getFirst());
@@ -1318,6 +1351,28 @@ public final class CearlChecker {
         CearlType vt = checkExpr(c.args().get(1));
         coerce(c.args().get(1), vt, t, c.line(), "second argument of " + name);
         return t;
+    }
+
+    /**
+     * {@code bit_and/bit_or/bit_xor(a, b)} and {@code shl/shr(value, amount)}: integer bit operations, written as
+     * words like CEARL's logic ({@code and/or/not} stay boolean). Both operands share one integer type (i32 or u32,
+     * int literals adapt); {@code shr} of an i32 is arithmetic, of a u32 logical (GLSL semantics).
+     */
+    private CearlType bitCall(Call c, String name) {
+        requireArgCount(c, name, 2);
+        Expr ea = c.args().getFirst(), eb = c.args().get(1);
+        CearlType a = checkExpr(ea);
+        CearlType b = checkExpr(eb);
+        if (ea instanceof IntLit && !(eb instanceof IntLit)) {
+            coerce(ea, a, b, c.line(), "first argument of " + name);
+            a = b;
+        } else {
+            coerce(eb, b, a, c.line(), "second argument of " + name);
+        }
+        if (!a.is(PrimKind.I32) && !a.is(PrimKind.U32)) {
+            throw err(c.line(), name + "(...) works on i32/u32 (got " + a.display() + ")");
+        }
+        return a;
     }
 
     private CearlType minMaxCall(Call c, String name) {

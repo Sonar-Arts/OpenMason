@@ -420,6 +420,15 @@ final class GlslEmitter {
             case "f32" -> "float(" + joined + ")";
             case "i32" -> "int(" + joined + ")";
             case "u32" -> "uint(" + joined + ")";
+            case "bit_and" -> "(" + args.getFirst() + " & " + args.get(1) + ")";
+            case "bit_or" -> "(" + args.getFirst() + " | " + args.get(1) + ")";
+            case "bit_xor" -> "(" + args.getFirst() + " ^ " + args.get(1) + ")";
+            case "shl" -> "(" + args.getFirst() + " << " + args.get(1) + ")";
+            case "shr" -> "(" + args.getFirst() + " >> " + args.get(1) + ")";
+            case "bits_u32" -> "floatBitsToUint(" + joined + ")";
+            case "bits_f32" -> "uintBitsToFloat(" + joined + ")";
+            case "pack_unorm4" -> "packUnorm4x8(" + joined + ")";
+            case "pack_half2" -> "packHalf2x16(" + joined + ")";
             default -> name + "(" + joined + ")";
         };
     }
