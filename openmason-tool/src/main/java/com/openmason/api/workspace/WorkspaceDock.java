@@ -3,6 +3,8 @@ package com.openmason.api.workspace;
 import imgui.ImGui;
 import imgui.flag.ImGuiDockNodeFlags;
 
+import java.util.List;
+
 /**
  * A workspace's contents: its default dock arrangement, the toolbar row above its dockspace, the
  * body around it, and the panels that dock into it.
@@ -20,8 +22,25 @@ public interface WorkspaceDock {
     /**
      * Arranges the default layout into {@code dockspaceId} (DockBuilder calls). The host already
      * decided a rebuild is due; the node may hold a saved arrangement that is to be replaced.
+     *
+     * <p><b>Required for every editor:</b> every window {@link #renderPanels} submits must be docked
+     * here (one {@code dockBuilderDockWindow} per {@link #panelWindows()} entry). A panel the default
+     * layout does not place opens floating at ImGui's default spot, which reads as a broken editor.
+     * Only transient dialogs (modals, an export window) may float.
      */
     void buildDefaultLayout(int dockspaceId, float width, float height);
+
+    /**
+     * The exact ImGui window names {@link #renderPanels} docks into this workspace, all placed by
+     * {@link #buildDefaultLayout}. Every workspace with panels must list them: the host uses them to
+     * notice a saved arrangement that holds none of them (an {@code imgui.ini} from an older version
+     * or another working directory, while the layout-version record says current) and rebuilds the
+     * default layout instead of leaving the panels floating; tests check the default layout docks
+     * each one.
+     */
+    default List<String> panelWindows() {
+        return List.of();
+    }
 
     /** The workspace's own toolbar, drawn above its body in whichever window holds it. */
     default void renderHeader() {

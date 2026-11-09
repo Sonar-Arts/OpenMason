@@ -37,6 +37,10 @@ public final class TextureEditorLayoutBuilder {
     /** Bump when the curated layout changes to force a one-time rebuild. */
     public static final int LAYOUT_VERSION = 8;
 
+    /** Every panel {@link #build} docks (the Texture workspace's {@code panelWindows()}). */
+    public static final java.util.List<String> PANEL_WINDOWS =
+            java.util.List.of("Canvas", "Layers", "Noise Filter", "Symmetry");
+
     private static final float RIGHT_COLUMN_RATIO = 0.25f;
 
     /**

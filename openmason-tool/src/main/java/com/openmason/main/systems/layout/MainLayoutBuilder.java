@@ -47,6 +47,13 @@ public final class MainLayoutBuilder {
      */
     public static final int LAYOUT_VERSION = 4;
 
+    /** Every panel {@link #build} docks (the Scene workspace's {@code panelWindows()}). */
+    public static final java.util.List<String> PANEL_WINDOWS = java.util.List.of(
+            SceneViewerMainView.WINDOW_TITLE, ViewportMainView.WINDOW_TITLE, PropertyPanelImGui.WINDOW_TITLE,
+            RiggingPaneImGui.WINDOW_TITLE, SceneOutlinerImGui.WINDOW_TITLE,
+            com.openmason.main.systems.assistant.ui.AssistantPaneImGui.WINDOW_TITLE,
+            SceneInspectorImGui.WINDOW_TITLE, ProjectBrowserImGui.WINDOW_TITLE);
+
     private String pendingFocusWindow;
 
     /** The tab to focus after a rebuild; consumed once. */

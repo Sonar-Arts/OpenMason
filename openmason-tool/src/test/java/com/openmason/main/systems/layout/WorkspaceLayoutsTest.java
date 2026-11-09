@@ -88,6 +88,74 @@ class WorkspaceLayoutsTest {
         assertEquals(List.of("A@1"), builds);
     }
 
+    // ---- orphaned arrangements: a stale imgui.ini whose split holds none of the workspace's panels ----
+
+    private boolean docked;
+    private final java.util.Set<String> submitted = new java.util.HashSet<>();
+
+    private WorkspaceDescriptor paneled(String id, int version, String... panels) {
+        WorkspaceDock dock = new WorkspaceDock() {
+            @Override
+            public void buildDefaultLayout(int dockspaceId, float w, float h) {
+                builds.add(id + "@" + version);
+                docked = true;
+            }
+
+            @Override
+            public List<String> panelWindows() {
+                return List.of(panels);
+            }
+        };
+        return WorkspaceDescriptor.builder(id, id).layoutVersion(version).dock(dock).build();
+    }
+
+    private WorkspaceLayouts orphanAware() {
+        return new WorkspaceLayouts(store, dockspaceId -> saved, dockspaceId -> docked, submitted::contains);
+    }
+
+    @Test
+    void aCurrentArrangementHoldingNoneOfThePanelsIsRebuiltOnce() {
+        saved = true;          // a split arrangement from another imgui.ini...
+        store.store("FX", 2);  // ...while the version record already says current
+        WorkspaceLayouts layouts = orphanAware();
+        WorkspaceDescriptor fx = paneled("FX", 2, "FX System", "FX Preview");
+
+        assertFalse(layouts.applyIfNeeded(fx, 1, 800, 600), "the version rules keep the saved arrangement");
+        assertFalse(layouts.applyIfNeeded(fx, 1, 800, 600), "no panel submitted yet: nothing to judge");
+        submitted.add("FX Preview"); // the panels were drawn - floating
+        assertTrue(layouts.applyIfNeeded(fx, 1, 800, 600), "the empty arrangement is replaced by the default");
+        assertFalse(layouts.applyIfNeeded(fx, 1, 800, 600), "checked once");
+        assertEquals(List.of("FX@2"), builds);
+    }
+
+    @Test
+    void anArrangementHoldingAnyPanelIsTheUsersAndStays() {
+        saved = true;
+        docked = true; // the user undocked some panels, others are still docked
+        store.store("FX", 2);
+        WorkspaceLayouts layouts = orphanAware();
+        WorkspaceDescriptor fx = paneled("FX", 2, "FX System");
+        submitted.add("FX System");
+
+        for (int frame = 0; frame < 4; frame++) {
+            assertFalse(layouts.applyIfNeeded(fx, 1, 800, 600));
+        }
+        assertTrue(builds.isEmpty());
+    }
+
+    @Test
+    void aWorkspaceWithoutDeclaredPanelsIsNeverJudged() {
+        saved = true;
+        store.store("A", 1);
+        WorkspaceLayouts layouts = orphanAware();
+        WorkspaceDescriptor a = workspace("A", 1);
+        submitted.add("anything");
+
+        assertFalse(layouts.applyIfNeeded(a, 1, 800, 600));
+        assertFalse(layouts.applyIfNeeded(a, 1, 800, 600));
+        assertTrue(builds.isEmpty());
+    }
+
     @Test
     void registeringAWorkspaceLateAddsItsTab() {
         var registry = WorkspaceFixtures.builtins();

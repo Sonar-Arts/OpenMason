@@ -217,6 +217,11 @@ public final class CoreFeatures {
                     }
 
                     @Override
+                    public List<String> panelWindows() {
+                        return UiWorkspaceLayout.PANEL_WINDOWS;
+                    }
+
+                    @Override
                     public void renderHeader() {
                         editor.renderHeader();
                     }

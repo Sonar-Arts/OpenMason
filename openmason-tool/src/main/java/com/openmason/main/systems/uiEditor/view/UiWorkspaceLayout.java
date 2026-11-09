@@ -27,6 +27,12 @@ public final class UiWorkspaceLayout {
     /** The UI workspace's default layout version (see {@code WorkspaceDescriptor.layoutVersion}). */
     public static final int LAYOUT_VERSION = 1;
 
+    /** Every panel {@link #build} docks (the UI workspace's {@code panelWindows()}). */
+    public static final java.util.List<String> PANEL_WINDOWS = java.util.List.of(
+            PalettePanel.TITLE, AssetsPanel.TITLE, HierarchyPanel.TITLE, DesignerPanel.TITLE, DetailsPanel.TITLE,
+            StyleSheetPanel.TITLE, ScriptPanel.TITLE, DiagnosticsPanel.TITLE, HistoryPanel.TITLE, SpritesPanel.TITLE,
+            TimelinePanel.TITLE);
+
     /**
      * Arranges the default layout; whether that is due (no saved split, a newer version, a reset)
      * is decided by the host's {@code WorkspaceLayouts} gate.

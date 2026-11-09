@@ -51,7 +51,7 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
     /** Workspace id (stored name in .omp/imgui layouts). */
     public static final String ID = BuiltinWorkspaces.PARTICLES;
     /** Bump when the curated default layout changes, to force a one-time rebuild. */
-    public static final int LAYOUT_VERSION = 2;
+    public static final int LAYOUT_VERSION = 3; // 3: one rebuild for imgui.ini files still holding the v1 arrangement
 
     static final String SYSTEM_WINDOW = "FX System";
     static final String PREVIEW_WINDOW = "FX Preview";
@@ -59,6 +59,9 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
     static final String GRAPH_WINDOW = "FX Graph";
     static final String PARAMS_WINDOW = "FX Parameters";
     static final String SPRITES_WINDOW = "FX Sprites";
+    /** Every docked panel {@link #renderPanels} submits; {@link #buildDefaultLayout} places each one. */
+    static final List<String> PANEL_WINDOWS = List.of(SYSTEM_WINDOW, PREVIEW_WINDOW, STACK_WINDOW, GRAPH_WINDOW,
+            PARAMS_WINDOW, SPRITES_WINDOW);
     private static final String UNSAVED_POPUP = "Unsaved FX##particlesUnsaved";
     private static final String MIGRATE_POPUP = "Open v1 Particle Library##particlesMigrate";
     /** What a fresh tab shows. */
@@ -224,6 +227,11 @@ public final class ParticleEditorWorkspace implements WorkspaceDock {
             node.addLocalFlags(imgui.internal.flag.ImGuiDockNodeFlags.CentralNode);
         }
         imgui.internal.ImGui.dockBuilderFinish(dockspaceId);
+    }
+
+    @Override
+    public List<String> panelWindows() {
+        return PANEL_WINDOWS;
     }
 
     /** File actions, undo/redo and the document name, above the dockspace. */

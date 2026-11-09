@@ -54,6 +54,11 @@ public final class SceneWorkspaceDock implements WorkspaceDock {
     }
 
     @Override
+    public java.util.List<String> panelWindows() {
+        return MainLayoutBuilder.PANEL_WINDOWS;
+    }
+
+    @Override
     public void renderHeader() {
         if (toolbar != null) {
             toolbar.run();

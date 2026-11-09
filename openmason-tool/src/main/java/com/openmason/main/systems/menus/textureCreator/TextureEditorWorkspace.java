@@ -65,6 +65,11 @@ public final class TextureEditorWorkspace implements WorkspaceDock {
         layoutBuilder.build(dockspaceId, width, height);
     }
 
+    @Override
+    public java.util.List<String> panelWindows() {
+        return TextureEditorLayoutBuilder.PANEL_WINDOWS;
+    }
+
     /** The editor's menu bar and tool options, above its body. */
     @Override
     public void renderHeader() {
