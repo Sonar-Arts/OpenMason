@@ -4,7 +4,8 @@
 #
 # UI scripting and layout have no Java fallback, so a platform that cannot build or load the library
 # turns its job red (the UI suites fail, never skip, without it), and the packaging check refuses an
-# engine-core or tool jar that comes out without natives/<platform>/. Publishing is publish.yml.
+# engine-core or tool jar that comes out without natives/<platform>/. Publishing is publish.yml: on a
+# push to main, the `publish` job below calls it once every other job passed.
 name: ci
 
 on:
@@ -19,9 +20,11 @@ on:
 permissions:
   contents: read
 
+# PRs and branches: a newer push cancels the running check. main: a running build (and its publish)
+# always finishes, so a deploy is never cut off halfway; a newer push only replaces a run still queued.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
@@ -168,3 +171,13 @@ jobs:
           path: |
             openmason-engine/engine-core/target/surefire-reports/
             openmason-engine/engine-ui/target/surefire-reports/
+
+  # Snapshot publish (publish.yml) for a push to main of this repo, only after every job above passed.
+  # Pushes come from people with write access, never forks, and the build is this push's own commit.
+  publish:
+    needs: [test, platform]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write   # publish.yml's GitHub Release step (tags only; granted for the reusable workflow)
+      packages: write   # GitHub Packages
+    uses: ./.github/workflows/publish.yml

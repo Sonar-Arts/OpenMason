@@ -5,10 +5,14 @@
 # game-owned native libraries compile against).
 #
 #   tag v<X.Y.Z>  -> release X.Y.Z (immutable in GitHub Packages; also a GitHub Release with the tool jar)
-#   push to main  -> the POM's ${revision} snapshot (e.g. 0.1.1-SNAPSHOT), published only once `ci` has
-#                    passed on that exact commit (workflow_run). Consumers following main (Stonebreak)
-#                    never pick up a snapshot whose tests failed. A ci run cancelled by a newer push
-#                    publishes nothing; the newer commit's run does.
+#   push to main  -> the POM's ${revision} snapshot (e.g. 0.1.1-SNAPSHOT): ci.yml calls this workflow
+#                    (workflow_call) as its last job, after every ci job passed on that push. Consumers
+#                    following main (Stonebreak) never pick up a snapshot whose tests failed. A ci run
+#                    replaced by a newer push before it starts publishes nothing; the newer commit's does.
+#
+# Every trigger builds its own github.sha (the pushed commit or tag). This used to be a workflow_run
+# trigger checking out workflow_run.head_sha, which runs that checkout's code in the default branch's
+# privileged context, where it could poison main's Actions cache (code scanning alert #1).
 #
 # Each platform's library is built on its own runner, then one job stages them all and deploys. The
 # deploy refuses to run unless every platform made it into the engine-core jar.
@@ -17,10 +21,7 @@ name: publish
 on:
   push:
     tags: ["v*"]
-  workflow_run:
-    workflows: [ci]
-    types: [completed]
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -30,22 +31,9 @@ concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
-# For workflow_run, github.sha is main's tip when ci finished, not the commit ci tested: build exactly
-# the tested commit. (Other events: their own sha.)
-env:
-  PUBLISH_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-
 jobs:
   natives:
     name: cenda (${{ matrix.platform }})
-    # Snapshots: only a successful ci run on a push to main of THIS repo. workflow_run runs with this
-    # workflow's permissions, so a fork PR's ci run (whose head branch may also be called main) must
-    # never reach the deploy job.
-    if: >-
-      github.event_name != 'workflow_run' || (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_repository.full_name == github.repository)
     strategy:
       fail-fast: true
       matrix:
@@ -61,8 +49,6 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.PUBLISH_SHA }}
 
       - uses: ./.github/actions/cenda-deps-cache
 
@@ -106,8 +92,6 @@ jobs:
       packages: write   # GitHub Packages
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.PUBLISH_SHA }}
 
       - uses: actions/download-artifact@v8
         with:
