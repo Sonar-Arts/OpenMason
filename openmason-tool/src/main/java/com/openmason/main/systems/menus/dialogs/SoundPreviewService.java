@@ -13,9 +13,10 @@ import java.util.function.Supplier;
 
 /**
  * In-tool audio audition for the SBO/SBE Sounds tabs, backed by the engine
- * {@link SoundSystem} (OpenAL). The OpenAL device is opened lazily on the
- * first preview so the tool pays nothing for audio until an author actually
- * clicks Play, and torn down once at shutdown via {@link #shutdown()}.
+ * {@link SoundSystem} (the native Cenda mixer). The audio device is opened
+ * lazily on the first preview so the tool pays nothing for audio until an
+ * author actually clicks Play, and torn down once at shutdown via
+ * {@link #shutdown()}. WAV, FLAC, MP3 and Ogg Vorbis samples all play.
  *
  * <p>Samples are cached in the engine's sound buffer under content-derived
  * keys ({@code res:<path>} for classpath resources, {@code embed:<len>:<hash>}
@@ -98,8 +99,12 @@ public final class SoundPreviewService {
                     }
                     sound.loadSound(key, stream);
                 }
+                if (!sound.isAvailable()) {
+                    lastError = "Audio is off: " + sound.unavailableReason();
+                    return false;
+                }
                 if (!sound.isSoundLoaded(key)) {
-                    lastError = "Could not decode the sample (uncompressed WAV expected).";
+                    lastError = "Could not decode the sample (WAV, FLAC, MP3 or Ogg Vorbis expected).";
                     return false;
                 }
                 loadedKeys.add(key);
@@ -119,12 +124,12 @@ public final class SoundPreviewService {
         if (!engineStarted) {
             sound.initialize();
             engineStarted = true;
-            logger.info("Sound preview engine initialized (lazy OpenAL start)");
+            logger.info("Sound preview engine initialized (lazy start)");
         }
         return sound;
     }
 
-    /** Release the OpenAL device if a preview ever started it. Idempotent. */
+    /** Release the audio device if a preview ever started it. Idempotent. */
     public static synchronized void shutdown() {
         if (instance != null && instance.engineStarted) {
             try {

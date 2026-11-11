@@ -403,12 +403,11 @@ public class FileDialogService {
     }
 
     /**
-     * Show open audio-sample dialog (.wav). Used by the SBO/SBE editors'
-     * Sounds sections to pick samples to embed; the engine decodes via
-     * {@code javax.sound.sampled}, so WAV is the supported interchange format.
+     * Show open audio-sample dialog. Used by the SBO/SBE editors' Sounds sections to pick samples
+     * to embed; the engine's native decoders read WAV, FLAC, MP3 and Ogg Vorbis.
      */
     public void showOpenAudioDialog(OpenCallback callback) {
-        showNFDOpenDialog("Opening audio sample...", "WAV Audio", "wav",
+        showNFDOpenDialog("Opening audio sample...", "Audio (WAV, Ogg, FLAC, MP3)", "wav,ogg,flac,mp3",
                 "Selected audio file", callback);
     }
 

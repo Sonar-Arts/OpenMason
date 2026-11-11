@@ -1,370 +1,478 @@
 package com.openmason.engine.audio;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+
 /**
- * Game-agnostic OpenAL sound system. Owns the OpenAL context, sound buffers/sources,
- * the 3D listener, master volume, and playback (2D and positional 3D).
+ * Game-agnostic sound system over the native Cenda audio engine ({@link CendaAudio}): named
+ * sounds, 2D and positional 3D playback, looping ambience, long ambient one-shots, streamed
+ * music, the listener, and volume buses.
  *
- * <p>Higher-level, game-specific behaviour (player footstep selection, entity sounds,
- * player-position-relative test commands) lives in the consuming module, not here.
+ * <p>Every method is safe from any thread: plays are queued to the native mixer, which applies
+ * them at its next block. Loading decodes on the calling thread.
+ *
+ * <p>Buses: {@link #BUS_SFX} (one-shot effects), {@link #BUS_MUSIC}, {@link #BUS_AMBIENT}
+ * (loops and long ambience) and {@link #BUS_UI}, all under {@link #BUS_MASTER}. Master volume
+ * and environmental ducking apply live to everything already playing.
+ *
+ * <p>Without the native library (or with no audio device) every call is a silent no-op; the
+ * reason is logged once and reported by {@link #unavailableReason()}.
  */
 public class SoundSystem {
-    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(SoundSystem.class);
+
+    private static final Logger logger = LoggerFactory.getLogger(SoundSystem.class);
+
+    public static final int BUS_MASTER = 0;
+    public static final int BUS_SFX = 1;
+    public static final int BUS_MUSIC = 2;
+    public static final int BUS_AMBIENT = 3;
+    public static final int BUS_UI = 4;
+
+    /** Voices shared by every sound (the OpenAL setup it replaced had 4 sources per sound name). */
+    static final int MAX_VOICES = 128;
+    /** Ambient one-shots (thunder) outrank effects in voice stealing. */
+    static final int AMBIENT_PRIORITY = 1;
+    /** Ramp for live volume changes: long enough not to click, short enough to feel instant. */
+    private static final float VOLUME_RAMP_SECONDS = 0.05f;
+    /** Music switches fade the old track this fast instead of cutting it. */
+    private static final float MUSIC_SWITCH_FADE_SECONDS = 0.15f;
+    /** Default 2D volume of {@link #playSound(String)}. */
+    private static final float DEFAULT_VOLUME = 0.5f;
 
     private static SoundSystem instance;
 
-    private final OpenALContext openALContext;
-    private final AudioLoader audioLoader;
-    private final SoundBuffer soundBuffer;
-    private final VolumeController volumeController;
-    private final SoundPlayer soundPlayer;
-    private final AudioListener audioListener;
-    private final AudioDiagnostics audioDiagnostics;
-    private final MusicChannel musicChannel;
-    /** Voices for overlapping long ambience such as thunder. */
-    private static final int AMBIENT_VOICES = 4;
-    private final LoopChannel loopChannel = new LoopChannel();
-    private final AmbientVoices ambientVoices = new AmbientVoices(AMBIENT_VOICES);
-    private float musicVolume = 1.0f;
+    private final int deviceMode;
+    private final int requestedRate;
+    private volatile CendaAudio.Engine engine;
+    private volatile String unavailableReason = "not initialized";
+
+    private final Map<String, Integer> sounds = new ConcurrentHashMap<>();
+    private final Map<String, Integer> music = new ConcurrentHashMap<>();
+    private final Map<String, Long> loopVoices = new ConcurrentHashMap<>();
+    private final Map<String, Float> loopGains = new ConcurrentHashMap<>();
+    private final Set<String> warnedMissing = ConcurrentHashMap.newKeySet();
+    private final ThreadLocal<CendaAudio.Commands> batches =
+            ThreadLocal.withInitial(() -> new CendaAudio.Commands(4));
+
+    private final VolumeController volumeController = new VolumeController();
+    private volatile float musicVolume = 1.0f;
+    private volatile float environmentLowPassHz = 0.0f;
+    private volatile long musicVoice;
+
+    private final float[] listener = {0, 0, 0, 0, 0, -1, 0, 1, 0};
+    /** Last gain / low-pass sent per bus, so per-frame volume calls only cross FFM on a change. */
+    private final float[][] sentBus = new float[CendaAudio.BUS_COUNT][];
 
     private SoundSystem() {
-        this(new OpenALContext(), new AudioLoader(), new AudioListener());
+        this(CendaAudio.DEVICE_DEFAULT, 0);
     }
 
-    /** Test seam: a non-singleton system over caller-supplied (e.g. loopback or fake) collaborators. */
-    SoundSystem(OpenALContext openALContext, AudioLoader audioLoader, AudioListener audioListener) {
-        this.openALContext = openALContext;
-        this.audioLoader = audioLoader;
-        this.soundBuffer = new SoundBuffer(4); // 4 sources per sound for overlapping playback
-        this.volumeController = new VolumeController();
-        this.soundPlayer = new SoundPlayer(soundBuffer, volumeController);
-        this.audioListener = audioListener;
-        this.audioDiagnostics = new AudioDiagnostics(openALContext, soundBuffer);
-        this.musicChannel = new MusicChannel();
+    /** Test seam: a non-singleton system over a null or offline engine. */
+    SoundSystem(int deviceMode, int sampleRate) {
+        this.deviceMode = deviceMode;
+        this.requestedRate = sampleRate;
     }
 
-    public static SoundSystem getInstance() {
+    public static synchronized SoundSystem getInstance() {
         if (instance == null) {
             instance = new SoundSystem();
         }
         return instance;
     }
 
-    public void initialize() {
-        if (openALContext.initialize()) {
-            audioListener.initializeDefaultListener();
-        }
-    }
-
     /**
-     * True once OpenAL has a current context. Without one (no audio device, failed init) every
-     * AL call aborts with "No ALCapabilities instance has been set" — and the first such call
-     * permanently breaks LWJGL's AL dispatch for the JVM — so loads, listener updates and
-     * diagnostics become no-ops instead. Playback needs no check: nothing is ever registered.
+     * An initialized system with no device that mixes only when {@link #renderOffline} is called:
+     * deterministic output for tests and tools.
      */
-    private boolean audioAvailable() {
-        return openALContext.isInitialized();
+    public static SoundSystem offline(int sampleRate) {
+        SoundSystem s = new SoundSystem(CendaAudio.DEVICE_OFFLINE, sampleRate);
+        s.initialize();
+        return s;
     }
 
-    /** Skips a load when there is no device, still honouring the "stream is closed" contract. */
-    private boolean skipWithoutDevice(String kind, String name, java.io.InputStream stream) {
-        if (audioAvailable()) {
-            return false;
+    /** Opens the audio device. Safe to call again after {@link #cleanup()}. */
+    public synchronized void initialize() {
+        if (engine != null) return;
+        if (!CendaAudio.isAvailable()) {
+            unavailableReason = CendaAudio.unavailableReason();
+            return;
         }
-        logger.debug("OpenAL unavailable; skipping {} '{}'", kind, name);
-        if (stream != null) {
-            try {
-                stream.close();
-            } catch (java.io.IOException ignored) {
-                // nothing useful to do for an unread stream
-            }
+        try {
+            engine = CendaAudio.Engine.create(deviceMode, requestedRate, MAX_VOICES);
+            unavailableReason = null;
+            logger.info("Audio on '{}' at {} Hz", engine.deviceName(), engine.sampleRate());
+            applyMasterBus(0f);
+            applyMusicBus(0f);
+            applyEnvironmentFilter(0f);
+            submitListener();
+        } catch (IllegalStateException e) {
+            unavailableReason = e.getMessage();
+            logger.error("Audio disabled: {}", e.getMessage());
         }
-        return true;
     }
 
+    /** True once the native engine is running. */
+    public boolean isAvailable() {
+        return engine != null;
+    }
+
+    /** Why audio is silent, or null when it is running. */
+    public String unavailableReason() {
+        return unavailableReason;
+    }
+
+    /** Once per frame from the main loop: releases memory of freed sounds. */
+    public void update() {
+        CendaAudio.Engine e = engine;
+        if (e != null) e.update();
+    }
+
+    // ---- loading ----------------------------------------------------------------------------
+
+    /** Loads a sound from the engine's own class path (prefer the stream/bytes overloads across modules). */
     public void loadSound(String name, String resourcePath) {
-        if (skipWithoutDevice("sound", name, null)) return;
-        AudioLoader.LoadResult result = audioLoader.loadSound(name, resourcePath);
-        registerLoadResult(name, result);
+        String path = resourcePath.startsWith("/") ? resourcePath.substring(1) : resourcePath;
+        InputStream in = SoundSystem.class.getClassLoader().getResourceAsStream(path);
+        if (in == null) in = Thread.currentThread().getContextClassLoader().getResourceAsStream(path);
+        if (in == null) {
+            logger.error("Sound resource not found: {}", resourcePath);
+            return;
+        }
+        loadSound(name, in);
     }
 
     /**
-     * Loads a sound from a caller-supplied {@link java.io.InputStream}. Preferred when the audio
-     * resource lives in a different module than this engine (the caller resolves it against its
-     * own module/classloader). The stream is closed by this method.
+     * Loads a sound from a caller-supplied stream (the caller resolves resources in its own module).
+     * The stream is always closed. Re-loading a name replaces it.
      */
-    public void loadSound(String name, java.io.InputStream stream) {
-        if (skipWithoutDevice("sound", name, stream)) return;
-        AudioLoader.LoadResult result = audioLoader.loadSound(name, stream);
-        registerLoadResult(name, result);
+    public void loadSound(String name, InputStream stream) {
+        byte[] bytes = readAll("sound", name, stream);
+        if (bytes != null) loadSound(name, bytes);
     }
 
-    private void registerLoadResult(String name, AudioLoader.LoadResult result) {
-        if (result.success) {
-            soundBuffer.addSound(name, result.buffer);
-        } else {
-            logger.error("Failed to load sound {}: {}", name, result.errorMessage);
-        }
+    /** Loads (decodes) a sound from encoded bytes: WAV, FLAC, MP3 or Ogg Vorbis. */
+    public void loadSound(String name, byte[] bytes) {
+        register(sounds, name, bytes, false);
     }
 
     /**
-     * Loads a background-music track from a caller-supplied {@link java.io.InputStream}, preserving
-     * stereo (unlike {@link #loadSound(String, java.io.InputStream)}, which forces mono for 3D
-     * positional SFX). The stream is closed by this method.
+     * Loads a background-music track. Music is streamed (decoded while it plays), so a long track
+     * costs only its encoded size. The stream is always closed.
      */
-    public void loadMusic(String name, java.io.InputStream stream) {
-        if (skipWithoutDevice("music", name, stream)) return;
-        AudioLoader.LoadResult result = audioLoader.loadMusic(name, stream);
-        if (result.success) {
-            musicChannel.addTrack(name, result.buffer);
-        } else {
-            logger.error("Failed to load music {}: {}", name, result.errorMessage);
+    public void loadMusic(String name, InputStream stream) {
+        byte[] bytes = readAll("music", name, stream);
+        if (bytes != null) register(music, name, bytes, true);
+    }
+
+    /** Releases a loaded sound (its voices stop). */
+    public void unloadSound(String name) {
+        Integer id = sounds.remove(name);
+        CendaAudio.Engine e = engine;
+        if (id != null && e != null) e.free(id);
+    }
+
+    private byte[] readAll(String kind, String name, InputStream stream) {
+        if (stream == null) {
+            logger.error("InputStream is NULL for {}: {}", kind, name);
+            return null;
         }
+        try (InputStream in = stream) {
+            if (engine == null) {
+                logger.debug("Audio unavailable; skipping {} '{}'", kind, name);
+                return null;
+            }
+            return in.readAllBytes();
+        } catch (IOException e) {
+            logger.error("Failed to read {} '{}': {}", kind, name, e.getMessage());
+            return null;
+        }
+    }
+
+    private void register(Map<String, Integer> table, String name, byte[] bytes, boolean stream) {
+        CendaAudio.Engine e = engine;
+        if (e == null) return;
+        try {
+            int id = e.load(bytes, stream);
+            Integer old = table.put(name, id);
+            if (old != null) e.free(old);
+            warnedMissing.remove(name);
+        } catch (IllegalArgumentException ex) {
+            logger.error("Failed to load {} '{}': {}", stream ? "music" : "sound", name, ex.getMessage());
+        }
+    }
+
+    public boolean isSoundLoaded(String name) {
+        return name != null && sounds.containsKey(name);
     }
 
     public boolean isMusicLoaded(String name) {
-        return musicChannel.isTrackLoaded(name);
+        return name != null && music.containsKey(name);
     }
 
-    /** Plays {@code name} on the dedicated music channel, replacing whatever was playing. */
+    // ---- playback ---------------------------------------------------------------------------
+
+    /**
+     * The general play: returns the voice id (0 when nothing was queued) for later
+     * {@link #stopVoice}/{@link #setVoiceGain}/{@link #setVoicePosition} calls.
+     *
+     * @param spatial  positioned at (x, y, z) with distance attenuation, else listener-relative
+     * @param priority higher survives voice stealing
+     */
+    public long play(String name, int bus, float volume, float pitch, boolean spatial, boolean loop,
+                     int priority, float x, float y, float z) {
+        CendaAudio.Engine e = engine;
+        if (e == null) return 0;
+        Integer id = sounds.get(name);
+        if (id == null) {
+            if (warnedMissing.add(name)) logger.warn("Sound not found: {}", name);
+            return 0;
+        }
+        int flags = (spatial ? CendaAudio.PLAY_SPATIAL : 0) | (loop ? CendaAudio.PLAY_LOOP : 0);
+        CendaAudio.Commands batch = batches.get();
+        batch.clear();
+        batch.play(id, bus, flags, priority, sanitize(volume), pitch, x, y, z, 0, 0, 0, 0, 0);
+        e.submit(batch);
+        return batch.voice(0);
+    }
+
+    public void playSound(String name) {
+        playSoundWithVolume(name, DEFAULT_VOLUME);
+    }
+
+    public void playSoundWithVolume(String name, float volume) {
+        playSound(name, volume, 1.0f);
+    }
+
+    /** Plays a 2D sound at a random pitch within ±10%. */
+    public void playSoundWithVariation(String name, float volume) {
+        playSound(name, volume, variedPitch());
+    }
+
+    /** Plays a 2D (listener-relative) sound at an explicit pitch. */
+    public void playSound(String name, float volume, float pitch) {
+        play(name, BUS_SFX, volume, pitch, false, false, 0, 0, 0, 0);
+    }
+
+    /** Plays a sound at a 3D world position at an explicit pitch. */
+    public void playSoundAt3D(String name, float volume, float pitch, float x, float y, float z) {
+        play(name, BUS_SFX, volume, pitch, true, false, 0, x, y, z);
+    }
+
+    public void playSoundAt3D(String name, float volume, float pitch, org.joml.Vector3f position) {
+        playSoundAt3D(name, volume, pitch, position.x, position.y, position.z);
+    }
+
+    /** Plays a sound at a 3D world position (inverse distance, full at 1 block, floor at 50). */
+    public void playSoundAt3D(String name, float volume, float x, float y, float z) {
+        playSoundAt3D(name, volume, 1.0f, x, y, z);
+    }
+
+    public void playSoundAt3DWithVariation(String name, float volume, float x, float y, float z) {
+        playSoundAt3D(name, volume, variedPitch(), x, y, z);
+    }
+
+    public void playSoundAt3D(String name, float volume, org.joml.Vector3f position) {
+        playSoundAt3D(name, volume, position.x, position.y, position.z);
+    }
+
+    public void playSoundAt3DWithVariation(String name, float volume, org.joml.Vector3f position) {
+        playSoundAt3DWithVariation(name, volume, position.x, position.y, position.z);
+    }
+
+    /**
+     * Plays loaded sound {@code name} as a looping 2D ambience at {@code volume} (0..1, before the
+     * master volume), starting it if needed. Call every frame with the current level: the gain
+     * ramps live, and at 0 the loop pauses where it is and resumes without a restart.
+     */
+    public void setLoopVolume(String name, float volume) {
+        CendaAudio.Engine e = engine;
+        if (e == null) return;
+        float gain = sanitize(volume);
+        Long voice = loopVoices.get(name);
+        if (voice != null && e.voiceState(voice) == CendaAudio.VOICE_DONE) {
+            loopVoices.remove(name);
+            loopGains.remove(name);
+            voice = null;
+        }
+        if (voice == null) {
+            if (gain <= 0f) return;
+            long v = play(name, BUS_AMBIENT, gain, 1.0f, false, true, AMBIENT_PRIORITY, 0, 0, 0);
+            if (v != 0) {
+                loopVoices.put(name, v);
+                loopGains.put(name, gain);
+            }
+            return;
+        }
+        Float last = loopGains.get(name);
+        if (last != null && last == gain) return;
+        loopGains.put(name, gain);
+        setVoiceGain(voice, gain, VOLUME_RAMP_SECONDS);
+    }
+
+    /**
+     * Plays loaded sound {@code name} once as long 2D ambience (thunder). Ambience outranks
+     * effects when voices run out, and among ambience the louder sound keeps its voice.
+     *
+     * @param volume 0..1, before the master volume
+     * @return whether it was queued
+     */
+    public boolean playAmbient(String name, float volume, float pitch) {
+        return play(name, BUS_AMBIENT, volume, pitch, false, false, AMBIENT_PRIORITY, 0, 0, 0) != 0;
+    }
+
+    /** Stops a voice from {@link #play}, fading out over {@code fadeSeconds} (0 = cut). */
+    public void stopVoice(long voice, float fadeSeconds) {
+        CendaAudio.Engine e = engine;
+        if (e == null || voice == 0) return;
+        CendaAudio.Commands batch = batches.get();
+        batch.clear();
+        batch.stop(voice, fadeSeconds);
+        e.submit(batch);
+    }
+
+    public void setVoiceGain(long voice, float volume, float rampSeconds) {
+        CendaAudio.Engine e = engine;
+        if (e == null || voice == 0) return;
+        CendaAudio.Commands batch = batches.get();
+        batch.clear();
+        batch.voiceGain(voice, sanitize(volume), rampSeconds);
+        e.submit(batch);
+    }
+
+    public void setVoicePosition(long voice, float x, float y, float z) {
+        CendaAudio.Engine e = engine;
+        if (e == null || voice == 0) return;
+        CendaAudio.Commands batch = batches.get();
+        batch.clear();
+        batch.voicePosition(voice, x, y, z);
+        e.submit(batch);
+    }
+
+    /** True while the voice is queued, playing or paused. */
+    public boolean isVoiceActive(long voice) {
+        CendaAudio.Engine e = engine;
+        return e != null && voice != 0 && e.voiceState(voice) != CendaAudio.VOICE_DONE;
+    }
+
+    // ---- music ------------------------------------------------------------------------------
+
+    /** Plays {@code name} on the music bus, fading out whatever was playing. */
     public void playMusic(String name) {
-        musicChannel.play(name, musicVolume * volumeController.getEffectiveVolume());
+        CendaAudio.Engine e = engine;
+        if (e == null) return;
+        Integer id = music.get(name);
+        if (id == null) {
+            logger.warn("Music track not found: {}", name);
+            return;
+        }
+        CendaAudio.Commands batch = batches.get();
+        batch.clear();
+        long previous = musicVoice;
+        if (previous != 0) batch.stop(previous, MUSIC_SWITCH_FADE_SECONDS);
+        int index = batch.play(id, BUS_MUSIC, 0, 0, 1.0f, 1.0f);
+        e.submit(batch);
+        musicVoice = batch.voice(index);
     }
 
     public void stopMusic() {
-        musicChannel.stop();
+        long voice = musicVoice;
+        musicVoice = 0;
+        stopVoice(voice, MUSIC_SWITCH_FADE_SECONDS);
     }
 
     /** False once the current track has finished — callers poll this to advance a playlist. */
     public boolean isMusicPlaying() {
-        return musicChannel.isPlaying();
+        return isVoiceActive(musicVoice);
     }
 
-    /**
-     * Sets background-music volume (0..1), independent of per-SFX volumes. Applies live to
-     * whatever track is currently playing, unlike SFX volume which is baked in at play-call time.
-     */
+    /** Background-music volume (0..1), applied live on the music bus. */
     public void setMusicVolume(float volume) {
-        if (Float.isNaN(volume)) {
-            return; // keep the current volume: a NaN gain would silence music for good
-        }
+        if (Float.isNaN(volume)) return; // keep the current volume: a NaN gain would silence music for good
         this.musicVolume = Math.max(0f, Math.min(1f, volume));
-        musicChannel.setGain(this.musicVolume * volumeController.getEffectiveVolume());
+        applyMusicBus(VOLUME_RAMP_SECONDS);
     }
 
     public float getMusicVolume() {
         return musicVolume;
     }
 
-    public void playSound(String name) {
-        soundPlayer.playSound(name);
-    }
-
-    /**
-     * Plays loaded sound {@code name} as a looping 2D ambience at {@code volume}
-     * (0..1, before master volume), starting it if needed; 0 pauses it. Call
-     * every frame with the current level — the gain applies live.
-     */
-    public void setLoopVolume(String name, float volume) {
-        if (!audioAvailable()) return;
-        loopChannel.setGain(name, soundBuffer.getSoundBuffers().get(name),
-                Math.max(0f, volume) * volumeController.getEffectiveVolume());
-    }
-
-    /**
-     * Plays loaded sound {@code name} once as long 2D ambience (thunder) on a
-     * shared voice pool that never cuts off a louder sound for a fainter one.
-     *
-     * @param volume 0..1, before master volume
-     * @return whether it got a voice
-     */
-    public boolean playAmbient(String name, float volume, float pitch) {
-        if (!audioAvailable()) return false;
-        return ambientVoices.play(soundBuffer.getSoundBuffers().get(name),
-                Math.max(0f, volume) * volumeController.getEffectiveVolume(), pitch);
-    }
-
-    public void playSoundWithVolume(String name, float volume) {
-        soundPlayer.playSoundWithVolume(name, volume);
-    }
-
-    public void playSoundWithVariation(String name, float volume) {
-        soundPlayer.playSoundWithVariation(name, volume);
-    }
-
-    /**
-     * Plays a 2D (listener-relative) sound at an explicit pitch. For
-     * data-driven sound defs that author their own pitch range.
-     */
-    public void playSound(String name, float volume, float pitch) {
-        soundPlayer.playSound(name, volume, pitch);
-    }
-
-    /** Plays a sound at a 3D world position at an explicit pitch. */
-    public void playSoundAt3D(String name, float volume, float pitch, float x, float y, float z) {
-        soundPlayer.playSoundAt3D(name, volume, pitch, x, y, z);
-    }
-
-    /** Vector convenience for {@link #playSoundAt3D(String, float, float, float, float, float)}. */
-    public void playSoundAt3D(String name, float volume, float pitch, org.joml.Vector3f position) {
-        soundPlayer.playSoundAt3D(name, volume, pitch, position.x, position.y, position.z);
-    }
-
-    /**
-     * Plays a sound at a specific 3D position in the world.
-     * The sound will have proper 3D audio properties including distance attenuation.
-     *
-     * @param name The name of the sound to play
-     * @param volume The volume level (0.0 to 1.0)
-     * @param x The X coordinate in world space
-     * @param y The Y coordinate in world space
-     * @param z The Z coordinate in world space
-     */
-    public void playSoundAt3D(String name, float volume, float x, float y, float z) {
-        soundPlayer.playSoundAt3D(name, volume, x, y, z);
-    }
-
-    /**
-     * Plays a sound at a specific 3D position with pitch variation.
-     *
-     * @param name The name of the sound to play
-     * @param volume The volume level (0.0 to 1.0)
-     * @param x The X coordinate in world space
-     * @param y The Y coordinate in world space
-     * @param z The Z coordinate in world space
-     */
-    public void playSoundAt3DWithVariation(String name, float volume, float x, float y, float z) {
-        soundPlayer.playSoundAt3DWithVariation(name, volume, x, y, z);
-    }
-
-    /**
-     * Convenience method to play a sound at a 3D position using a Vector3f.
-     *
-     * @param name The name of the sound to play
-     * @param volume The volume level (0.0 to 1.0)
-     * @param position The position vector in world space
-     */
-    public void playSoundAt3D(String name, float volume, org.joml.Vector3f position) {
-        playSoundAt3D(name, volume, position.x, position.y, position.z);
-    }
-
-    /**
-     * Convenience method to play a sound at a 3D position with variation using a Vector3f.
-     *
-     * @param name The name of the sound to play
-     * @param volume The volume level (0.0 to 1.0)
-     * @param position The position vector in world space
-     */
-    public void playSoundAt3DWithVariation(String name, float volume, org.joml.Vector3f position) {
-        playSoundAt3DWithVariation(name, volume, position.x, position.y, position.z);
-    }
+    // ---- listener ---------------------------------------------------------------------------
 
     public void setListenerPosition(float x, float y, float z) {
-        if (!audioAvailable()) return;
-        audioListener.setListenerPosition(x, y, z);
+        synchronized (listener) {
+            listener[0] = x;
+            listener[1] = y;
+            listener[2] = z;
+        }
+        submitListener();
     }
 
-    /**
-     * Sets the audio listener orientation for proper 3D audio.
-     * @param forward The forward direction vector
-     * @param up The up direction vector
-     */
     public void setListenerOrientation(org.joml.Vector3f forward, org.joml.Vector3f up) {
-        if (!audioAvailable()) return;
-        audioListener.setListenerOrientation(forward, up);
+        synchronized (listener) {
+            listener[3] = forward.x;
+            listener[4] = forward.y;
+            listener[5] = forward.z;
+            listener[6] = up.x;
+            listener[7] = up.y;
+            listener[8] = up.z;
+        }
+        submitListener();
     }
 
-    /**
-     * Sets the audio listener position and orientation from camera data.
-     * This should be called every frame for proper 3D spatial audio.
-     * @param position The listener position (usually player position)
-     * @param front The camera front/forward vector
-     * @param up The camera up vector
-     */
+    /** Listener position and orientation from the camera; call every frame. */
     public void setListenerFromCamera(org.joml.Vector3f position, org.joml.Vector3f front, org.joml.Vector3f up) {
-        if (!audioAvailable()) return;
-        audioListener.setListenerFromCamera(position, front, up);
+        synchronized (listener) {
+            listener[0] = position.x;
+            listener[1] = position.y;
+            listener[2] = position.z;
+            listener[3] = front.x;
+            listener[4] = front.y;
+            listener[5] = front.z;
+            listener[6] = up.x;
+            listener[7] = up.y;
+            listener[8] = up.z;
+        }
+        submitListener();
     }
 
-    public boolean isSoundLoaded(String name) {
-        return soundBuffer.isSoundLoaded(name);
+    private void submitListener() {
+        CendaAudio.Engine e = engine;
+        if (e == null) return;
+        CendaAudio.Commands batch = batches.get();
+        batch.clear();
+        synchronized (listener) {
+            batch.listener(listener[0], listener[1], listener[2], listener[3], listener[4], listener[5],
+                    listener[6], listener[7], listener[8]);
+        }
+        e.submit(batch);
     }
 
-    public void testBasicFunctionality() {
-        if (!audioAvailable()) {
-            System.out.println("OpenAL is not initialized (no audio device); sound is disabled");
-            return;
-        }
-        audioDiagnostics.testBasicFunctionality();
-        // Note: Sound playing removed to prevent audio before world is loaded
-    }
+    // ---- volume -----------------------------------------------------------------------------
 
-    /**
-     * Diagnoses OpenAL 3D audio configuration
-     */
-    public void diagnoseOpenAL3D() {
-        System.out.println("🔍 OPENAL DIAGNOSIS:");
-        if (!audioAvailable()) {
-            System.out.println("  OpenAL is not initialized (no audio device); sound is disabled");
-            return;
-        }
-
-        // Check distance model
-        int distanceModel = org.lwjgl.openal.AL10.alGetInteger(org.lwjgl.openal.AL10.AL_DISTANCE_MODEL);
-        System.out.println("  Distance Model: " + distanceModel + " (AL_INVERSE_DISTANCE_CLAMPED=" + org.lwjgl.openal.AL10.AL_INVERSE_DISTANCE_CLAMPED + ")");
-
-        // Examine the first loaded sound that has sources
-        java.util.Map.Entry<String, Integer[]> sample = soundBuffer.getAllSources().entrySet().stream()
-                .filter(e -> e.getValue() != null && e.getValue().length > 0)
-                .findFirst().orElse(null);
-        if (sample != null) {
-            int source = sample.getValue()[0];
-            System.out.println("  Examining source " + source + " for '" + sample.getKey() + "':");
-
-            // Check source properties
-            float refDist = org.lwjgl.openal.AL10.alGetSourcef(source, org.lwjgl.openal.AL10.AL_REFERENCE_DISTANCE);
-            float maxDist = org.lwjgl.openal.AL10.alGetSourcef(source, org.lwjgl.openal.AL10.AL_MAX_DISTANCE);
-            float rolloff = org.lwjgl.openal.AL10.alGetSourcef(source, org.lwjgl.openal.AL10.AL_ROLLOFF_FACTOR);
-            int relative = org.lwjgl.openal.AL10.alGetSourcei(source, org.lwjgl.openal.AL10.AL_SOURCE_RELATIVE);
-
-            System.out.println("    Reference Distance: " + refDist);
-            System.out.println("    Max Distance: " + maxDist);
-            System.out.println("    Rolloff Factor: " + rolloff);
-            System.out.println("    Source Relative: " + relative + " (AL_FALSE=" + org.lwjgl.openal.AL10.AL_FALSE + ")");
-
-            // Check listener position
-            java.nio.FloatBuffer listenerPos = org.lwjgl.BufferUtils.createFloatBuffer(3);
-            org.lwjgl.openal.AL10.alGetListenerfv(org.lwjgl.openal.AL10.AL_POSITION, listenerPos);
-            System.out.println("    Listener Position: (" + listenerPos.get(0) + ", " + listenerPos.get(1) + ", " + listenerPos.get(2) + ")");
-
-        } else {
-            System.out.println("  No loaded sound sources found for examination");
-        }
-
-        int error = org.lwjgl.openal.AL10.alGetError();
-        if (error != org.lwjgl.openal.AL10.AL_NO_ERROR) {
-            System.err.println("  OpenAL Error during diagnosis: " + error);
-        } else {
-            System.out.println("  No OpenAL errors detected");
-        }
-    }
-
-    /**
-     * Sets the master volume for all sounds.
-     * @param volume Volume level (0.0 = silent, 1.0 = normal volume)
-     */
+    /** The user's master volume (0..1), applied live to everything. */
     public void setMasterVolume(float volume) {
         volumeController.setMasterVolume(volume);
-        musicChannel.setGain(musicVolume * volumeController.getEffectiveVolume());
+        applyMasterBus(VOLUME_RAMP_SECONDS);
+    }
+
+    public float getMasterVolume() {
+        return volumeController.getMasterVolume();
     }
 
     /**
-     * Multiplicative ducking on top of the user's master volume — e.g. muffling audio while
-     * the listener is underwater. 1.0 = no ducking. Applies live to whatever music is playing;
-     * SFX volume is baked in at play-call time, so it takes effect on each sound's next play.
+     * Multiplicative ducking on top of the master volume (e.g. underwater). 1.0 = none.
+     * Applies live to everything playing, music included.
      */
     public void setEnvironmentGain(float gain) {
         volumeController.setEnvironmentGain(gain);
-        musicChannel.setGain(musicVolume * volumeController.getEffectiveVolume());
+        applyMasterBus(VOLUME_RAMP_SECONDS);
     }
 
     public float getEnvironmentGain() {
@@ -372,18 +480,102 @@ public class SoundSystem {
     }
 
     /**
-     * Gets the current master volume.
-     * @return Current master volume level
+     * Muffles world sound (effects and ambience, not music or UI) through a low-pass filter at
+     * {@code cutoffHz}; 0 removes it. E.g. ~800 Hz while the listener is underwater.
      */
-    public float getMasterVolume() {
-        return volumeController.getMasterVolume();
+    public void setEnvironmentLowPass(float cutoffHz) {
+        if (Float.isNaN(cutoffHz)) return;
+        environmentLowPassHz = Math.max(0f, cutoffHz);
+        applyEnvironmentFilter(VOLUME_RAMP_SECONDS);
     }
 
-    public void cleanup() {
-        loopChannel.cleanup();
-        ambientVoices.cleanup();
-        soundBuffer.cleanup();
-        musicChannel.cleanup();
-        openALContext.cleanup();
+    public float getEnvironmentLowPass() {
+        return environmentLowPassHz;
+    }
+
+    private void applyMasterBus(float ramp) {
+        submitBus(BUS_MASTER, volumeController.getEffectiveVolume(), 0f, ramp);
+    }
+
+    private void applyMusicBus(float ramp) {
+        submitBus(BUS_MUSIC, musicVolume, 0f, ramp);
+    }
+
+    private void applyEnvironmentFilter(float ramp) {
+        submitBus(BUS_SFX, 1f, environmentLowPassHz, ramp);
+        submitBus(BUS_AMBIENT, 1f, environmentLowPassHz, ramp);
+    }
+
+    private void submitBus(int bus, float gain, float lowPassHz, float ramp) {
+        CendaAudio.Engine e = engine;
+        if (e == null) return;
+        synchronized (sentBus) {
+            float[] sent = sentBus[bus];
+            if (sent != null && sent[0] == gain && sent[1] == lowPassHz) return;
+            sentBus[bus] = new float[]{gain, lowPassHz};
+        }
+        CendaAudio.Commands batch = batches.get();
+        batch.clear();
+        batch.bus(bus, gain, lowPassHz, ramp);
+        e.submit(batch);
+    }
+
+    // ---- diagnostics ------------------------------------------------------------------------
+
+    /** Live mixer numbers, or null while audio is unavailable. */
+    public AudioStats stats() {
+        CendaAudio.Engine e = engine;
+        if (e == null) return null;
+        return AudioStats.of(e.stats(), e.deviceName());
+    }
+
+    public void testBasicFunctionality() {
+        AudioStats s = stats();
+        if (s == null) {
+            System.out.println("Audio is disabled: " + unavailableReason);
+            return;
+        }
+        System.out.println("=== SoundSystem ===");
+        System.out.println(s.summary());
+        System.out.println("Loaded sounds (" + sounds.size() + "): " + sounds.keySet());
+        System.out.println("Loaded music (" + music.size() + "): " + music.keySet());
+        System.out.println("===================");
+    }
+
+    /** @deprecated OpenAL is gone; prints the native mixer's state instead. */
+    @Deprecated
+    public void diagnoseOpenAL3D() {
+        testBasicFunctionality();
+    }
+
+    /** Offline systems only (see {@link #offline(int)}): mixes {@code frames} stereo frames. */
+    public void renderOffline(float[] out, int frames) {
+        CendaAudio.Engine e = engine;
+        if (e == null) throw new IllegalStateException("audio unavailable: " + unavailableReason);
+        e.render(out, frames);
+    }
+
+    /** Stops the device and frees every sound. {@link #initialize()} may run again afterwards. */
+    public synchronized void cleanup() {
+        CendaAudio.Engine e = engine;
+        engine = null;
+        sounds.clear();
+        music.clear();
+        loopVoices.clear();
+        loopGains.clear();
+        musicVoice = 0;
+        synchronized (sentBus) {
+            java.util.Arrays.fill(sentBus, null);
+        }
+        unavailableReason = "shut down";
+        if (e != null) e.close();
+    }
+
+    private static float sanitize(float volume) {
+        return Float.isNaN(volume) ? 0f : Math.max(0f, volume);
+    }
+
+    private static float variedPitch() {
+        return 0.9f + ThreadLocalRandom.current().nextFloat() * 0.2f;
     }
 }

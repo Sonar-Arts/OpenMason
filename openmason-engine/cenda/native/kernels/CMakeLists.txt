@@ -61,6 +61,37 @@ FetchContent_MakeAvailable(yoga)
 get_target_property(_yoga_includes yogacore INTERFACE_INCLUDE_DIRECTORIES)
 set_target_properties(yogacore PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_yoga_includes}")
 
+# miniaudio (public domain / MIT-0) for the audio engine (ca_*): playback device + decoders only;
+# the mixer is ours (src/audio). stb_vorbis ships in its extras/ and gives the decoder Ogg Vorbis.
+# Pinned by SHA-256 (GitHub tag archive 0.11.26, verified 2026-11-10). No CMakeLists of theirs is
+# used: one implementation TU, compiled without the strict warning set.
+FetchContent_Declare(miniaudio
+        URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.26.tar.gz
+        URL_HASH SHA256=838ba55a21c9142adf7b76bdc4351e5cd8b7ae128f46b25ec25f94ae9969c600
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        SOURCE_SUBDIR cenda-no-cmake)
+FetchContent_MakeAvailable(miniaudio)
+add_library(cenda_miniaudio STATIC src/audio/miniaudio_impl.c)
+target_include_directories(cenda_miniaudio SYSTEM PUBLIC ${miniaudio_SOURCE_DIR})
+# The engine writes its own mixer: leave out miniaudio's engine, node graph, resource manager,
+# encoders and generators. PUBLIC so the header part we include agrees with the implementation.
+target_compile_definitions(cenda_miniaudio PUBLIC
+        MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_ENCODING MA_NO_GENERATION)
+# Keep ma_*/stb_vorbis_* out of the shared lib's export table; only ca_* is ABI.
+set_target_properties(cenda_miniaudio PROPERTIES C_VISIBILITY_PRESET hidden C_STANDARD 99)
+if(NOT MSVC)
+    target_compile_options(cenda_miniaudio PRIVATE -w)
+endif()
+find_package(Threads REQUIRED)
+target_link_libraries(cenda_miniaudio PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+if(UNIX AND NOT APPLE)
+    target_link_libraries(cenda_miniaudio PUBLIC m)
+endif()
+if(APPLE)
+    target_link_libraries(cenda_miniaudio PUBLIC
+            "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
+endif()
+
 # Treat third-party headers as system includes so their warnings don't trip -Werror.
 get_target_property(_zstd_includes libzstd_static INTERFACE_INCLUDE_DIRECTORIES)
 set_target_properties(libzstd_static PROPERTIES
@@ -71,11 +102,12 @@ add_library(cenda_kernels SHARED
         src/mesher.cpp
         src/zstd_codec.cpp
         src/lua_host.cpp
-        src/flex_host.cpp)
+        src/flex_host.cpp
+        src/audio/audio_engine.cpp)
 
 target_include_directories(cenda_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cenda_kernels
-        PRIVATE FastNoise libzstd_static cenda_lua yogacore cenda_warnings)
+        PRIVATE FastNoise libzstd_static cenda_lua yogacore cenda_miniaudio cenda_warnings)
 
 # Float-op portability: the mesher's lighting math must match Java's IEEE
 # single ops exactly (parity-tested). FMA contraction (-ffp-contract=fast, GCC's -O default) would

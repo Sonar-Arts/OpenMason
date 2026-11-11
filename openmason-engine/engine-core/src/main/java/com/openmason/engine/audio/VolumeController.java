@@ -40,7 +40,7 @@ public class VolumeController {
 
     /**
      * Clamp to [0, 1]. NaN keeps {@code current}: min/max pass NaN through, and one
-     * NaN gain would poison every later source gain (OpenAL rejects it).
+     * NaN gain would poison every later bus gain.
      */
     private static float clampUnit(float value, float current) {
         if (Float.isNaN(value)) {

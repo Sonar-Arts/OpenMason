@@ -129,4 +129,17 @@ if [[ -f "$FLEX_HEADER" && -f "$FLEX_BINDING" ]]; then
   fi
 fi
 
+# And for the audio engine (ca_*): no Java fallback, but silence is not worth stopping a launch
+# for — CendaAudio logs the same diagnostic and the game runs without sound.
+AUDIO_HEADER="$HERE/native/kernels/include/cenda/audio.h"
+AUDIO_BINDING="$HERE/../engine-core/src/main/java/com/openmason/engine/audio/CendaAudio.java"
+if [[ -f "$AUDIO_HEADER" && -f "$AUDIO_BINDING" ]]; then
+  NATIVE_CA="$(sed -n 's/^#define CA_ABI_VERSION[[:space:]]\+\([0-9]\+\).*/\1/p' "$AUDIO_HEADER" | head -1)"
+  JAVA_CA="$(sed -n 's/.*EXPECTED_ABI[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' "$AUDIO_BINDING" | head -1)"
+  if [[ -n "$NATIVE_CA" && -n "$JAVA_CA" && "$NATIVE_CA" != "$JAVA_CA" ]]; then
+    warn "audio ABI mismatch: audio.h exports $NATIVE_CA but CendaAudio.EXPECTED_ABI is $JAVA_CA."
+    warn "audio has no fallback: the game and the editor will run SILENT until one side is fixed."
+  fi
+fi
+
 echo "[cenda] kernels ready: $LIB"

@@ -7,12 +7,11 @@
  */
 module openmason.engine.core {
 
-    // LWJGL: OpenGL rendering, STB image loading, OpenAL audio. Transitive: GL handles, buffers and
-    // the audio API appear in exported signatures.
+    // LWJGL: OpenGL rendering and STB image loading. Transitive: GL handles and buffers appear in
+    // exported signatures. Audio is native (Cenda ca_*, com.openmason.engine.audio.CendaAudio).
     requires transitive org.lwjgl;
     requires transitive org.lwjgl.opengl;
     requires org.lwjgl.stb;
-    requires org.lwjgl.openal;
 
     // Math (Vector3f/Matrix4f in exported rendering APIs)
     requires transitive org.joml;
@@ -39,6 +38,7 @@ module openmason.engine.core {
     requires java.management; // JVM memory/GC beans for MemoryProfiler (diagnostics)
 
     exports com.openmason.engine.audio;
+    exports com.openmason.engine.audio.emitters;
     exports com.openmason.engine.cearl;
     exports com.openmason.engine.cenda;
     exports com.openmason.engine.diagnostics;

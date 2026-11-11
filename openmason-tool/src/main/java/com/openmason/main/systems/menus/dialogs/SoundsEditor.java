@@ -42,7 +42,7 @@ import java.util.function.Function;
  * context exists): a quick-add chip bar offers the standard block/entity
  * events (chips carry a count badge once declared), and each sound renders as
  * a card whose Mortar header strip holds the event title, a kind badge, a
- * Resource/Embedded segmented toggle, an OpenAL Play preview (via
+ * Resource/Embedded segmented toggle, a Play preview (via
  * {@link SoundPreviewService} — pitch variation rolls a random pitch exactly
  * like the game), and a remove button; the editable fields (event name,
  * source, volume/pitch sliders) are ImGui widgets beneath. Validation is
