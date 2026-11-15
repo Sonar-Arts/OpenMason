@@ -47,11 +47,11 @@ public final class ActionHints {
                 return GamepadButtons.name(b.getFirst());
             }
         }
-        List<UiActionMap.KeyChord> k = map.keys(action);
+        List<com.openmason.engine.input.KeyChord> k = map.keys(action);
         if (k.isEmpty()) {
             return "";
         }
-        UiActionMap.KeyChord c = k.getFirst();
+        com.openmason.engine.input.KeyChord c = k.getFirst();
         String key = keyName(c.key());
         if (c.modifiers() <= 0) {
             return key;

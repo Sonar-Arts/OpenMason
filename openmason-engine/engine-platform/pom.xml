@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.openmason</groupId>
+        <artifactId>openmason-engine-parent</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>openmason-engine-platform</artifactId>
+    <packaging>jar</packaging>
+
+    <name>OpenMason Engine Platform</name>
+    <description>The window, input devices and frame loop over GLFW (#96): display-backend policy, window +
+        GL context, framebuffer/cursor scaling, frame pacing, input event chain, pointer capture, gamepads,
+        clipboard and the frame loop. The only engine module that links GLFW, so headless consumers
+        (servers, tests, headless UI deploy) never pull its natives.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.openmason</groupId>
+            <artifactId>openmason-engine-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- LayoutKeys, GamepadButtons and MasonryEnvironment.ClipboardProvider -->
+        <dependency>
+            <groupId>com.openmason</groupId>
+            <artifactId>openmason-engine-ui</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

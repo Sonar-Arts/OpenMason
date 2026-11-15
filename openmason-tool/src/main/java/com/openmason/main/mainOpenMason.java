@@ -2,7 +2,6 @@ package com.openmason.main;
 
 import com.openmason.main.bootstrap.UiComposition;
 import com.openmason.main.platform.AppWindow;
-import com.openmason.main.platform.GlfwPlatform;
 import com.openmason.main.platform.ImGuiBackend;
 import com.openmason.main.platform.WindowsTaskbarIdentity;
 import com.openmason.main.systems.mcp.McpServerBootstrap;
@@ -41,7 +40,6 @@ public class mainOpenMason {
     private static final Logger logger = LoggerFactory.getLogger(mainOpenMason.class);
 
     // Core components
-    private final GlfwPlatform glfwPlatform = new GlfwPlatform();
     private AppWindow appWindow;
     private final ImGuiBackend imGuiBackend = new ImGuiBackend();
     private omConfig omConfig;
@@ -102,7 +100,9 @@ public class mainOpenMason {
             omConfig = new omConfig();
             omLifecycle = new omLifecycle();
 
-            glfwPlatform.initialize();
+            // X11 (XWayland on Wayland desktops) so ImGui viewports can pop out into their own windows.
+            com.openmason.engine.platform.window.DisplayBackend.initialize(
+                    com.openmason.engine.platform.window.BackendPolicy.PREFER_X11);
             appWindow = new AppWindow(omConfig, this::requestApplicationExit);
             appWindow.create();
             imGuiBackend.initialize(window());
@@ -884,7 +884,7 @@ public class mainOpenMason {
             appWindow.destroy();
         }
 
-        glfwPlatform.terminate();
+        com.openmason.engine.platform.window.DisplayBackend.terminate();
     }
 
     private void safeDispose(Object resource) {

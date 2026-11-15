@@ -54,6 +54,8 @@ module openmason.engine.core {
     exports com.openmason.engine.format.sbo;
     exports com.openmason.engine.format.sbt;
     exports com.openmason.engine.format.sound;
+    exports com.openmason.engine.input;
+    exports com.openmason.engine.loop;
     exports com.openmason.engine.net.client;
     exports com.openmason.engine.net.pipeline;
     exports com.openmason.engine.net.protocol;

@@ -34,7 +34,7 @@ class ActionMapTest {
     @Test
     void wireRoundTripKeepsRemapsAndFillsNewActions() {
         UiActionMap remapped = UiActionMap.defaults()
-            .withKeys(UiAction.SUBMIT, List.of(UiActionMap.KeyChord.exact(69, 0)))
+            .withKeys(UiAction.SUBMIT, List.of(com.openmason.engine.input.KeyChord.exact(69, 0)))
             .withButtons(UiAction.CANCEL, List.of(GamepadButtons.Y));
         Map<String, List<String>> wire = remapped.toWire();
         assertEquals(List.of("key:69+exact", "pad:0"), wire.get("ui.submit"));
@@ -60,7 +60,7 @@ class ActionMapTest {
                     new ActionHints.Hint(UiAction.SUBMIT, "Enter", "Select")),
                 ActionHints.of(r.el("ok"), map, InputDevice.KEYBOARD));
             assertEquals("A", ActionHints.of(r.el("ok"), map, InputDevice.GAMEPAD).get(1).glyph());
-            UiActionMap remapped = map.withKeys(UiAction.SUBMIT, List.of(UiActionMap.KeyChord.exact(69, MKeys.MOD_SHIFT)));
+            UiActionMap remapped = map.withKeys(UiAction.SUBMIT, List.of(com.openmason.engine.input.KeyChord.exact(69, MKeys.MOD_SHIFT)));
             assertEquals("Shift+E", ActionHints.of(r.el("ok"), remapped, InputDevice.KEYBOARD).get(1).glyph(),
                 "a remap changes the hint without touching the document");
             assertEquals("Shift+Tab", ActionHints.glyph(UiAction.PREVIOUS, map, InputDevice.KEYBOARD));

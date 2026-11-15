@@ -33,10 +33,13 @@ sky	openmason-engine/engine-core	com/openmason/engine/rendering/sky/**/*Test
 particles	openmason-engine/engine-core	com/openmason/engine/rendering/particles/**/*Test
 ui-program	openmason-engine/engine-ui	com/openmason/engine/ui/**/*Test,!com/openmason/engine/ui/cenda/**,!com/openmason/engine/ui/boundary/**
 audio	openmason-engine/engine-core	com/openmason/engine/audio/**/*Test
+platform	openmason-engine/engine-core	com/openmason/engine/input/**/*Test,com/openmason/engine/loop/**/*Test
+platform	openmason-engine/engine-platform	com/openmason/engine/platform/**/*Test,!com/openmason/engine/platform/boundary/**
 boundaries	openmason-engine/engine-core	com/openmason/engine/boundary/**/*Test
 boundaries	openmason-engine/engine-ui	com/openmason/engine/ui/boundary/**/*Test
 boundaries	openmason-engine/engine-voxel	com/openmason/engine/voxel/boundary/**/*Test
 boundaries	openmason-engine/engine-modeling	com/openmason/engine/modeling/boundary/**/*Test
+boundaries	openmason-engine/engine-platform	com/openmason/engine/platform/boundary/**/*Test
 boundaries	openmason-engine/samples/core-consumer	com/openmason/samples/**/*Test
 
 

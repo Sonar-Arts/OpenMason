@@ -3,15 +3,16 @@ package com.openmason.main.platform;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-import static org.lwjgl.glfw.GLFW.glfwSetCharCallback;
-import static org.lwjgl.glfw.GLFW.glfwSetKeyCallback;
+import com.openmason.engine.platform.input.InputChain;
+import com.openmason.engine.platform.window.Window;
 
 /**
  * Raw GLFW key and character events of the main window for panels that host Stonebreak UI
  * documents (#288), which need GLFW key codes and whole code points rather than ImGui's view of
- * the keyboard. Installed before ImGui's GLFW backend, which chains to these callbacks, so ImGui
- * keeps receiving everything too. Listeners decide for themselves whether they have focus. Letter
- * keys arrive translated to the active keyboard layout ({@code LayoutKeys}, as the game host does).
+ * the keyboard. One listener on the window's engine {@link InputChain} (#96); ImGui's GLFW backend
+ * is initialized after the window, so it chains to the engine's callbacks and keeps receiving
+ * everything too. Listeners decide for themselves whether they have focus. Letter keys arrive
+ * translated to the active keyboard layout ({@code LayoutKeys}, as the game host does).
  */
 public final class ToolInputTap {
 
@@ -27,23 +28,27 @@ public final class ToolInputTap {
     private ToolInputTap() {
     }
 
-    /** Must run before {@code ImGuiImplGlfw.init(window, true)}. */
-    static void install(long window) {
-        glfwSetKeyCallback(window, (w, key, scancode, action, mods) -> {
-            if (LISTENERS.isEmpty()) {
-                return;
+    /** Joins the main window's input chain. */
+    static void install(InputChain chain) {
+        chain.add(new InputChain.Listener() {
+            @Override
+            public void key(int key, int scancode, int action, int mods) {
+                if (LISTENERS.isEmpty()) {
+                    return;
+                }
+                // documents see letter keys of the active layout (C8): Ctrl+Z on a QWERTZ keyboard is
+                // the key labelled Z, as in the game window; ImGui keeps its own physical-key view
+                int layoutKey = Window.layoutKey(key, scancode);
+                for (Listener l : LISTENERS) {
+                    l.key(layoutKey, action, mods);
+                }
             }
-            // documents see letter keys of the active layout (C8): Ctrl+Z on a QWERTZ keyboard is
-            // the key labelled Z, as in the game window; ImGui keeps its own physical-key view
-            int layoutKey = com.openmason.engine.ui.runtime.input.LayoutKeys.translate(key, scancode,
-                    org.lwjgl.glfw.GLFW::glfwGetKeyName);
-            for (Listener l : LISTENERS) {
-                l.key(layoutKey, action, mods);
-            }
-        });
-        glfwSetCharCallback(window, (w, codePoint) -> {
-            for (Listener l : LISTENERS) {
-                l.character(codePoint);
+
+            @Override
+            public void character(int codePoint) {
+                for (Listener l : LISTENERS) {
+                    l.character(codePoint);
+                }
             }
         });
     }

@@ -150,6 +150,13 @@
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
+        <!-- window, input chain, display-backend policy (#96) -->
+        <dependency>
+            <groupId>com.openmason</groupId>
+            <artifactId>openmason-engine-platform</artifactId>
+            <version>${project.version}</version>
+            <scope>compile</scope>
+        </dependency>
         <dependency>
             <groupId>com.openmason</groupId>
             <artifactId>openmason-engine-modeling</artifactId>

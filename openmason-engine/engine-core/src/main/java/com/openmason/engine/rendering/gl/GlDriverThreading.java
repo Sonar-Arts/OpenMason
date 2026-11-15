@@ -56,8 +56,17 @@ public final class GlDriverThreading {
      *                       (e.g. {@code myapp.gl.threaded})
      */
     public static Outcome disableThreadedDispatch(String optOutProperty) {
+        return disableThreadedDispatch(optOutProperty != null && Boolean.getBoolean(optOutProperty), optOutProperty);
+    }
+
+    /**
+     * @param optedOut       keep the driver default (the caller resolved its opt-out flag itself, e.g.
+     *                       through {@code EngineProperties})
+     * @param optOutProperty the flag's name, for the log line
+     */
+    public static Outcome disableThreadedDispatch(boolean optedOut, String optOutProperty) {
         Outcome o = apply(System.getProperty("os.name", "").toLowerCase().contains("linux"),
-                optOutProperty != null && Boolean.getBoolean(optOutProperty), System.getenv(NVIDIA_SWITCH));
+                optedOut, System.getenv(NVIDIA_SWITCH));
         switch (o) {
             case DISABLED -> logger.info("GL driver: NVIDIA threaded optimization off (-D{}=true keeps it)",
                     optOutProperty);

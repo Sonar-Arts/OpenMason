@@ -149,7 +149,7 @@ class KeyRoutingTest {
     void remappedKeysDriveTheSameActions() {
         try (InputRig r = new InputRig(menu())) {
             r.router.setActionMap(UiActionMap.defaults().withKeys(UiAction.NAVIGATE_DOWN,
-                List.of(UiActionMap.KeyChord.any(87 /* W */))));
+                List.of(com.openmason.engine.input.KeyChord.any(87 /* W */))));
             assertTrue(r.press(87 /* W */));
             assertEquals("first", r.focusKey());
             assertTrue(r.press(87 /* W */));

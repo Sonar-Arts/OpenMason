@@ -57,6 +57,7 @@ module com.openmason {
     // OpenMason Engine for shared rendering and format support
     requires openmason.engine.core;
     requires openmason.engine.ui; // no voxel: the tool never reads the voxel stack (#387)
+    requires openmason.engine.platform; // window, input chain, backend policy (#96)
     // EditableModel + the model viewer (#91). Transitive: the plugin API exposes EditableModel types to plugins
     // (ProjectTemplate.Builder.model(name, PartShapeFactory.Shape)), and the Stonebreak plugin reads
     // gmr.analysis/gmr.editable through this module.

@@ -46,7 +46,8 @@ public final class ImGuiBackend {
 
         loadFonts(io);
 
-        ToolInputTap.install(window); // first, so ImGui's backend chains to it
+        // The window's engine input chain (ToolInputTap rides on it) is already installed; ImGui's
+        // backend chains to those callbacks.
         imGuiGlfw.init(window, true);
         imGuiGl3.init("#version 330 core");
 

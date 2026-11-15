@@ -43,6 +43,7 @@ MODULES = ["openmason-engine/engine-core",
            "openmason-engine/engine-ui",
            "openmason-engine/engine-voxel",
            "openmason-engine/engine-modeling",
+           "openmason-engine/engine-platform",
            "openmason-engine/samples/core-consumer",
            "openmason-tool"]
 TAG_SCOPES = ("integration", "regression")
