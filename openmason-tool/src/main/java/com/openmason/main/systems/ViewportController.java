@@ -648,14 +648,6 @@ public class ViewportController {
     }
 
     /**
-     * Switch the viewport to render the .sbt at {@code sbtPath} as a
-     * voxelized sprite (per-pixel cube grid).
-     */
-    public void setSelectedSBT(java.nio.file.Path sbtPath) {
-        contentTypeManager.switchToSBT(sbtPath);
-    }
-
-    /**
      * Set texture variant for current model.
      *
      * <p><b>SOLID Refactored:</b> Delegates to ContentTypeManager.
@@ -1059,54 +1051,5 @@ public class ViewportController {
         if (viewportRenderPipeline != null) {
             viewportRenderPipeline.setContentProviders(providers);
         }
-    }
-
-    /**
-     * The .SBT content the viewport can draw, as a content provider the core registers (#431; a
-     * game plugin draws its items itself, #382). They forward to the render pipeline once it exists (before
-     * that they are never ready).
-     */
-    public java.util.List<com.openmason.api.viewport.ViewportContentProvider> builtinContentProviders() {
-        return java.util.List.of(builtinContent("openmason.sbt", "SBT texture sprite"));
-    }
-
-    private com.openmason.api.viewport.ViewportContentProvider builtinContent(String id, String label) {
-        return new com.openmason.api.viewport.ViewportContentProvider() {
-            private com.openmason.api.viewport.ViewportContentProvider target() {
-                if (viewportRenderPipeline == null) {
-                    return null;
-                }
-                for (var p : viewportRenderPipeline.builtinContentProviders()) {
-                    if (p.id().equals(id)) {
-                        return p;
-                    }
-                }
-                return null;
-            }
-
-            @Override
-            public String id() {
-                return id;
-            }
-
-            @Override
-            public String label() {
-                return label;
-            }
-
-            @Override
-            public boolean ready() {
-                var t = target();
-                return t != null && t.ready();
-            }
-
-            @Override
-            public void render(com.openmason.api.viewport.ViewportContentFrame frame) {
-                var t = target();
-                if (t != null) {
-                    t.render(frame);
-                }
-            }
-        };
     }
 }

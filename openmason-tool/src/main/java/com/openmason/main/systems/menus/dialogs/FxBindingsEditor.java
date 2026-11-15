@@ -65,6 +65,14 @@ public final class FxBindingsEditor {
      * @param onDirty       called on every edit
      * @param catalogSource builds the catalog of known FX (scanned lazily, again on "Rescan"); null = none known
      */
+    /**
+     * An editor checking bindings against the FX of the project {@code projectRoot} supplies (plus the
+     * active game target's shipped FX): what an asset kind's editor window — a plugin's — uses (#88).
+     */
+    public static FxBindingsEditor forProject(Runnable onDirty, Supplier<java.nio.file.Path> projectRoot) {
+        return new FxBindingsEditor(onDirty, () -> FxCatalog.scan(projectRoot.get()));
+    }
+
     public FxBindingsEditor(Runnable onDirty, Supplier<FxCatalog> catalogSource) {
         this.onDirty = onDirty != null ? onDirty : () -> { };
         this.catalogSource = catalogSource;

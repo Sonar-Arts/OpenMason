@@ -43,16 +43,16 @@ public class ProjectTemplate {
     /**
      * A blank model the template writes into a new project as {@code <name>.omo}. Its
      * geometry is either built from primitive {@code parts}, or copied from the mesh of an
-     * {@code .sbo} of the template's game target ({@code targetSbo}, a path relative to the
+     * model asset of the template's game target ({@code targetModel}, a path relative to the
      * target's resource root, read through its template source) with its materials dropped.
      */
-    public record TemplateModel(String name, List<TemplatePart> parts, String targetSbo) {
+    public record TemplateModel(String name, List<TemplatePart> parts, String targetModel) {
         public TemplateModel {
             Objects.requireNonNull(name, "Model name cannot be null");
             parts = parts == null ? List.of() : List.copyOf(parts);
-            if (parts.isEmpty() == (targetSbo == null)) {
+            if (parts.isEmpty() == (targetModel == null)) {
                 throw new IllegalArgumentException(
-                        "Template model '" + name + "' needs either parts or an .sbo source, not both");
+                        "Template model '" + name + "' needs either parts or a target model source, not both");
             }
         }
     }
@@ -79,7 +79,7 @@ public class ProjectTemplate {
         this.models = List.copyOf(builder.models);
         this.openOnCreate = builder.openOnCreate;
         this.targetId = builder.targetId;
-        if (targetId == null && models.stream().anyMatch(m -> m.targetSbo() != null)) {
+        if (targetId == null && models.stream().anyMatch(m -> m.targetModel() != null)) {
             throw new IllegalArgumentException("Template '" + id + "' copies target assets but names no game target");
         }
     }
@@ -212,11 +212,11 @@ public class ProjectTemplate {
         }
 
         /**
-         * A model whose geometry is copied, untextured, from an {@code .sbo} of the template's
-         * game target ({@code targetSbo} relative to its resource root).
+         * A model whose geometry is copied, untextured, from a model asset of the template's
+         * game target ({@code targetModel} relative to its resource root).
          */
-        public Builder modelFromTargetSbo(String name, String targetSbo) {
-            this.models.add(new TemplateModel(name, null, targetSbo));
+        public Builder modelFromTargetAsset(String name, String targetModel) {
+            this.models.add(new TemplateModel(name, null, targetModel));
             return this;
         }
 

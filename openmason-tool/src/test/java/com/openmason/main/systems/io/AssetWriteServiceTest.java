@@ -26,6 +26,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Tag("integration")
 class AssetWriteServiceTest {
 
+    /** A game target's container kinds (the Stonebreak layout the fixtures use), as a game plugin registers them (#88). */
+    static final WriteKind GAME_OBJECT = WriteKind.of(com.openmason.api.files.FileType.of("sbo", "Game Object", ".sbo")
+            .withSave("target", "sbo.block", "object"));
+    static final WriteKind GAME_ENTITY = WriteKind.of(com.openmason.api.files.FileType.of("sbe", "Game Entity", ".sbe")
+            .withSave("target", "sbe.mob", "entity"));
+
+
     @TempDir
     Path tmp;
 
@@ -132,7 +139,7 @@ class AssetWriteServiceTest {
         AssetWriteService svc = new AssetWriteService(null, sandbox, () -> WritePolicy.ASK_RISKY);
         // Run off the bound "main" thread: asking from the main thread is a programming error.
         WriteOutcome out = CompletableFuture.supplyAsync(() ->
-                svc.save(WriteRequest.of(WriteKind.SBO, "SB_Cow", false, false, "SB_Cow"), p -> true)).get();
+                svc.save(WriteRequest.of(GAME_OBJECT, "SB_Cow", false, false, "SB_Cow"), p -> true)).get();
         assertFalse(out.ok());
         assertEquals("declined", out.status());
         assertEquals("prompt_unavailable", out.reason());
@@ -182,8 +189,8 @@ class AssetWriteServiceTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> kinds = (List<Map<String, Object>>) t.get("kinds");
         assertEquals(WriteKind.builtins().size(), kinds.size());
-        assertEquals("target:sbo/blocks/MyObject.sbo",
-                kinds.stream().filter(k -> "sbo".equals(k.get("kind"))).findFirst().orElseThrow().get("example"));
+        // Game asset kinds come from their plugin (#88): the editor alone lists only its own.
+        assertTrue(kinds.stream().noneMatch(k -> "sbo".equals(k.get("kind"))));
     }
 
     @Test

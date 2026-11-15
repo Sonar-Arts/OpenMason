@@ -322,7 +322,7 @@ final class UiAssetOps {
         }
         if (!Files.isRegularFile(file)) {
             throw new UiCommandException("No project file '" + rel + "' (paths are project-relative, e.g."
-                + " UI/stonebreak/ui/textures/panel.sbt)");
+                + " UI/mygame/ui/textures/panel.omt)");
         }
         return file;
     }

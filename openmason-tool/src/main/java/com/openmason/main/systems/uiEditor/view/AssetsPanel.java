@@ -326,7 +326,7 @@ final class AssetsPanel {
         ImGui.separator();
         ImGui.textUnformatted("Relink " + relinkId + " to project path:");
         ImGui.setNextItemWidth(-150);
-        ImGui.inputTextWithHint("##relink", "UI/stonebreak/ui/textures/panel.sbt", relinkPath);
+        ImGui.inputTextWithHint("##relink", "UI/mygame/ui/textures/panel.omt", relinkPath);
         ImGui.sameLine();
         ProjectAssetSource project = ctx.project.projectSource();
         if (ImGui.button("Relink") && project != null) {

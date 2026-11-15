@@ -6,7 +6,10 @@ import com.openmason.api.PluginInfo;
 import com.openmason.api.Registrar;
 import com.openmason.api.Registration;
 import com.openmason.api.ServiceRegistry;
+import com.openmason.api.asset.AssetFormatContribution;
 import com.openmason.api.asset.AssetSectionContribution;
+import com.openmason.api.asset.AssetSurface;
+import com.openmason.api.asset.AssetWindow;
 import com.openmason.api.files.FileOpener;
 import com.openmason.api.files.FileType;
 import com.openmason.api.knowledge.GuideTopic;
@@ -46,6 +49,8 @@ public final class EditorRegistries {
     private final Contributions<GuideTopic> guideTopics = new Contributions<>("guide topic", GuideTopic::id);
     private final Contributions<KnowledgePack> knowledgePacks = new Contributions<>("knowledge pack", KnowledgePack::id);
     private final Contributions<PreferencePage> preferencePages = new Contributions<>("preference page", PreferencePage::id);
+    private final Contributions<AssetFormatContribution> assetFormats =
+            new Contributions<>("asset format", AssetFormatContribution::id);
     private final Contributions<AssetSectionContribution<?>> assetSections =
             new Contributions<>("asset section", AssetSectionContribution::id);
     private final Contributions<com.openmason.api.fx.FxExportTarget> fxExporters =
@@ -107,6 +112,43 @@ public final class EditorRegistries {
         return preferencePages;
     }
 
+    public Contributions<AssetFormatContribution> assetFormats() {
+        return assetFormats;
+    }
+
+    /** Every floating window of every registered asset kind, in registration order (#88). */
+    public List<AssetWindow> assetWindows() {
+        List<AssetWindow> out = new ArrayList<>();
+        for (AssetFormatContribution f : assetFormats.all()) {
+            out.addAll(f.windows());
+        }
+        return List.copyOf(out);
+    }
+
+    /** Every Texture Editor Tools-menu entry of every registered asset kind, by order (#88). */
+    public List<com.openmason.api.asset.TextureAction> textureActions() {
+        List<com.openmason.api.asset.TextureAction> out = new ArrayList<>();
+        for (AssetFormatContribution f : assetFormats.all()) {
+            out.addAll(f.textureActions());
+        }
+        out.sort(java.util.Comparator.comparingInt(com.openmason.api.asset.TextureAction::order));
+        return List.copyOf(out);
+    }
+
+    /** Every surface the registered asset kinds declare, then the built-in FX export surface. */
+    public List<AssetSurface<?>> assetSurfaces() {
+        List<AssetSurface<?>> out = new ArrayList<>();
+        for (AssetFormatContribution f : assetFormats.all()) {
+            for (AssetSurface<?> s : f.surfaces()) {
+                if (!out.contains(s)) {
+                    out.add(s);
+                }
+            }
+        }
+        out.add(AssetSurface.FX_EXPORT);
+        return List.copyOf(out);
+    }
+
     public Contributions<AssetSectionContribution<?>> assetSections() {
         return assetSections;
     }
@@ -142,7 +184,7 @@ public final class EditorRegistries {
     /** Every contribution list, for owner-wide operations. */
     public List<Contributions<?>> all() {
         return List.of(workspaces, menus, menuEntries, commands, fileTypes, fileOpeners, mcpTools, guideTopics,
-                knowledgePacks, preferencePages, assetSections, fxExporters, fxCatalogSources, viewportContent, templates, gameTargets, themes,
+                knowledgePacks, preferencePages, assetFormats, assetSections, fxExporters, fxCatalogSources, viewportContent, templates, gameTargets, themes,
                 lifecycle);
     }
 
@@ -234,6 +276,11 @@ public final class EditorRegistries {
             }
 
             @Override
+            public Registrar<AssetFormatContribution> assetFormats() {
+                return assetFormatRegistrar(owner);
+            }
+
+            @Override
             public Registrar<AssetSectionContribution<?>> assetSections() {
                 return assetSections.registrar(owner);
             }
@@ -271,6 +318,64 @@ public final class EditorRegistries {
             @Override
             public Registrar<LifecycleListener> lifecycle() {
                 return lifecycle.registrar(owner);
+            }
+        };
+    }
+
+    /**
+     * The {@code assetFormats()} registrar of {@code owner}: registers the kind and then each of its
+     * parts with its own list, all owned by {@code owner}. A part that cannot be registered (a
+     * duplicate id) removes the parts registered before it and the kind itself, then rethrows.
+     */
+    private Registrar<AssetFormatContribution> assetFormatRegistrar(String owner) {
+        Registrar<AssetFormatContribution> base = assetFormats.registrar(owner);
+        return new Registrar<>() {
+            @Override
+            public Registration register(AssetFormatContribution format) {
+                List<Registration> done = new ArrayList<>();
+                try {
+                    done.add(base.register(format));
+                    done.add(fileTypes.register(owner, format.fileType()));
+                    if (format.opener() != null) {
+                        done.add(fileOpeners.register(owner, new FileOpener(format.fileType().id(), format.opener())));
+                    }
+                    for (MenuEntry entry : format.menuEntries()) {
+                        done.add(menuEntries.register(owner, entry));
+                    }
+                    for (ViewportContentProvider provider : format.viewportContent()) {
+                        done.add(viewportContent.register(owner, provider));
+                    }
+                    for (ProjectTemplate template : format.templates()) {
+                        done.add(templates.register(owner, template));
+                    }
+                } catch (RuntimeException e) {
+                    java.util.Collections.reverse(done);
+                    done.forEach(Registration::close);
+                    throw e;
+                }
+                if (format.codec() != null) {
+                    // Engine-side reads (no-op when the engine already discovered it through ServiceLoader).
+                    com.openmason.engine.format.spi.Formats.register(format.codec());
+                    if (format.codec() instanceof com.openmason.engine.format.spi.TextureDecoder decoder) {
+                        com.openmason.engine.format.spi.Formats.register(decoder);
+                    }
+                }
+                List<Registration> parts = List.copyOf(done);
+                return () -> {
+                    for (int i = parts.size() - 1; i >= 0; i--) {
+                        parts.get(i).close();
+                    }
+                };
+            }
+
+            @Override
+            public List<AssetFormatContribution> all() {
+                return base.all();
+            }
+
+            @Override
+            public java.util.Optional<AssetFormatContribution> find(String id) {
+                return base.find(id);
             }
         };
     }

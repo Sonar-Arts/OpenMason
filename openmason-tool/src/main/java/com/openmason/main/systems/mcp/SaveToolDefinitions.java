@@ -22,7 +22,7 @@ public final class SaveToolDefinitions {
                 "save_targets",
                 "Where agent writes may land: the writable roots (project / game resources / "
                         + "exports) with their sub-folders, the path grammar, per-kind defaults "
-                        + "(omo, omt, omanim, omsc, png, sbo, sbe) and the current write policy. "
+                        + "(omo, omt, omanim, omsc, png, plus any game asset kinds) and the current write policy. "
                         + "Read this before passing a file_path to any save/export tool.",
                 McpSchema.of(mapper).build(),
                 args -> writes.targets()));

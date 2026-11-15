@@ -126,7 +126,7 @@ public final class UiEditorWorkspace implements AutoCloseable {
     }
 
     /**
-     * The Texture Editor saved {@code file}: re-wrap the SBT it is the source of (if any) and
+     * The Texture Editor saved {@code file}: re-wrap the texture container it is the source of (if any) and
      * refresh every open document, so every shared reference to the texture updates.
      */
     public void textureSaved(Path file) {
@@ -136,7 +136,7 @@ public final class UiEditorWorkspace implements AutoCloseable {
         } catch (java.io.IOException e) {
             changed = List.of(file);
             if (ctx.doc() != null) {
-                ctx.doc().setLastMessage("Texture saved, but its SBT could not be re-exported: " + e.getMessage());
+                ctx.doc().setLastMessage("Texture saved, but its texture container could not be re-exported: " + e.getMessage());
             }
         }
         ctx.assetFilesChanged(changed);

@@ -21,8 +21,6 @@ public final class WriteKind {
     public static final WriteKind OMANIM = of(BuiltinFileTypes.OMANIM);
     public static final WriteKind OMSC = of(BuiltinFileTypes.OMSC);
     public static final WriteKind PNG = of(BuiltinFileTypes.PNG);
-    public static final WriteKind SBO = of(BuiltinFileTypes.SBO);
-    public static final WriteKind SBE = of(BuiltinFileTypes.SBE);
     /** UI Editor source documents (#324); bare names land beside the convention tree {@code UI/}. */
     public static final WriteKind OMUI = of(BuiltinFileTypes.OMUI);
     /** Exported UI documents, the editor's default export folder. */
@@ -55,7 +53,7 @@ public final class WriteKind {
 
     /** The built-in kinds, in declaration order. */
     public static List<WriteKind> builtins() {
-        return List.of(OMO, OMT, OMANIM, OMSC, PNG, SBO, SBE, OMUI, SBUI);
+        return List.of(OMO, OMT, OMANIM, OMSC, PNG, OMUI, SBUI);
     }
 
     /** The built-in kind with id {@code id} ({@code omo}, {@code .omo}...), or null. */

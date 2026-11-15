@@ -5,9 +5,9 @@ import com.openmason.engine.voxel.IVoxelWorld;
 import com.openmason.engine.voxel.VoxelWorldConfig;
 import com.openmason.engine.voxel.cco.core.CcoChunkData;
 import com.openmason.engine.voxel.cco.coordinates.CcoBounds;
-import com.openmason.engine.voxel.sbo.sboRenderer.SBOCullingPolicy;
-import com.openmason.engine.voxel.sbo.sboRenderer.SBOFaceConventions;
-import com.openmason.engine.voxel.sbo.sboRenderer.SBOFaceOcclusionPolicy;
+import com.openmason.engine.voxel.stamp.render.StampCullingPolicy;
+import com.openmason.engine.voxel.stamp.render.StampFaceConventions;
+import com.openmason.engine.voxel.stamp.render.StampFaceOcclusionPolicy;
 
 import java.util.function.Predicate;
 
@@ -18,7 +18,7 @@ import java.util.function.Predicate;
  * adjacent block transparency. Extracted from the legacy MmsCcoAdapter
  * to be reused by all geometry providers.
  */
-public class MmsFaceCullingService implements SBOCullingPolicy {
+public class MmsFaceCullingService implements StampCullingPolicy {
 
     /**
      * Sentinel returned for face-culling lookups into chunks that haven't
@@ -37,13 +37,13 @@ public class MmsFaceCullingService implements SBOCullingPolicy {
     };
 
     /** Every block covers every side unless a shape-aware policy says otherwise. */
-    private static final SBOFaceOcclusionPolicy FULL_CUBE_OCCLUSION = (block, face) -> true;
+    private static final StampFaceOcclusionPolicy FULL_CUBE_OCCLUSION = (block, face) -> true;
 
     private IVoxelWorld world;
     private Predicate<IBlockType> translucencyPolicy = block -> false;
     private Predicate<IBlockType> crossBlockPolicy = block -> false;
     private Predicate<IBlockType> partialHeightPolicy = block -> false;
-    private SBOFaceOcclusionPolicy occlusionPolicy = FULL_CUBE_OCCLUSION;
+    private StampFaceOcclusionPolicy occlusionPolicy = FULL_CUBE_OCCLUSION;
 
     public MmsFaceCullingService() {
     }
@@ -100,7 +100,7 @@ public class MmsFaceCullingService implements SBOCullingPolicy {
      *
      * @param policy per (block, MMS face) occlusion test
      */
-    public void setFaceOcclusionPolicy(SBOFaceOcclusionPolicy policy) {
+    public void setFaceOcclusionPolicy(StampFaceOcclusionPolicy policy) {
         this.occlusionPolicy = policy != null ? policy : FULL_CUBE_OCCLUSION;
     }
 
@@ -153,7 +153,7 @@ public class MmsFaceCullingService implements SBOCullingPolicy {
         // Neighbour first: it is a full cube almost always, which short-circuits
         // the whole test to one lookup on the mesher's hottest path.
         if (adjacentBlock != null
-                && !occlusionPolicy.occludesFace(adjacentBlock, SBOFaceConventions.opposite(face))
+                && !occlusionPolicy.occludesFace(adjacentBlock, StampFaceConventions.opposite(face))
                 && occlusionPolicy.occludesFace(blockType, face)) {
             return true;
         }
@@ -171,7 +171,7 @@ public class MmsFaceCullingService implements SBOCullingPolicy {
                 && blockType.isTransparent() && !adjacentBlock.isTransparent()
                 && !crossBlockPolicy.test(blockType)
                 && occlusionPolicy.occludesFace(blockType, face)
-                && occlusionPolicy.occludesFace(adjacentBlock, SBOFaceConventions.opposite(face))) {
+                && occlusionPolicy.occludesFace(adjacentBlock, StampFaceConventions.opposite(face))) {
             return false;
         }
 

@@ -16,12 +16,12 @@ import java.util.Map;
  * and carries the {@link WriteKind}'s extension. Accepted spellings:
  * <ul>
  *   <li>an absolute path,</li>
- *   <li>{@code project:models/x.omo}, {@code target:<folder>/X.sbo},
+ *   <li>{@code project:models/x.omo}, {@code target:<folder>/X.<ext>},
  *       {@code exports:x.png} — a root prefix plus a relative path ({@code game:} is the
  *       pre-#380 spelling of {@code target:}),</li>
  *   <li>a bare relative path, resolved against the kind's default root; a
  *       single bare name additionally lands in the kind's default sub-folder in the
- *       active game target ({@code X.sbo} → {@code target:<block folder>/X.sbo}).</li>
+ *       active game target ({@code X.<ext>} → {@code target:<type folder>/X.<ext>}).</li>
  * </ul>
  *
  * <p>The static helpers at the bottom are the former {@code AssetPathGuard}:
@@ -201,13 +201,15 @@ public final class WriteSandbox {
      *
      * @throws IllegalArgumentException with a teaching message when rejected
      */
-    public static Path requireAssetPath(String rawPath, Path... allowedRoots) {
+    public static Path requireAssetPath(String rawPath, java.util.List<com.openmason.api.files.FileType> types,
+                                        Path... allowedRoots) {
         if (rawPath == null || rawPath.isBlank()) {
             throw new IllegalArgumentException("path is empty");
         }
-        if (!BuiltinFileTypes.SBO.matches(rawPath) && !BuiltinFileTypes.SBE.matches(rawPath)) {
-            throw new IllegalArgumentException(
-                    "path must point at a .sbo or .sbe file, got: " + rawPath);
+        if (types.stream().noneMatch(t -> t.matches(rawPath))) {
+            throw new IllegalArgumentException("path must point at a "
+                    + String.join(" or ", types.stream().map(com.openmason.api.files.FileType::extension).toList())
+                    + " file, got: " + rawPath);
         }
         Path canonical;
         try {

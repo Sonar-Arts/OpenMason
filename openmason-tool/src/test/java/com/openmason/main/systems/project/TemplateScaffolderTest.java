@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.openmason.engine.format.omo.OMOReader;
-import com.openmason.engine.format.sbo.SBOFormat;
 
 
 import java.io.InputStream;
@@ -48,6 +47,35 @@ class TemplateScaffolderTest {
     private static final GameTarget STONEBREAK = TestGameTargets.stonebreak();
 
     /**
+     * The game's object container as its plugin registers it (#88): the scaffolder only reaches a
+     * target model through an entity model importer, never by format name.
+     */
+    static final class GameObjectImporter implements com.openmason.engine.format.spi.FormatCodec<byte[]>,
+            com.openmason.engine.entity.model.EntityModelImporter {
+        @Override public String id() { return "test.game-object"; }
+        @Override public String displayName() { return "Game Object"; }
+        @Override public List<String> extensions() { return List.of(".sbo"); }
+        @Override public Class<byte[]> modelType() { return byte[].class; }
+        @Override public byte[] read(Path file) throws java.io.IOException { return Files.readAllBytes(file); }
+
+        @Override
+        public com.openmason.engine.entity.model.EntityModelSource importEntity(String sourceId, InputStream in)
+                throws java.io.IOException {
+            ZipInputStream zip = new ZipInputStream(in);
+            for (java.util.zip.ZipEntry e; (e = zip.getNextEntry()) != null; ) {
+                if (e.getName().equals("model.omo")) {
+                    return com.openmason.engine.entity.model.EntityModelSource.modelOnly(sourceId, zip.readAllBytes());
+                }
+            }
+            throw new java.io.IOException("no model in " + sourceId);
+        }
+    }
+
+    static {
+        com.openmason.engine.format.spi.Formats.register(new GameObjectImporter());
+    }
+
+    /**
      * The shape of the Stonebreak plugin's New Biome template (#382: the template itself lives in
      * {@code openmason-plugin-stonebreak}): cubes, a cross and one model copied from the target.
      */
@@ -60,7 +88,7 @@ class TemplateScaffolderTest {
                 .target(STONEBREAK.id())
                 .model("Log", PartShapeFactory.Shape.CUBE)
                 .model("Planks", PartShapeFactory.Shape.CUBE)
-                .modelFromTargetSbo("Stairs", "sbo/blocks/SB_Oak_Stairs.sbo")
+                .modelFromTargetAsset("Stairs", "sbo/blocks/SB_Oak_Stairs.sbo")
                 .model("Leaves", PartShapeFactory.Shape.CUBE)
                 .model("Sapling", PartShapeFactory.Shape.CROSS)
                 .model("Grass", PartShapeFactory.Shape.CUBE)
@@ -98,7 +126,7 @@ class TemplateScaffolderTest {
         OMOReader.ReadResult game;
         try (InputStream sbo = STONEBREAK.resources().open("sbo/blocks/SB_Oak_Stairs.sbo")) {
             ZipInputStream zip = new ZipInputStream(sbo);
-            while (!SBOFormat.EMBEDDED_OMO_FILENAME.equals(zip.getNextEntry().getName())) {
+            while (!"model.omo".equals(zip.getNextEntry().getName())) {
                 // skip to the embedded model
             }
             game = new OMOReader().read(zip);

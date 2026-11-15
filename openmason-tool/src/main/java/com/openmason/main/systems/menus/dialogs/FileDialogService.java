@@ -624,34 +624,18 @@ public class FileDialogService {
     }
 
     /**
-     * Show save SBO (Stonebreak Object) dialog using native file dialog.
-     * @param callback callback to receive selected file path
+     * Open dialog for a game asset kind that lives in the active game target's tree (#88: the kind
+     * is a plugin's): starts in the last folder used for the type while it lies inside the target's
+     * resources, otherwise in the target's folder for {@code subtype}.
+     *
+     * @param subtype the target's per-manifest-type folder ({@code "block"}), or null for the type's base folder
      */
-    public void showSaveSBODialog(SaveSBOCallback callback) {
-        showSaveSBODialog("object.sbo", targetFolder(BuiltinFileTypes.SBO, "block"), callback);
-    }
-
-    /**
-     * Save-SBO dialog that opens directly in the folder the object belongs in
-     * (e.g. {@code sbo/blocks} or {@code sbo/items}) with a suggested file
-     * name, so an export needs no navigation. A null {@code preferredDirectory}
-     * falls back to the last directory used for {@code .sbo} files.
-     */
-    public void showSaveSBODialog(String defaultFileName, String preferredDirectory, SaveSBOCallback callback) {
-        showSaveDialog(com.openmason.main.systems.io.BuiltinFileTypes.SBO, defaultFileName, preferredDirectory, callback::onSave);
-    }
-
-    /**
-     * Show open SBO (Stonebreak Object) dialog using native file dialog.
-     * Starts in the last {@code .sbo} folder the user visited as long as it
-     * lies inside the game target's resources, otherwise in the target's block folder.
-     */
-    public void showOpenSBODialog(OpenCallback callback) {
-        showOpenDialog(repoDirectoryFor("sbo", targetFolder(BuiltinFileTypes.SBO, "block")), callback, BuiltinFileTypes.SBO);
+    public void showOpenTargetAssetDialog(com.openmason.api.files.FileType type, String subtype, OpenCallback callback) {
+        showOpenDialog(repoDirectoryFor(type.filterSpec(), targetFolder(type, subtype)), callback, type);
     }
 
     /** The active game target's folder for {@code type} assets of manifest type {@code subtype}, or null. */
-    private static String targetFolder(com.openmason.api.files.FileType type, String subtype) {
+    public static String targetFolder(com.openmason.api.files.FileType type, String subtype) {
         return GameTargets.shared().folderPathFor(type.id(), subtype);
     }
 
@@ -669,69 +653,23 @@ public class FileDialogService {
     }
 
     /**
-     * Callback interface for SBO save operations.
-     */
-    public interface SaveSBOCallback {
-        void onSave(String filePath);
-    }
-
-    /**
-     * Show save SBE (Stonebreak Entity) dialog using native file dialog.
-     * @param callback callback to receive selected file path
-     */
-    public void showSaveSBEDialog(SaveSBECallback callback) {
-        showSaveSBEDialog("entity.sbe", targetFolder(BuiltinFileTypes.SBE, null), callback);
-    }
-
-    /**
-     * Save-SBE dialog that opens directly in the folder the entity belongs in
-     * (e.g. {@code sbe/Mobs}) with a suggested file name. A null
-     * {@code preferredDirectory} falls back to the last {@code .sbe} folder.
-     */
-    public void showSaveSBEDialog(String defaultFileName, String preferredDirectory, SaveSBECallback callback) {
-        showSaveDialog(com.openmason.main.systems.io.BuiltinFileTypes.SBE, defaultFileName, preferredDirectory, callback::onSave);
-    }
-
-    /**
-     * Show open SBE (Stonebreak Entity) dialog using native file dialog.
-     * Starts in the last {@code .sbe} folder the user visited as long as it
-     * lies inside the game target's resources, otherwise in the target's entity root.
-     */
-    public void showOpenSBEDialog(OpenCallback callback) {
-        showOpenDialog(repoDirectoryFor("sbe", targetFolder(BuiltinFileTypes.SBE, null)), callback, BuiltinFileTypes.SBE);
-    }
-
-    /**
-     * Show an open dialog for any attachable model asset — the formats the
-     * game's socket system can mount ({@code .sbe}, {@code .sbo}, {@code .omo}).
-     * Used by the rigging pane's "Test Model..." socket action.
+     * Show an open dialog for any attachable model asset — a bare {@code .omo} or any container a
+     * registered entity model importer reads (#88). Used by the rigging pane's "Test Model..." socket
+     * action.
      */
     public void showOpenAttachableModelDialog(OpenCallback callback) {
-        showNFDOpenDialogMultiFilter("Opening model file...",
-                new String[]{"Attachable Model", "Stonebreak Entity", "Stonebreak Object", "Open Mason Object"},
-                new String[]{"sbe,sbo,omo", "sbe", "sbo", "omo"},
-                "Selected attachable model", callback);
-    }
-
-    /**
-     * Callback interface for SBE save operations.
-     */
-    public interface SaveSBECallback {
-        void onSave(String filePath);
-    }
-
-    /**
-     * Show save SBT (Stonebreak Texture) dialog using native file dialog.
-     * @param callback callback to receive selected file path
-     */
-    public void showSaveSBTDialog(SaveSBTCallback callback) {
-        showSaveDialog(com.openmason.main.systems.io.BuiltinFileTypes.SBT, "texture.sbt", null, callback::onSave);
-    }
-
-    /**
-     * Callback interface for SBT save operations.
-     */
-    public interface SaveSBTCallback {
-        void onSave(String filePath);
+        java.util.List<String> exts = com.openmason.engine.entity.model.EntityModelLoader.loadableExtensions();
+        String[] names = new String[exts.size() + 1];
+        String[] specs = new String[exts.size() + 1];
+        names[0] = "Attachable Model";
+        specs[0] = String.join(",", exts.stream().map(e -> e.substring(1)).toList());
+        for (int i = 0; i < exts.size(); i++) {
+            String spec = exts.get(i).substring(1);
+            com.openmason.engine.format.spi.FormatCodec<?> codec =
+                    com.openmason.engine.format.spi.Formats.forFileName("x" + exts.get(i)).orElse(null);
+            names[i + 1] = codec != null ? codec.displayName() : "Open Mason Object";
+            specs[i + 1] = spec;
+        }
+        showNFDOpenDialogMultiFilter("Opening model file...", names, specs, "Selected attachable model", callback);
     }
 }

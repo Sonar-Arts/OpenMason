@@ -409,24 +409,11 @@ public class mainOpenMason {
             safeRender(() -> mainInterface.getUnifiedPreferencesWindow().render(), "Preferences Window");
         }
 
-        if (mainInterface != null && mainInterface.getSBOExportWindow() != null) {
-            safeRender(() -> mainInterface.getSBOExportWindow().render(), "SBO Export Window");
-        }
-
-        if (mainInterface != null && mainInterface.getSBEExportWindow() != null) {
-            safeRender(() -> mainInterface.getSBEExportWindow().render(), "SBE Export Window");
-        }
-
-        if (mainInterface != null && mainInterface.getSBTExportWindow() != null) {
-            safeRender(() -> mainInterface.getSBTExportWindow().render(), "SBT Export Window");
-        }
-
-        if (mainInterface != null && mainInterface.getSBOEditorWindow() != null) {
-            safeRender(() -> mainInterface.getSBOEditorWindow().render(), "SBO Editor Window");
-        }
-
-        if (mainInterface != null && mainInterface.getSBEEditorWindow() != null) {
-            safeRender(() -> mainInterface.getSBEEditorWindow().render(), "SBE Editor Window");
+        // Every asset kind's editor/export windows (#88: contributed with the kind, core or plugin).
+        if (mainInterface != null && registries != null) {
+            for (com.openmason.api.asset.AssetWindow window : registries.assetWindows()) {
+                safeRender(window.render(), window.title());
+            }
         }
 
         // Render unsaved changes dialog (must be rendered outside other windows for modal to work)

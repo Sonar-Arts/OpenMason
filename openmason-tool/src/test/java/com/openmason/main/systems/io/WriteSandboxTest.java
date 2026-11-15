@@ -19,6 +19,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Tag("regression")
 class WriteSandboxTest {
 
+    /** A game target's container kinds (the Stonebreak layout the fixtures use), as a game plugin registers them (#88). */
+    static final WriteKind GAME_OBJECT = WriteKind.of(com.openmason.api.files.FileType.of("sbo", "Game Object", ".sbo")
+            .withSave("target", "sbo.block", "object"));
+    static final WriteKind GAME_ENTITY = WriteKind.of(com.openmason.api.files.FileType.of("sbe", "Game Entity", ".sbe")
+            .withSave("target", "sbe.mob", "entity"));
+
+
     @TempDir
     Path tmp;
 
@@ -44,7 +51,7 @@ class WriteSandboxTest {
         assertEquals(WriteRoot.PROJECT, omo.root());
         assertFalse(omo.exists());
 
-        WriteTarget sbo = sandbox.resolve(WriteKind.SBO, "SB_Cow");
+        WriteTarget sbo = sandbox.resolve(GAME_OBJECT, "SB_Cow");
         assertEquals(real(game).resolve("sbo/blocks"), sbo.path().getParent());
         assertTrue(sbo.insideTarget());
         assertTrue(sbo.asksFirst(), "shipped assets ask under the default policy");
@@ -52,7 +59,7 @@ class WriteSandboxTest {
 
     @Test
     void bareRelativeWithFolderSkipsDefaultSubdir() {
-        WriteTarget sbo = sandbox.resolve(WriteKind.SBO, "sbo/items/SB_Stick.sbo");
+        WriteTarget sbo = sandbox.resolve(GAME_OBJECT, "sbo/items/SB_Stick.sbo");
         assertEquals(real(game).resolve("sbo/items/SB_Stick.sbo"), sbo.path());
     }
 
@@ -63,7 +70,7 @@ class WriteSandboxTest {
         assertEquals(real(exports).resolve("shot.png"),
                 sandbox.resolve(WriteKind.PNG, "exports:/shot").path());
         assertEquals(real(game).resolve("sbe/Mobs/SB_Goose.sbe"),
-                sandbox.resolve(WriteKind.SBE, "GAME:sbe/Mobs/SB_Goose").path());
+                sandbox.resolve(GAME_ENTITY, "GAME:sbe/Mobs/SB_Goose").path());
     }
 
     @Test
@@ -115,7 +122,7 @@ class WriteSandboxTest {
     void absentRootIsReportedNotGuessed() {
         WriteSandbox noGame = new WriteSandbox(WriteRoots.of(project, null, exports));
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> noGame.resolve(WriteKind.SBO, "target:sbo/blocks/SB_Cow"));
+                () -> noGame.resolve(GAME_OBJECT, "target:sbo/blocks/SB_Cow"));
         assertTrue(e.getMessage().startsWith("root_unavailable"), e.getMessage());
         assertTrue(noGame.describeRoots().contains("project:"));
         assertFalse(noGame.describeRoots().contains("target:"));
@@ -125,7 +132,7 @@ class WriteSandboxTest {
     void withoutATargetTargetKindsLandInTheProject() {
         // A project-only project (#380): no target tree, so a bare .sbo name goes to the project root.
         WriteSandbox projectOnly = new WriteSandbox(WriteRoots.forTarget(project, null, exports));
-        WriteTarget sbo = projectOnly.resolve(WriteKind.SBO, "Cow");
+        WriteTarget sbo = projectOnly.resolve(GAME_OBJECT, "Cow");
         assertEquals(real(project).resolve("Cow.sbo"), sbo.path());
         assertEquals(WriteRoot.PROJECT, sbo.root());
         assertFalse(sbo.asksFirst());
@@ -141,9 +148,9 @@ class WriteSandboxTest {
                 .writes(new com.openmason.api.target.WriteRules(true, false))
                 .build();
         WriteSandbox otherSandbox = new WriteSandbox(WriteRoots.forTarget(project, other, exports));
-        assertEquals(real(game).resolve("assets/blocks/Cow.sbo"), otherSandbox.resolve(WriteKind.SBO, "Cow").path());
-        assertEquals(real(game).resolve("assets/creatures/Cow.sbe"), otherSandbox.resolve(WriteKind.SBE, "Cow").path());
-        assertFalse(otherSandbox.resolve(WriteKind.SBO, "Cow").asksFirst(), "this target's writes do not confirm");
+        assertEquals(real(game).resolve("assets/blocks/Cow.sbo"), otherSandbox.resolve(GAME_OBJECT, "Cow").path());
+        assertEquals(real(game).resolve("assets/creatures/Cow.sbe"), otherSandbox.resolve(GAME_ENTITY, "Cow").path());
+        assertFalse(otherSandbox.resolve(GAME_OBJECT, "Cow").asksFirst(), "this target's writes do not confirm");
     }
 
     @Test
@@ -152,7 +159,7 @@ class WriteSandboxTest {
         readOnly = readOnly.withWrites(com.openmason.api.target.WriteRules.READ_ONLY);
         WriteRoots roots = WriteRoots.forTarget(project, readOnly, exports);
         assertNull(roots.path(WriteRoot.TARGET));
-        assertEquals(WriteRoot.PROJECT, roots.defaultRoot(WriteKind.SBO));
+        assertEquals(WriteRoot.PROJECT, roots.defaultRoot(GAME_OBJECT));
     }
 
     @Test

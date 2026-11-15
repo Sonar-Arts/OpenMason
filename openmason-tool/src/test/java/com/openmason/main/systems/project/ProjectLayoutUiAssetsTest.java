@@ -22,14 +22,14 @@ class ProjectLayoutUiAssetsTest {
     void resolvesHintsAndConventionUnderTheUiFolder() throws Exception {
         ProjectAssetSource source = ProjectLayout.uiAssetSource(root);
         Files.createDirectories(root.resolve("UI/stonebreak/ui/textures"));
-        Files.writeString(root.resolve("UI/stonebreak/ui/textures/panel.sbt"), "by convention");
+        Files.writeString(root.resolve("UI/stonebreak/ui/textures/panel.omt"), "by convention");
         Files.createDirectories(root.resolve("art"));
-        Files.writeString(root.resolve("art/button.sbt"), "by hint");
+        Files.writeString(root.resolve("art/button.omt"), "by hint");
 
-        ResolvedAsset panel = source.find("stonebreak:ui/textures/panel", UiDependency.Kind.TEXTURE, "missing.sbt");
-        ResolvedAsset button = source.find("stonebreak:ui/textures/button", UiDependency.Kind.TEXTURE, "art/button.sbt");
+        ResolvedAsset panel = source.find("stonebreak:ui/textures/panel", UiDependency.Kind.TEXTURE, "missing.omt");
+        ResolvedAsset button = source.find("stonebreak:ui/textures/button", UiDependency.Kind.TEXTURE, "art/button.omt");
 
-        assertEquals("UI/stonebreak/ui/textures/panel.sbt", panel.location());
+        assertEquals("UI/stonebreak/ui/textures/panel.omt", panel.location());
         assertEquals(UiBytes.utf8("by hint"), button.bytes());
         assertEquals("UI/stonebreak/ui/scripts/menu.lua",
                 source.placementFor("stonebreak:ui/scripts/menu", UiDependency.Kind.SCRIPT, null));

@@ -20,11 +20,6 @@ import com.openmason.main.systems.menus.textureCreator.TextureCreatorImGui;
 import com.openmason.main.systems.menus.dialogs.AboutDialog;
 import com.openmason.main.systems.menus.dialogs.DeleteAssetDialog;
 import com.openmason.main.systems.menus.dialogs.FileDialogService;
-import com.openmason.main.systems.menus.dialogs.SBEExportWindow;
-import com.openmason.main.systems.menus.dialogs.SBEEditorWindow;
-import com.openmason.main.systems.menus.dialogs.SBOEditorWindow;
-import com.openmason.main.systems.menus.dialogs.SBOExportWindow;
-import com.openmason.main.systems.menus.dialogs.SBTExportWindow;
 import com.openmason.main.systems.menus.preferences.PreferencesWindow;
 import com.openmason.main.systems.menus.preferences.PreferencesManager;
 import com.openmason.main.systems.menus.panes.propertyPane.PropertyPanelImGui;
@@ -75,11 +70,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
     private com.openmason.main.systems.uiEditor.view.UiEditorWorkspace uiEditor;
 
     private PreferencesWindow preferencesWindow; // Initialized after components
-    private SBOExportWindow sboExportWindow; // Initialized after components
-    private SBEExportWindow sbeExportWindow; // Initialized after components
-    private SBTExportWindow sbtExportWindow; // Initialized after components
-    private SBOEditorWindow sboEditorWindow; // Initialized after components
-    private SBEEditorWindow sbeEditorWindow; // Initialized after components
     private final AboutDialog aboutDialog;
 
     // Menu System
@@ -87,7 +77,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
     private final FileMenuHandler fileMenuHandler;
     private final EditMenuHandler editMenuHandler;
     private final ViewMenuHandler viewMenuHandler;
-    private final AssetExportMenuActions assetExportActions;
 
     // Toolbar
     private final ModelEditorToolbarRenderer toolbarRenderer;
@@ -196,7 +185,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
                 viewportOperations, layoutService);
         this.editMenuHandler = editMenu;
         this.viewMenuHandler = viewMenu;
-        this.assetExportActions = new AssetExportMenuActions();
 
         // The menus themselves are contributions (core plugin: File/Edit/View/About; each
         // editor's plugin: its Tools entries).
@@ -253,7 +241,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
         services.put(FileMenuHandler.class, fileMenuHandler);
         services.put(EditMenuHandler.class, editMenuHandler);
         services.put(ViewMenuHandler.class, viewMenuHandler);
-        services.put(AssetExportMenuActions.class, assetExportActions);
         services.put(com.openmason.main.systems.layout.SceneWorkspaceDock.class, sceneWorkspaceDock);
         services.put(com.openmason.main.systems.keybinds.KeybindRegistry.class,
                 com.openmason.main.systems.keybinds.KeybindRegistry.getInstance());
@@ -261,11 +248,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
         services.put(PropertyPanelImGui.class, propertyPanelImGui);
         services.put(RiggingPaneImGui.class, riggingPaneImGui);
         services.put(PreferencesWindow.class, preferencesWindow);
-        services.put(SBOExportWindow.class, sboExportWindow);
-        services.put(SBEExportWindow.class, sbeExportWindow);
-        services.put(SBTExportWindow.class, sbtExportWindow);
-        services.put(SBOEditorWindow.class, sboEditorWindow);
-        services.put(SBEEditorWindow.class, sbeEditorWindow);
         services.put(MainImGuiInterface.class, this);
     }
 
@@ -312,64 +294,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
             );
             logger.debug("Unified preferences window initialized (TextureCreatorImGui will be set later)");
 
-            // Initialize SBO export window
-            this.sboExportWindow = new SBOExportWindow(
-                    uiVisibilityState.getShowSBOExportWindow(),
-                    themeManager,
-                    modelState,
-                    statusService,
-                    fileDialogService
-            );
-            assetExportActions.setSBOExportWindow(sboExportWindow);
-
-            // Initialize SBE export window
-            this.sbeExportWindow = new SBEExportWindow(
-                    uiVisibilityState.getShowSBEExportWindow(),
-                    themeManager,
-                    modelState,
-                    statusService,
-                    fileDialogService
-            );
-            assetExportActions.setSBEExportWindow(sbeExportWindow);
-
-            // Initialize SBT export window — OMT path supplier is wired later
-            // when the TextureCreatorImGui becomes available.
-            this.sbtExportWindow = new SBTExportWindow(
-                    uiVisibilityState.getShowSBTExportWindow(),
-                    themeManager,
-                    statusService,
-                    fileDialogService
-            );
-
-            // SBO editor — for opening and editing existing .sbo files
-            this.sboEditorWindow = new SBOEditorWindow(fileDialogService, statusService);
-            assetExportActions.setSBOEditorWindow(sboEditorWindow);
-            sboEditorWindow.setProjectDirectorySupplier(getProjectDirectorySupplier());
-            sboEditorWindow.setOpenModelHandler((omoBytes, name) -> {
-                if (modelOperations != null) {
-                    modelOperations.openExtractedAssetModel(omoBytes, name, name);
-                }
-            });
-
-            // SBE editor — for opening and editing existing .sbe files
-            this.sbeEditorWindow = new SBEEditorWindow(fileDialogService, statusService);
-            assetExportActions.setSBEEditorWindow(sbeEditorWindow);
-            sbeEditorWindow.setProjectDirectorySupplier(getProjectDirectorySupplier());
-            sbeEditorWindow.setOpenModelHandler((omoBytes, name) -> {
-                if (modelOperations != null) {
-                    modelOperations.openExtractedAssetModel(omoBytes, name, name);
-                }
-            });
-
-            // Export windows act as "start screens": a successful export opens
-            // the new file straight in the matching editor.
-            sboExportWindow.setOnExported(sboEditorWindow::openFile);
-            sbeExportWindow.setOnExported(sbeEditorWindow::openFile);
-
-            assetExportActions.setModelState(modelState);
-            assetExportActions.setStatusService(statusService);
-            assetExportActions.setModelOperations(modelOperations);
-            logger.debug("SBO, SBE, SBT export windows and SBO/SBE editors initialized");
         } catch (Exception e) {
             logger.error("Failed to initialize components", e);
         }
@@ -796,41 +720,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
     }
 
     /**
-     * Gets the SBO export window for external rendering.
-     */
-    public SBOExportWindow getSBOExportWindow() {
-        return sboExportWindow;
-    }
-
-    /**
-     * Gets the SBE export window for external rendering.
-     */
-    public SBEExportWindow getSBEExportWindow() {
-        return sbeExportWindow;
-    }
-
-    /**
-     * Gets the SBO editor window for external rendering.
-     */
-    public SBOEditorWindow getSBOEditorWindow() {
-        return sboEditorWindow;
-    }
-
-    /**
-     * Gets the SBE editor window for external rendering.
-     */
-    public SBEEditorWindow getSBEEditorWindow() {
-        return sbeEditorWindow;
-    }
-
-    /**
-     * Gets the SBT export window for external rendering.
-     */
-    public SBTExportWindow getSBTExportWindow() {
-        return sbtExportWindow;
-    }
-
-    /**
      * Get the texture creator interface, or null if not yet wired.
      */
     public TextureCreatorImGui getTextureCreator() {
@@ -897,9 +786,9 @@ public class MainImGuiInterface implements ProjectBrowserListener {
             logger.warn("Cannot set TextureCreatorImGui - unified preferences window not initialized");
         }
 
-        // Wire the SBT/SBO export OMT-path source — only project (.OMT) files are
-        // valid sources, never arbitrary PNG-backed sessions.
-        java.util.function.Supplier<String> omtPathSupplier = () -> {
+        // The saved .OMT the Texture Editor holds (only project files, never PNG-backed sessions):
+        // what asset kinds' texture exports read (#88), and the gate of their Tools-menu entries.
+        com.openmason.api.asset.TextureSource textureSource = () -> {
             if (textureCreatorImGui == null) return null;
             var state = textureCreatorImGui.getState();
             if (state == null || !state.isProjectFile() || !state.hasFilePath()) {
@@ -907,21 +796,9 @@ public class MainImGuiInterface implements ProjectBrowserListener {
             }
             return state.getCurrentFilePath();
         };
-        if (sbtExportWindow != null) {
-            sbtExportWindow.setOMTPathSupplier(omtPathSupplier);
-        }
-        if (sboExportWindow != null) {
-            sboExportWindow.setOMTPathSupplier(omtPathSupplier);
-        }
-        if (textureCreatorImGui != null && sbtExportWindow != null) {
-            textureCreatorImGui.setSBTExportTrigger(sbtExportWindow::show, omtPathSupplier);
-        }
-        if (textureCreatorImGui != null && sboExportWindow != null) {
-            // Same export UI as the model viewer, in item/texture context.
-            textureCreatorImGui.setSBOExportTrigger(sboExportWindow::showForTexture);
-        }
-        if (textureCreatorImGui != null && sboEditorWindow != null) {
-            textureCreatorImGui.setSBOEditorTrigger(sboEditorWindow::openWithDialog);
+        services.put(com.openmason.api.asset.TextureSource.class, textureSource);
+        if (textureCreatorImGui != null) {
+            textureCreatorImGui.setTextureActions(registries::textureActions, textureSource::currentOmtPath);
         }
     }
 
@@ -1059,20 +936,13 @@ public class MainImGuiInterface implements ProjectBrowserListener {
         if (propertyPanelImGui != null) {
             propertyPanelImGui.dispose();
         }
-        if (sboEditorWindow != null) {
-            sboEditorWindow.close();
-        }
-        if (sbeEditorWindow != null) {
-            sbeEditorWindow.close();
-        }
-        if (sboExportWindow != null) {
-            sboExportWindow.close();
-        }
-        if (sbeExportWindow != null) {
-            sbeExportWindow.close();
-        }
-        if (sbtExportWindow != null) {
-            sbtExportWindow.close();
+        // Every asset kind's windows (#88), core or plugin, closed once through their contribution.
+        for (com.openmason.api.asset.AssetWindow window : registries.assetWindows()) {
+            try {
+                window.close().run();
+            } catch (RuntimeException e) {
+                logger.warn("Closing {} failed", window.title(), e);
+            }
         }
         if (preferencesWindow != null) {
             preferencesWindow.close();

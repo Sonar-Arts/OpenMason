@@ -1,5 +1,6 @@
 package com.openmason.api;
 
+import com.openmason.api.asset.AssetFormatContribution;
 import com.openmason.api.asset.AssetSectionContribution;
 import com.openmason.api.files.FileOpener;
 import com.openmason.api.files.FileType;
@@ -62,6 +63,13 @@ public interface PluginContext {
 
     /** Preferences window pages. */
     Registrar<PreferencePage> preferencePages();
+
+    /**
+     * Whole asset kinds (#88): file type + opener, engine codec, section surfaces, editor/export
+     * windows, menu entries, viewport content and templates in one contribution. Each part is also
+     * registered with its own registrar (and listed there), owned by the same plugin.
+     */
+    Registrar<AssetFormatContribution> assetFormats();
 
     /** Game-data sections of the SBO/SBE editor and export windows (#431). */
     Registrar<AssetSectionContribution<?>> assetSections();

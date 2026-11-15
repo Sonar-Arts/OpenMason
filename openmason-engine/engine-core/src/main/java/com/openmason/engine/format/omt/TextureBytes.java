@@ -1,11 +1,12 @@
 package com.openmason.engine.format.omt;
 
-import com.openmason.engine.format.sbt.SBTParser;
+import com.openmason.engine.format.spi.Formats;
 
 /**
- * The one format probe for texture bytes a UI dependency may hold (#294): PNG, SBT (an OMT
- * wrapped with a manifest) or a bare OMT. Decoders ({@code MTexture.decode}) and headless size
- * checks ({@code TextureSizes}) both go through it, so they always agree on what a file is.
+ * The one format probe for texture bytes a UI dependency may hold (#294): PNG, a registered texture
+ * container wrapping an OMT ({@link com.openmason.engine.format.spi.TextureDecoder}, #88) or a bare
+ * OMT. Decoders ({@code MTexture.decode}) and headless size checks ({@code TextureSizes}) both go
+ * through it, so they always agree on what a file is.
  */
 public final class TextureBytes {
 
@@ -28,19 +29,26 @@ public final class TextureBytes {
         return w > 0 && h > 0 ? new int[]{w, h} : null;
     }
 
-    /** The layer archive of SBT or OMT bytes (SBT tried first), or null for anything else (PNG included). */
+    /**
+     * The layer archive of container or OMT bytes (registered containers tried first), or null for
+     * anything else (PNG included).
+     */
     public static OMTArchive archive(byte[] b) {
         if (b == null || b.length == 0 || isPng(b)) {
             return null;
         }
-        try {
-            return new OMTReader().read(new SBTParser().read(b).omtBytes());
-        } catch (Exception notSbt) {
+        byte[] wrapped = Formats.unwrapTexture(b);
+        if (wrapped != null) {
             try {
-                return new OMTReader().read(b);
-            } catch (Exception notOmt) {
+                return new OMTReader().read(wrapped);
+            } catch (Exception badEmbeddedOmt) {
                 return null;
             }
+        }
+        try {
+            return new OMTReader().read(b);
+        } catch (Exception notOmt) {
+            return null;
         }
     }
 

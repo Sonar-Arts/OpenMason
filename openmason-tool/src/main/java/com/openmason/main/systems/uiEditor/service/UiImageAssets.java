@@ -8,9 +8,8 @@ import com.openmason.engine.format.omui.UiDiagnostics;
 import com.openmason.engine.format.omui.UiSpriteRef;
 import com.openmason.engine.format.omui.UiSpriteSheet;
 import com.openmason.engine.format.omui.io.SpriteSheetCodec;
-import com.openmason.engine.format.sbt.SBTFormat;
-import com.openmason.engine.format.sbt.SBTParser;
-import com.openmason.engine.format.sbt.SBTSerializer;
+import com.openmason.engine.format.spi.Formats;
+import com.openmason.engine.format.spi.TextureDecoder;
 import com.openmason.engine.ui.assets.AssetKinds;
 import com.openmason.engine.ui.assets.AssetOrigin;
 import com.openmason.engine.ui.assets.AssetResolver;
@@ -41,7 +40,7 @@ import java.util.stream.Stream;
  * sprite sheets to add, which project file "Edit texture" opens, and the sprite-sheet commands.
  * Headless (no ImGui, no GL), so every rule here is unit-tested.
  *
- * <p>Pixels are never duplicated: textures stay the Texture Editor's OMT/SBT files, shared by
+ * <p>Pixels are never duplicated: textures stay the Texture Editor's OMT files (or game containers around them), shared by
  * every document that lists them; sheets only hold region metadata.
  */
 public final class UiImageAssets {
@@ -109,7 +108,7 @@ public final class UiImageAssets {
     public record ProjectImage(Path path, String relative, UiDependency.Kind kind, String id) {
     }
 
-    /** Every {@code .omt}, {@code .sbt}, {@code .png} and {@code .sprites.json} in the project, by path. */
+    /** Every {@code .omt}, texture container, {@code .png} and {@code .sprites.json} in the project, by path. */
     public static List<ProjectImage> projectImages(UiProjectContext project) {
         Path root = project.root();
         if (root == null) {
@@ -150,7 +149,7 @@ public final class UiImageAssets {
         if (n.endsWith(".sprites.json")) {
             return UiDependency.Kind.SPRITES;
         }
-        if (n.endsWith(".omt") || n.endsWith(".sbt")) {
+        if (n.endsWith(".omt") || Formats.textureDecoderFor(n).isPresent()) {
             return UiDependency.Kind.TEXTURE;
         }
         return n.endsWith(".png") ? UiDependency.Kind.IMAGE : null;
@@ -328,9 +327,10 @@ public final class UiImageAssets {
      *
      * @param textureId the texture row (for a sprite, the sheet's bound texture)
      * @param file      the project file to edit, null when there is none (see {@code problem})
-     * @param sbt       the file is an SBT: the Texture Editor edits its OMT source, then re-wraps it
+     * @param container the file is a game texture container wrapping an OMT (a registered
+     *                  {@link TextureDecoder}, #88): the Texture Editor edits its OMT source, then re-wraps it
      */
-    public record EditableTexture(String textureId, Path file, boolean sbt, String problem) {
+    public record EditableTexture(String textureId, Path file, boolean container, String problem) {
         public boolean ok() {
             return file != null;
         }
@@ -374,65 +374,80 @@ public final class UiImageAssets {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
         if (name.endsWith(".png")) {
             return new EditableTexture(texId, null, false, "'" + texId + "' is a flat PNG; the Texture Editor"
-                    + " edits OMT/SBT textures (import the PNG into one to keep layers)");
+                    + " edits OMT textures (import the PNG into one to keep layers)");
         }
-        return new EditableTexture(texId, file, name.endsWith(".sbt"), null);
+        return new EditableTexture(texId, file, Formats.textureDecoderFor(name).isPresent(), null);
     }
 
     /**
-     * The layered source of an SBT: {@code <name>.omt} beside it. Written from the SBT's
-     * embedded OMT when absent, so the Texture Editor keeps the SBT's layers. An existing sibling
-     * is the author's source and is kept, unless the SBT changed after it (a pull, a re-export)
+     * The layered source of a texture container: {@code <name>.omt} beside it. Written from the
+     * container's embedded OMT when absent, so the Texture Editor keeps its layers. An existing sibling
+     * is the author's source and is kept, unless the container changed after it (a pull, a re-export)
      * and the two disagree: opening the stale layers would let the next save overwrite the newer
-     * SBT, so the sibling is refreshed from the SBT and the old one kept as {@code <name>.omt.stale}.
+     * container, so the sibling is refreshed from it and the old one kept as {@code <name>.omt.stale}.
      */
-    public static Path omtSourceFor(Path sbt) throws IOException {
-        Path omt = omtSiblingOf(sbt);
-        byte[] embedded = new SBTParser().read(sbt).omtBytes();
+    public static Path omtSourceFor(Path container) throws IOException {
+        Path omt = omtSiblingOf(container);
+        byte[] embedded = decoderOf(container).unwrapOmt(Files.readAllBytes(container));
+        if (embedded == null) {
+            throw new IOException(container.getFileName() + " is not a readable texture container");
+        }
         if (!Files.isRegularFile(omt)) {
             com.openmason.engine.format.omui.io.AtomicFiles.write(omt, embedded);
             return omt;
         }
-        if (Files.getLastModifiedTime(sbt).compareTo(Files.getLastModifiedTime(omt)) > 0
+        if (Files.getLastModifiedTime(container).compareTo(Files.getLastModifiedTime(omt)) > 0
                 && !java.util.Arrays.equals(Files.readAllBytes(omt), embedded)) {
             Path stale = omt.resolveSibling(omt.getFileName() + ".stale");
             Files.copy(omt, stale, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             com.openmason.engine.format.omui.io.AtomicFiles.write(omt, embedded);
             org.slf4j.LoggerFactory.getLogger(UiImageAssets.class).warn(
                     "{} is newer than its layered source; refreshed {} (previous layers kept as {})",
-                    sbt.getFileName(), omt.getFileName(), stale.getFileName());
+                    container.getFileName(), omt.getFileName(), stale.getFileName());
         }
         return omt;
     }
 
-    /** {@code <name>.omt} beside {@code <name>.sbt}: by convention the SBT's layered source. */
-    public static Path omtSiblingOf(Path sbt) {
-        String name = sbt.getFileName().toString();
-        return sbt.resolveSibling(name.substring(0, name.length() - ".sbt".length()) + ".omt");
+    /** {@code <name>.omt} beside {@code <name><container ext>}: by convention the container's layered source. */
+    public static Path omtSiblingOf(Path container) {
+        String name = container.getFileName().toString();
+        String lower = name.toLowerCase(Locale.ROOT);
+        for (String ext : Formats.textureContainerExtensions()) {
+            if (lower.endsWith(ext)) {
+                return container.resolveSibling(name.substring(0, name.length() - ext.length()) + ".omt");
+            }
+        }
+        int dot = name.lastIndexOf('.');
+        return container.resolveSibling((dot > 0 ? name.substring(0, dot) : name) + ".omt");
     }
 
-    /** {@code <name>.sbt} beside {@code <name>.omt} when it exists, else null. */
-    public static Path sbtSiblingOf(Path omt) {
+    /** The texture container beside {@code <name>.omt} (any registered container extension), else null. */
+    public static Path containerSiblingOf(Path omt) {
         String name = omt.getFileName().toString();
         if (!name.toLowerCase(Locale.ROOT).endsWith(".omt")) {
             return null;
         }
-        Path sbt = omt.resolveSibling(name.substring(0, name.length() - ".omt".length()) + ".sbt");
-        return Files.isRegularFile(sbt) ? sbt : null;
+        String stem = name.substring(0, name.length() - ".omt".length());
+        for (String ext : Formats.textureContainerExtensions()) {
+            Path c = omt.resolveSibling(stem + ext);
+            if (Files.isRegularFile(c)) {
+                return c;
+            }
+        }
+        return null;
     }
 
-    /** Re-wraps {@code omt} into {@code sbt}, keeping the SBT's identity and metadata. */
-    public static void rewrapSbt(Path sbt, Path omt) throws IOException {
-        SBTFormat.Document m = new SBTParser().read(sbt).manifest();
-        SBTFormat.ExportParameters p = new SBTFormat.ExportParameters();
-        p.setTextureId(m.textureId());
-        p.setTextureName(m.textureName());
-        p.setTextureType(SBTFormat.TextureType.fromId(m.textureType()));
-        p.setTexturePack(m.texturePack());
-        p.setAuthor(m.author());
-        p.setDescription(m.description());
-        if (!new SBTSerializer().export(p, omt, sbt.toString())) {
-            throw new IOException("Could not re-export " + sbt.getFileName() + " from " + omt.getFileName());
+    /** Re-wraps {@code omt} into {@code container}, keeping the container's identity and metadata. */
+    public static void rewrapContainer(Path container, Path omt) throws IOException {
+        byte[] rewrapped = decoderOf(container).rewrap(Files.readAllBytes(container), Files.readAllBytes(omt));
+        if (rewrapped == null) {
+            throw new IOException("Could not re-export " + container.getFileName() + " from " + omt.getFileName());
         }
+        com.openmason.engine.format.omui.io.AtomicFiles.write(container, rewrapped);
+    }
+
+    private static TextureDecoder decoderOf(Path container) throws IOException {
+        return Formats.textureDecoderFor(container.getFileName().toString()).orElseThrow(() ->
+                new IOException("No texture container is registered for " + container.getFileName()));
     }
 }

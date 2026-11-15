@@ -33,7 +33,7 @@ public record ResolvedAsset(String id, Kind kind, UiBytes bytes, AssetOrigin ori
         return bytes.sha256();
     }
 
-    /** {@code project:textures/ui/panel.sbt}, for reports and logs. */
+    /** {@code project:textures/ui/panel.omt}, for reports and logs. */
     public String describe() {
         return source + ":" + location;
     }

@@ -43,8 +43,7 @@ public class ContentTypeManager {
     public enum ContentType {
         NONE,
         BLOCK_MODEL,
-        ITEM,
-        SBT_TEXTURE
+        ITEM
     }
 
     /**
@@ -137,24 +136,6 @@ public class ContentTypeManager {
      *
      * @param itemType The item type to display
      */
-    /**
-     * Switch to SBT texture mode, displaying a voxelized representation of
-     * the .sbt file at {@code sbtPath}. Mirrors {@link #switchToItem}.
-     */
-    public void switchToSBT(java.nio.file.Path sbtPath) {
-        if (sbtPath == null) {
-            logger.warn("Cannot switch to null SBT path");
-            return;
-        }
-        logger.info("Switching to SBT mode: {}", sbtPath);
-        if (currentType == ContentType.BLOCK_MODEL) {
-            modelContentLoader.unload();
-        }
-        renderingState.setSBTMode(sbtPath);
-        transformState.resetPosition();
-        currentType = ContentType.SBT_TEXTURE;
-    }
-
     public void switchToItem(String itemType) {
         if (itemType == null || itemType.isBlank()) {
             logger.warn("Cannot switch to null item type");

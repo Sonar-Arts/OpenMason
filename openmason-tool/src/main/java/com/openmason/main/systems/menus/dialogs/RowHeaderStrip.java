@@ -23,9 +23,9 @@ import java.util.List;
  * clicks (action ids, {@code "remove"}) and owns all state. Callers must keep
  * an ImGui fallback for when no Skija context exists.
  */
-final class RowHeaderStrip {
+public final class RowHeaderStrip {
 
-    static final float HEIGHT = 34f;
+    public static final float HEIGHT = 34f;
 
     private static final float PILL_H = 24f;
     private static final float REMOVE_W = 26f;
@@ -33,16 +33,16 @@ final class RowHeaderStrip {
     private static final float CHAR_W = 6.8f;
 
     /** One right-aligned secondary action pill. */
-    record Action(String id, String label, boolean enabled) {
+    public record Action(String id, String label, boolean enabled) {
     }
 
     /** Hit-test outcome; ids are action ids plus {@code "remove"}. */
-    record Result(String hovered, String clicked) {
-        boolean isClicked(String id) {
+    public record Result(String hovered, String clicked) {
+        public boolean isClicked(String id) {
             return id.equals(clicked);
         }
 
-        boolean removeClicked() {
+        public boolean removeClicked() {
             return isClicked("remove");
         }
     }
@@ -54,7 +54,7 @@ final class RowHeaderStrip {
      * Paint the strip at the current cursor into {@code region} and hit-test
      * it. Width tracks the available content region; height is {@link #HEIGHT}.
      */
-    static Result render(MortarRegion region, String badge, boolean badgeAccent,
+    public static Result render(MortarRegion region, String badge, boolean badgeAccent,
                          String title, boolean titleFaint, String detail,
                          List<Action> actions) {
         float availW = Math.max(1f, MortarRegion.availWidth());

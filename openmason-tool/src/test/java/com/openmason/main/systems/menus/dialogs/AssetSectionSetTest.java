@@ -4,7 +4,6 @@ import com.openmason.api.asset.AssetEditorSection;
 import com.openmason.api.asset.AssetSectionContribution;
 import com.openmason.api.asset.AssetSectionHost;
 import com.openmason.api.asset.AssetSurface;
-import com.openmason.engine.format.sbe.SBEFormat;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -22,8 +21,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Tag("regression")
 class AssetSectionSetTest {
 
+    /** A plugin kind's manifest model: an id and a type sections append to. */
+    record Doc(String objectId, String entityType) {
+        Doc withEntityType(String type) {
+            return new Doc(objectId, type);
+        }
+    }
+
+    static final AssetSurface<Doc> EDITOR = AssetSurface.of("test.editor", "Test Editor", Doc.class);
+    static final AssetSurface<Doc> OTHER = AssetSurface.of("other.editor", "Other Editor", Doc.class);
+
     private static final AssetSectionHost HOST = new AssetSectionHost() {
-        @Override public AssetSurface<?> surface() { return AssetSurface.SBE_EDITOR; }
+        @Override public AssetSurface<?> surface() { return EDITOR; }
         @Override public String objectId() { return "test:thing"; }
         @Override public String objectType() { return ""; }
         @Override public boolean texturePayload() { return false; }
@@ -41,7 +50,7 @@ class AssetSectionSetTest {
     }
 
     /** Appends its name to the entity type on write; reports what it was configured to. */
-    private static final class Probe implements AssetEditorSection<SBEFormat.Document> {
+    private static final class Probe implements AssetEditorSection<Doc> {
         final String name;
         Placement placement = Placement.TAB;
         String error;
@@ -57,7 +66,7 @@ class AssetSectionSetTest {
 
         @Override public String title() { return name; }
         @Override public Placement placement() { return placement; }
-        @Override public void load(SBEFormat.Document manifest) { loads++; }
+        @Override public void load(Doc manifest) { loads++; }
         @Override public void render() { }
         @Override public String validate() { return error; }
         @Override public String conflict() { return conflict; }
@@ -70,19 +79,18 @@ class AssetSectionSetTest {
         }
 
         @Override
-        public SBEFormat.Document write(SBEFormat.Document doc) {
+        public Doc write(Doc doc) {
             if (throwOnWrite) throw new IllegalStateException("boom");
             return doc.withEntityType(doc.entityType() + "+" + name);
         }
     }
 
-    private static AssetSectionContribution<SBEFormat.Document> contribution(String id, int order, Probe probe) {
-        return new AssetSectionContribution<>(id, AssetSurface.SBE_EDITOR, order, h -> probe);
+    private static AssetSectionContribution<Doc> contribution(String id, int order, Probe probe) {
+        return new AssetSectionContribution<>(id, EDITOR, order, h -> probe);
     }
 
-    private static SBEFormat.Document doc() {
-        return new SBEFormat.Document("1.4", "test:thing", "Thing", "mob", "default", "x", "me", null,
-                "now", "model.omo", List.of(), List.of(), null, null);
+    private static Doc doc() {
+        return new Doc("test:thing", "mob");
     }
 
     @Test
@@ -94,10 +102,10 @@ class AssetSectionSetTest {
         AssetSectionSet.setSource(() -> List.of(contribution("p.late", 400, late),
                 contribution("p.early", 150, early), contribution("p.inline", 50, inline),
                 // another surface's section is never created here
-                new AssetSectionContribution<>("p.other", AssetSurface.SBO_EDITOR, 10, h -> {
+                new AssetSectionContribution<>("p.other", OTHER, 10, h -> {
                     throw new AssertionError("created for the wrong surface");
                 })));
-        AssetSectionSet<SBEFormat.Document> set = new AssetSectionSet<>(AssetSurface.SBE_EDITOR, HOST);
+        AssetSectionSet<Doc> set = new AssetSectionSet<>(EDITOR, HOST);
         set.load(doc());
 
         List<String> labels = set.tabs(CORE).stream().map(AssetSectionSet.Tab::label).toList();
@@ -114,17 +122,17 @@ class AssetSectionSetTest {
         Probe b = new Probe("b");
         AssetSectionSet.setSource(() -> List.of(contribution("p.b", 300, b), contribution("p.broken", 200, broken),
                 contribution("p.a", 100, a)));
-        AssetSectionSet<SBEFormat.Document> set = new AssetSectionSet<>(AssetSurface.SBE_EDITOR, HOST);
+        AssetSectionSet<Doc> set = new AssetSectionSet<>(EDITOR, HOST);
         set.load(doc());
         assertEquals("mob+a+b", set.write(doc()).entityType());
     }
 
     @Test
     void noSectionsLeavesTheManifestUntouched() {
-        AssetSectionSet<SBEFormat.Document> set = new AssetSectionSet<>(AssetSurface.SBE_EDITOR, HOST);
+        AssetSectionSet<Doc> set = new AssetSectionSet<>(EDITOR, HOST);
         set.load(doc());
         assertTrue(set.isEmpty());
-        SBEFormat.Document d = doc();
+        Doc d = doc();
         assertSame(d, set.write(d));
         assertNull(set.firstError());
         assertEquals(CORE, set.tabs(CORE));
@@ -137,7 +145,7 @@ class AssetSectionSetTest {
         bad.error = "nope";
         bad.conflict = "taken";
         AssetSectionSet.setSource(() -> List.of(contribution("p.ok", 100, ok), contribution("p.bad", 200, bad)));
-        AssetSectionSet<SBEFormat.Document> set = new AssetSectionSet<>(AssetSurface.SBE_EDITOR, HOST);
+        AssetSectionSet<Doc> set = new AssetSectionSet<>(EDITOR, HOST);
         set.load(doc());
         assertEquals("nope", set.firstError().message());
         assertSame(bad, set.firstError().section());
@@ -153,7 +161,7 @@ class AssetSectionSetTest {
         silent.conflict = "warn only"; // does not ask: the write goes on
         AssetSectionSet.setSource(() -> List.of(contribution("p.asker", 100, asker),
                 contribution("p.silent", 200, silent)));
-        AssetSectionSet<SBEFormat.Document> set = new AssetSectionSet<>(AssetSurface.SBE_EDITOR, HOST);
+        AssetSectionSet<Doc> set = new AssetSectionSet<>(EDITOR, HOST);
         set.load(doc());
 
         AtomicInteger writes = new AtomicInteger();
@@ -167,7 +175,7 @@ class AssetSectionSetTest {
     void sectionsRegisteredLaterAreCreatedOnTheNextLoad() {
         List<AssetSectionContribution<?>> registered = new ArrayList<>();
         AssetSectionSet.setSource(() -> List.copyOf(registered));
-        AssetSectionSet<SBEFormat.Document> set = new AssetSectionSet<>(AssetSurface.SBE_EDITOR, HOST);
+        AssetSectionSet<Doc> set = new AssetSectionSet<>(EDITOR, HOST);
         set.load(doc());
         assertTrue(set.isEmpty());
         Probe p = new Probe("late");

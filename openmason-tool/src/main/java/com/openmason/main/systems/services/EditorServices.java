@@ -6,8 +6,6 @@ import com.openmason.main.systems.mcp.approval.ApprovalGate;
 import com.openmason.main.systems.mcp.approval.SaveSheetGate;
 import com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui;
 import com.openmason.main.systems.menus.dialogs.FileDialogService;
-import com.openmason.main.systems.menus.dialogs.SBEEditorWindow;
-import com.openmason.main.systems.menus.dialogs.SBOEditorWindow;
 import com.openmason.main.systems.menus.panes.propertyPane.PropertyPanelImGui;
 import com.openmason.main.systems.menus.textureCreator.TextureCreatorImGui;
 import com.openmason.main.systems.scene.SceneViewerImGuiInterface;
@@ -96,14 +94,6 @@ public final class EditorServices {
 
     public SaveSheetGate getSaveSheetGate() {
         return get(SaveSheetGate.class);
-    }
-
-    public SBOEditorWindow getSBOEditorWindow() {
-        return get(SBOEditorWindow.class);
-    }
-
-    public SBEEditorWindow getSBEEditorWindow() {
-        return get(SBEEditorWindow.class);
     }
 
     /** The open project's root folder supplier; never null (supplies null without a project). */

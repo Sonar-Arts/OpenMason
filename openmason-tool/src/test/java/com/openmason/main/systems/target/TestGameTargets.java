@@ -9,7 +9,6 @@ import com.openmason.api.target.WriteRules;
 import com.openmason.engine.format.omui.UiHostProfile;
 import com.openmason.engine.ui.assets.AssetSource;
 import com.openmason.engine.ui.data.UiHost;
-import com.openmason.main.systems.io.BuiltinFileTypes;
 import io.github.humbleui.skija.Typeface;
 
 import java.io.IOException;
@@ -33,8 +32,8 @@ public final class TestGameTargets {
 
     /** The Stonebreak layout over this checkout's game resources (files only). */
     public static GameTarget stonebreak() {
-        String sbo = BuiltinFileTypes.SBO.id();
-        String sbe = BuiltinFileTypes.SBE.id();
+        String sbo = "sbo";
+        String sbe = "sbe";
         return GameTarget.builder("stonebreak", "Stonebreak")
                 .namespace("stonebreak")
                 .resources(new ResourceRoot(List.of(SOURCE_TREE), null, null))

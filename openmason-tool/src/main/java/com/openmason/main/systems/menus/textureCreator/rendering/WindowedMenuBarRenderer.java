@@ -44,12 +44,11 @@ public class WindowedMenuBarRenderer {
     private Runnable onLayersPanelToggle;
     private Runnable onColorPanelToggle;
     private Runnable onResetLayout;
-    private Runnable onExportSBT;
-    private Runnable onExportSBO;
-    private Runnable onOpenSBOEditor;
+    private java.util.function.Supplier<java.util.List<com.openmason.api.asset.TextureAction>> textureActions =
+            java.util.List::of;
     private Runnable onResizeFaceTextureRequested;
     private java.util.function.BooleanSupplier resizeFaceTextureEnabled = () -> false;
-    private java.util.function.Supplier<String> sbtOmtPathSupplier = () -> null;
+    private java.util.function.Supplier<String> omtPathSupplier = () -> null;
     private ImBoolean showLayersPanel;
     private ImBoolean showColorPanel;
 
@@ -117,27 +116,6 @@ public class WindowedMenuBarRenderer {
     }
 
     /**
-     * Set callback invoked when the user triggers Export SBT from the Tools menu.
-     */
-    public void setOnExportSBT(Runnable callback) {
-        this.onExportSBT = callback;
-    }
-
-    /**
-     * Set callback invoked when the user triggers Export SBO from the Tools menu.
-     */
-    public void setOnExportSBO(Runnable callback) {
-        this.onExportSBO = callback;
-    }
-
-    /**
-     * Set callback invoked when the user opens the SBO editor from the Tools menu.
-     */
-    public void setOnOpenSBOEditor(Runnable callback) {
-        this.onOpenSBOEditor = callback;
-    }
-
-    /**
      * Set callback invoked when the user triggers "Resize Face Texture..." from
      * the Edit menu while a face is open in the editor.
      */
@@ -150,10 +128,15 @@ public class WindowedMenuBarRenderer {
 
     /**
      * Wire a supplier providing the current OMT file path on disk. Pulled at
-     * menu render time to gate the Export SBT entry's enable state.
+     * menu render time to gate texture-export entries.
      */
-    public void setSBTOMTPathSupplier(java.util.function.Supplier<String> supplier) {
-        this.sbtOmtPathSupplier = supplier != null ? supplier : (() -> null);
+    public void setOmtPathSupplier(java.util.function.Supplier<String> supplier) {
+        this.omtPathSupplier = supplier != null ? supplier : (() -> null);
+    }
+
+    /** The Tools menu entries asset kinds contribute (#88); no entries, no Tools menu. */
+    public void setTextureActions(java.util.function.Supplier<java.util.List<com.openmason.api.asset.TextureAction>> actions) {
+        this.textureActions = actions != null ? actions : java.util.List::of;
     }
 
     /**
@@ -372,30 +355,23 @@ public class WindowedMenuBarRenderer {
     }
 
     private void renderToolsMenu() {
+        java.util.List<com.openmason.api.asset.TextureAction> actions = textureActions.get();
+        if (actions.isEmpty()) {
+            return;
+        }
         if (ImGui.beginMenu("Tools")) {
-            String omtPath = sbtOmtPathSupplier.get();
-            boolean canExport = omtPath != null && !omtPath.isBlank();
-
-            if (ImGui.menuItem("Export SBT...", "", false, canExport)) {
-                if (onExportSBT != null) {
-                    onExportSBT.run();
+            String omtPath = omtPathSupplier.get();
+            boolean hasTexture = omtPath != null && !omtPath.isBlank();
+            boolean first = true;
+            for (com.openmason.api.asset.TextureAction action : actions) {
+                if (action.separatorBefore() && !first) {
+                    ImGui.separator();
+                }
+                first = false;
+                if (ImGui.menuItem(action.label(), "", false, hasTexture || !action.needsTexture())) {
+                    action.action().run();
                 }
             }
-
-            if (ImGui.menuItem("Export SBO...", "", false, canExport)) {
-                if (onExportSBO != null) {
-                    onExportSBO.run();
-                }
-            }
-
-            ImGui.separator();
-
-            if (ImGui.menuItem("SBO Editor...")) {
-                if (onOpenSBOEditor != null) {
-                    onOpenSBOEditor.run();
-                }
-            }
-
             ImGui.endMenu();
         }
     }

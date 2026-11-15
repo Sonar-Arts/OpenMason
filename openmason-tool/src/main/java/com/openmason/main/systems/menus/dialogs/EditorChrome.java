@@ -22,7 +22,7 @@ import imgui.flag.ImGuiTabItemFlags;
  * <p>The caller owns the selected tab index — {@link #render} returns the
  * (possibly changed) index and fires the action callbacks directly.
  */
-final class EditorChrome implements AutoCloseable {
+public final class EditorChrome implements AutoCloseable {
 
     private static final float BTN_H = 26f;
     private static final float BTN_GAP = 6f;
@@ -41,7 +41,7 @@ final class EditorChrome implements AutoCloseable {
      * @param fallbackId unique suffix for the ImGui-fallback tab bar id so two
      *                   chrome instances never collide ("sbo", "sbe").
      */
-    EditorChrome(String fallbackId) {
+    public EditorChrome(String fallbackId) {
         this.fallbackId = fallbackId;
     }
 
@@ -49,7 +49,7 @@ final class EditorChrome implements AutoCloseable {
      * Draw the chrome and return the selected tab index. {@code tabs} are only
      * shown when {@code loaded}; callbacks fire at most once per frame.
      */
-    int render(boolean loaded, boolean canSave, boolean dirty, String fileLabel,
+    public int render(boolean loaded, boolean canSave, boolean dirty, String fileLabel,
                String openLabel, String[] tabs, int selectedTab,
                Runnable onSave, Runnable onSaveAs, Runnable onOpen) {
         if (!region.isAvailable()) {
@@ -148,7 +148,7 @@ final class EditorChrome implements AutoCloseable {
      *
      * @return the (possibly changed) selected tab index
      */
-    int renderExport(boolean canExport, String sourceLabel, String exportLabel,
+    public int renderExport(boolean canExport, String sourceLabel, String exportLabel,
                      String[] tabs, int selectedTab, Runnable onExport, Runnable onCancel) {
         return renderExport(canExport, sourceLabel, exportLabel, tabs, selectedTab,
                 onExport, onCancel, "Save the model as .OMO first");
@@ -159,7 +159,7 @@ final class EditorChrome implements AutoCloseable {
      * with a caller-supplied tooltip for the disabled Export pill. An empty
      * {@code tabs} array (single-page exporters) omits the tab strip.
      */
-    int renderExport(boolean canExport, String sourceLabel, String exportLabel,
+    public int renderExport(boolean canExport, String sourceLabel, String exportLabel,
                      String[] tabs, int selectedTab, Runnable onExport, Runnable onCancel,
                      String disabledHint) {
         if (!region.isAvailable()) {

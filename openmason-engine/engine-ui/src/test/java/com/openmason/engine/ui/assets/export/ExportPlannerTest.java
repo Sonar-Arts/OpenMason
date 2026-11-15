@@ -113,14 +113,14 @@ class ExportPlannerTest {
 
     @Test
     void collectedEntryCollisionsBlock() throws Exception {
-        // assets/stonebreak/ui/t.sbt would be both a file and the directory of t.sbt/inner.sbt.
+        // assets/stonebreak/ui/t.omt would be both a file and the directory of t.omt/inner.omt.
         UiBytes a = bytes("a");
         UiBytes b = bytes("b");
-        project.folder().write("x/a.sbt", a);
-        project.folder().write("x/b.sbt", b);
-        OmuiArchive doc = screenUsing("stonebreak:ui/s", "stonebreak:ui/t", a, "x/a.sbt");
-        doc = withRow(doc, UiDependency.shared("stonebreak:ui/t.sbt/inner", UiDependency.Kind.TEXTURE, b.sha256(),
-                b.size(), "x/b.sbt"));
+        project.folder().write("x/a.omt", a);
+        project.folder().write("x/b.omt", b);
+        OmuiArchive doc = screenUsing("stonebreak:ui/s", "stonebreak:ui/t", a, "x/a.omt");
+        doc = withRow(doc, UiDependency.shared("stonebreak:ui/t.omt/inner", UiDependency.Kind.TEXTURE, b.sha256(),
+                b.size(), "x/b.omt"));
 
         ExportPlan plan = ExportPlanner.plan(doc, List.of(project), ExportPlanner.Request.of(ExportMode.COLLECT_ALL));
 
@@ -134,7 +134,7 @@ class ExportPlannerTest {
     void componentNeedingAnUnlistedSharedDependencyBlocks() throws Exception {
         // A shared component whose own table needs a texture the screen's table does not list.
         String compId = "stonebreak:ui/components/badge";
-        OmuiArchive badge = screenUsing(compId, "stonebreak:ui/textures/badge", bytes("badge"), "badge.sbt");
+        OmuiArchive badge = screenUsing(compId, "stonebreak:ui/textures/badge", bytes("badge"), "badge.omt");
         badge = new OmuiArchive(new UiManifest(badge.manifest().schemaVersion(), compId,
                 UiManifest.DocumentKind.COMPONENT, "", badge.manifest().uiApi(), badge.manifest().layoutSemantics(),
                 List.of(), List.of(), List.of(new HostRequirement("stonebreak:item-icon", 2)), Map.of()),
@@ -196,12 +196,12 @@ class ExportPlannerTest {
     @Test
     void shadowedSourcesAreReported() {
         MountedAssetSource packaged = MountedAssetSource.packaged("", path -> path.equals(
-                "stonebreak/ui/textures/panel.sbt") ? bytes("packaged copy") : null);
+                "stonebreak/ui/textures/panel.omt") ? bytes("packaged copy") : null);
         ExportPlan plan = ExportPlanner.plan(pause, List.of(project, packaged),
                 ExportPlanner.Request.of(ExportMode.SHARED));
 
         assertTrue(has(plan, Code.ASSET_SHADOWED));
-        assertEquals(List.of("packaged:stonebreak/ui/textures/panel.sbt"), plan.item(PANEL).shadowed());
+        assertEquals(List.of("packaged:stonebreak/ui/textures/panel.omt"), plan.item(PANEL).shadowed());
     }
 
     @Test

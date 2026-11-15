@@ -66,6 +66,9 @@ class PluginModuleAcceptanceTest {
 
             import com.openmason.api.OpenMasonPlugin;
             import com.openmason.api.PluginContext;
+            import com.openmason.api.asset.AssetFormatContribution;
+            import com.openmason.api.asset.AssetSurface;
+            import com.openmason.api.asset.AssetWindow;
             import com.openmason.api.files.FileOpener;
             import com.openmason.api.files.FileType;
             import com.openmason.api.fx.FxExportTarget;
@@ -81,6 +84,20 @@ class PluginModuleAcceptanceTest {
             import com.openmason.main.systems.menus.textureCreator.keyboard.ShortcutKey;
 
             public final class HelloPlugin implements OpenMasonPlugin {
+                public static final AssetSurface<String> CARD_EDITOR =
+                        AssetSurface.of("hellocard.editor", "Hello Card Editor", String.class);
+
+                /** A game format the engine does not know: read by the plugin's own codec. */
+                public static final class CardCodec implements com.openmason.engine.format.spi.FormatCodec<String> {
+                    @Override public String id() { return "hellocard"; }
+                    @Override public String displayName() { return "Hello Card"; }
+                    @Override public java.util.List<String> extensions() { return java.util.List.of(".hellocard"); }
+                    @Override public Class<String> modelType() { return String.class; }
+                    @Override public String read(java.nio.file.Path file) throws java.io.IOException {
+                        return java.nio.file.Files.readString(file);
+                    }
+                }
+
                 @Override public String id() { return "hello"; }
                 @Override public String displayName() { return "Hello"; }
                 @Override public String version() { return "0.1"; }
@@ -108,6 +125,17 @@ class PluginModuleAcceptanceTest {
                             .withSave("project", "Greetings", "greeting")
                             .withBrowse(".HELLO Greeting", 50, "", "Greetings"));
                     c.fileOpeners().register(new FileOpener("hello", path -> greet(c, "open " + path.getFileName())));
+
+                    c.assetFormats().register(AssetFormatContribution.builder(
+                                    FileType.of("hellocard", "Hello Card", ".hellocard").withBrowse(".HELLOCARD", 51, ""))
+                            .opener(path -> greet(c, "card " + path.getFileName()))
+                            .codec(new CardCodec())
+                            .surface(CARD_EDITOR)
+                            .window(AssetWindow.of("hellocard.editor", "Hello Card Editor",
+                                    () -> greet(c, "render card"), () -> greet(c, "close card")))
+                            .menuEntry(MenuItem.of("hello.tools.card", TopMenu.TOOLS, 910, "Hello Card Editor...",
+                                    () -> greet(c, "card menu")))
+                            .build());
 
                     c.fxExporters().register(new FxExportTarget("hello.fx", "Hello FX (.hellofx)",
                             FileType.of("hellofx", "Hello FX", ".hellofx").withSave("target", "hellofx", "fx"),
@@ -190,7 +218,8 @@ class PluginModuleAcceptanceTest {
         assertEquals(1, hello.size());
         MenuItem say = (MenuItem) hello.get(0);
         assertEquals("hello.say", say.commandId());
-        assertEquals(List.of("hello.tools.open"), bar.entriesOf("tools").stream().map(MenuEntry::id).toList());
+        assertEquals(List.of("hello.tools.open", "hello.tools.card"),
+                bar.entriesOf("tools").stream().map(MenuEntry::id).toList());
 
         var command = KeybindRegistry.getInstance().getAction("hello.say");
         assertNotNull(command, "the command reached the keybind registry (Keybinds page, shortcut dispatch)");
@@ -273,5 +302,27 @@ class PluginModuleAcceptanceTest {
 
         assertTrue(files.open(project.resolve("top.hello")));
         assertEquals("open top.hello;", greetings.toString());
+    }
+
+    @Test
+    void itsAssetKindBringsFormatSurfaceWindowAndMenu() throws Exception {
+        loadPlugin();
+        assertEquals(List.of("hellocard"), registries.assetFormats().all().stream()
+                .map(com.openmason.api.asset.AssetFormatContribution::id).toList());
+        assertEquals("hello", registries.fileTypes().ownerOf("hellocard").orElseThrow());
+        assertEquals("hello", registries.menuEntries().ownerOf("hello.tools.card").orElseThrow());
+        assertTrue(registries.assetSurfaces().stream().anyMatch(s -> s.id().equals("hellocard.editor")));
+
+        // The engine reads the plugin's format through its registry, not by name (#88).
+        Path card = project.resolve("ace.hellocard");
+        Files.writeString(card, "ace of spades");
+        var codec = com.openmason.engine.format.spi.Formats.forPath(card).orElseThrow();
+        assertEquals("hellocard", codec.id());
+        assertEquals("ace of spades", codec.read(card));
+
+        registries.assetWindows().forEach(w -> w.render().run());
+        FileTypeService files = new FileTypeService(registries.fileTypes(), registries.fileOpeners());
+        assertTrue(files.open(card));
+        assertEquals("render card;card ace.hellocard;", greetings.toString());
     }
 }

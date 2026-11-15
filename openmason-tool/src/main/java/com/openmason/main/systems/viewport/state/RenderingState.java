@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Manages current rendering state (mode, selected model/item/.SBT).
+ * Manages current rendering state (mode, selected model/item).
  * Mutable state object for tracking what content to display.
  */
 public class RenderingState {
@@ -20,9 +20,6 @@ public class RenderingState {
     // Item state: the id of a game item a plugin's viewport content draws (#382: Stonebreak's
     // ItemType name); the tool itself never interprets it.
     private String selectedItem = null;
-
-    // SBT texture state — driven by an absolute path supplied by the Model Browser.
-    private java.nio.file.Path selectedSbtPath = null;
 
     /**
      * Create default rendering state (model mode).
@@ -47,7 +44,6 @@ public class RenderingState {
         this.mode = RenderingMode.BLOCK_MODEL;
         this.currentModelName = modelName;
         this.selectedItem = null;
-        this.selectedSbtPath = null;
         logger.debug("Switched to BLOCK_MODEL rendering mode: {}", modelName);
     }
 
@@ -62,32 +58,7 @@ public class RenderingState {
         this.mode = RenderingMode.ITEM;
         this.selectedItem = itemType;
         this.currentModelName = null;
-        this.selectedSbtPath = null;
         logger.debug("Switched to ITEM rendering mode: {}", itemType);
-    }
-
-    /**
-     * Switch to SBT-texture rendering mode (voxelized sprite from a .sbt file on disk).
-     */
-    public void setSBTMode(java.nio.file.Path sbtFile) {
-        if (sbtFile == null) {
-            logger.warn("Cannot set null SBT path");
-            return;
-        }
-        this.mode = RenderingMode.SBT_TEXTURE;
-        this.selectedSbtPath = sbtFile;
-        this.currentModelName = null;
-        this.selectedItem = null;
-        logger.debug("Switched to SBT_TEXTURE rendering mode: {}", sbtFile);
-    }
-
-    public java.nio.file.Path getSelectedSbtPath() {
-        return selectedSbtPath;
-    }
-
-    /** Whether SBT texture rendering is ready. */
-    public boolean isSBTReady() {
-        return mode == RenderingMode.SBT_TEXTURE && selectedSbtPath != null;
     }
 
     /**
@@ -141,7 +112,6 @@ public class RenderingState {
             case MODEL -> currentModelName != null ? "Model: " + currentModelName : "No model";
             case BLOCK_MODEL -> currentModelName != null ? "BlockModel: " + currentModelName : "No block model";
             case ITEM -> selectedItem != null ? "Item: " + selectedItem : "No item";
-            case SBT_TEXTURE -> selectedSbtPath != null ? "SBT: " + selectedSbtPath.getFileName() : "No SBT";
         };
     }
 

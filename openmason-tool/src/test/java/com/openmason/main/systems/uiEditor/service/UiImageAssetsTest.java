@@ -9,9 +9,6 @@ import com.openmason.engine.format.omui.UiSpriteSheet.Slice;
 import com.openmason.engine.format.omui.UiSpriteSheet.Sprite;
 import com.openmason.engine.format.omui.UiValue;
 import com.openmason.engine.format.omui.io.SpriteSheetCodec;
-import com.openmason.engine.format.sbt.SBTFormat;
-import com.openmason.engine.format.sbt.SBTParser;
-import com.openmason.engine.format.sbt.SBTSerializer;
 import com.openmason.engine.ui.runtime.UiRect;
 import com.openmason.engine.ui.runtime.paint.ResolvedUiAssets;
 import com.openmason.engine.ui.runtime.paint.UiDocumentView;
@@ -39,11 +36,76 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * UI images in the editor (#294): Texture Editor files skin UI controls through sprite sheets,
- * edits to sheets are undoable document steps, "Edit texture" finds the right file (SBTs through
+ * edits to sheets are undoable document steps, "Edit texture" finds the right file (texture containers through
  * their layered OMT) and a texture save repaints every document that shares it.
  */
 @Tag("integration")
 class UiImageAssetsTest {
+
+    private static final String BANDS_ID = "test:bands|tests";
+
+    /**
+     * A game's texture container as the engine sees one (#88): a zip of an id and the wrapped OMT.
+     * Registered with the engine format registry, the way a game plugin registers its own.
+     */
+    static final class Tcx implements com.openmason.engine.format.spi.TextureDecoder {
+        static {
+            com.openmason.engine.format.spi.Formats.register(new Tcx());
+        }
+
+        static void install() {
+            // the static initializer registers it once
+        }
+
+        @Override public String id() { return "test.tcx"; }
+        @Override public List<String> extensions() { return List.of(".tcx"); }
+
+        @Override
+        public byte[] unwrapOmt(byte[] data) throws java.io.IOException {
+            return entry(data, "texture.omt");
+        }
+
+        @Override
+        public byte[] rewrap(byte[] container, byte[] omtBytes) throws java.io.IOException {
+            return wrap(idOf(container), omtBytes);
+        }
+
+        static byte[] wrap(String id, byte[] omt) throws java.io.IOException {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            try (java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(out)) {
+                z.putNextEntry(new java.util.zip.ZipEntry("id.txt"));
+                z.write(id.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                z.putNextEntry(new java.util.zip.ZipEntry("texture.omt"));
+                z.write(omt);
+            }
+            return out.toByteArray();
+        }
+
+        static String idOf(byte[] container) throws java.io.IOException {
+            byte[] id = entry(container, "id.txt");
+            return id == null ? null : new String(id, java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+        static byte[] omtOf(byte[] container) throws java.io.IOException {
+            return entry(container, "texture.omt");
+        }
+
+        private static byte[] entry(byte[] zip, String name) throws java.io.IOException {
+            try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(zip))) {
+                for (java.util.zip.ZipEntry e; (e = in.getNextEntry()) != null; ) {
+                    if (e.getName().equals(name)) {
+                        return in.readAllBytes();
+                    }
+                }
+            }
+            return null;
+        }
+    }
+
+    static {
+        Tcx.install();
+    }
+
 
     private static final int RED = 0xFFFF0000;
     private static final int GREEN = 0xFF00FF00;
@@ -229,7 +291,7 @@ class UiImageAssetsTest {
             "test:ui/sprites/bands#middle", ctx);
         assertTrue(viaSprite.ok(), viaSprite.problem());
         assertEquals(tex.toAbsolutePath().normalize(), viaSprite.file().toAbsolutePath().normalize());
-        assertFalse(viaSprite.sbt());
+        assertFalse(viaSprite.container());
 
         doc.setProject(new com.openmason.engine.ui.assets.ProjectFolder(project));
         assertTrue(doc.execute(com.openmason.main.systems.uiEditor.command.DocumentCommands.assetEdit(
@@ -242,25 +304,20 @@ class UiImageAssetsTest {
     }
 
     @Test
-    void sbtTexturesAreEditedThroughTheirLayeredSourceAndRewrapped() throws Exception {
+    void containerTexturesAreEditedThroughTheirLayeredSourceAndRewrapped() throws Exception {
         Path omt = saveTexture("work/bands.omt", RED, GREEN, BLUE);
-        Path sbt = project.resolve("UI/test/ui/textures/bands.sbt");
+        Path sbt = project.resolve("UI/test/ui/textures/bands.tcx");
         Files.createDirectories(sbt.getParent());
-        SBTFormat.ExportParameters p = new SBTFormat.ExportParameters();
-        p.setTextureId("stonebreak:bands");
-        p.setTextureName("Bands");
-        p.setTexturePack("core");
-        p.setAuthor("tests");
-        assertTrue(new SBTSerializer().export(p, omt, sbt.toString()));
+        Files.write(sbt, Tcx.wrap(BANDS_ID, Files.readAllBytes(omt)));
 
         UiProjectContext ctx = ctx();
         UiDocumentService service = new UiDocumentService(ctx, new UiRecoveryService(project.resolve(".rec")));
         UiEditorDocument doc = service.create(UiDocumentTemplates.BLANK_SCREEN, "test:ui/screens/s", "S");
         UiImageAssets.ProjectImage img = UiImageAssets.projectImages(ctx).stream()
-            .filter(i -> i.relative().endsWith(".sbt")).findFirst().orElseThrow();
+            .filter(i -> i.relative().endsWith(".tcx")).findFirst().orElseThrow();
         assertTrue(doc.execute(UiImageAssets.addImage(ctx, img)));
         UiImageAssets.EditableTexture t = UiImageAssets.editableTexture(doc.archive(), img.id(), ctx);
-        assertTrue(t.ok() && t.sbt(), t.problem());
+        assertTrue(t.ok() && t.container(), t.problem());
 
         TextureEditBridge bridge = new TextureEditBridge();
         Path[] opened = new Path[1];
@@ -268,46 +325,40 @@ class UiImageAssetsTest {
             opened[0] = f;
             return null;
         }));
-        assertEquals(sbt.resolveSibling("bands.omt"), opened[0], "the SBT's layers open as its sibling OMT");
-        assertArrayEquals(new SBTParser().read(sbt).omtBytes(), Files.readAllBytes(opened[0]));
+        assertEquals(sbt.resolveSibling("bands.omt"), opened[0], "the container's layers open as its sibling OMT");
+        assertArrayEquals(Tcx.omtOf(Files.readAllBytes(sbt)), Files.readAllBytes(opened[0]));
 
-        // The Texture Editor saves the OMT; the SBT is re-wrapped with its identity kept.
+        // The Texture Editor saves the OMT; the container is re-wrapped with its identity kept.
         saveTexture("UI/test/ui/textures/bands.omt", BLUE, BLUE, BLUE);
         List<Path> changed = bridge.saved(opened[0]);
         assertEquals(List.of(opened[0], sbt), changed);
-        SBTParser.Result rewrapped = new SBTParser().read(sbt);
-        assertEquals("stonebreak:bands", rewrapped.manifest().textureId());
-        assertEquals("tests", rewrapped.manifest().author());
-        assertArrayEquals(Files.readAllBytes(opened[0]), rewrapped.omtBytes());
+        byte[] rewrapped = Files.readAllBytes(sbt);
+        assertEquals(BANDS_ID, Tcx.idOf(rewrapped), "the container keeps its identity");
+        assertArrayEquals(Files.readAllBytes(opened[0]), Tcx.omtOf(rewrapped));
     }
 
     @Test
-    void theSbtLinkSurvivesARestartAndAStaleSiblingIsRefreshed() throws Exception {
+    void theContainerLinkSurvivesARestartAndAStaleSiblingIsRefreshed() throws Exception {
         Path omt = saveTexture("work/bands.omt", RED, GREEN, BLUE);
-        Path sbt = project.resolve("UI/test/ui/textures/bands.sbt");
+        Path sbt = project.resolve("UI/test/ui/textures/bands.tcx");
         Files.createDirectories(sbt.getParent());
-        SBTFormat.ExportParameters p = new SBTFormat.ExportParameters();
-        p.setTextureId("stonebreak:bands");
-        p.setTextureName("Bands");
-        p.setTexturePack("core");
-        p.setAuthor("tests");
-        assertTrue(new SBTSerializer().export(p, omt, sbt.toString()));
+        Files.write(sbt, Tcx.wrap(BANDS_ID, Files.readAllBytes(omt)));
         Path sibling = UiImageAssets.omtSourceFor(sbt);
 
         // A new bridge (a tool restart, or the OMT opened straight from the Texture Editor) still re-wraps.
         saveTexture("UI/test/ui/textures/bands.omt", BLUE, BLUE, BLUE);
         TextureEditBridge fresh = new TextureEditBridge();
-        assertEquals(sbt, fresh.sbtFor(sibling));
+        assertEquals(sbt, fresh.containerFor(sibling));
         assertEquals(List.of(sibling, sbt), fresh.saved(sibling));
-        assertArrayEquals(Files.readAllBytes(sibling), new SBTParser().read(sbt).omtBytes());
+        assertArrayEquals(Files.readAllBytes(sibling), Tcx.omtOf(Files.readAllBytes(sbt)));
 
-        // The SBT changes after the sibling (a pull): opening must not hand out the stale layers.
+        // The container changes after the sibling (a pull): opening must not hand out the stale layers.
         byte[] siblingBefore = Files.readAllBytes(sibling);
-        assertTrue(new SBTSerializer().export(p, omt, sbt.toString()));
+        Files.write(sbt, Tcx.wrap(BANDS_ID, Files.readAllBytes(omt)));
         Files.setLastModifiedTime(sbt, java.nio.file.attribute.FileTime.fromMillis(
             Files.getLastModifiedTime(sibling).toMillis() + 5_000));
         Path reopened = UiImageAssets.omtSourceFor(sbt);
-        assertArrayEquals(new SBTParser().read(sbt).omtBytes(), Files.readAllBytes(reopened));
+        assertArrayEquals(Tcx.omtOf(Files.readAllBytes(sbt)), Files.readAllBytes(reopened));
         assertArrayEquals(siblingBefore, Files.readAllBytes(sibling.resolveSibling("bands.omt.stale")),
             "the previous layers are kept, never silently lost");
 

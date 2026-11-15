@@ -134,7 +134,7 @@ final class ImagePicker {
                 projectImages = UiImageAssets.projectImages(ctx.project);
             }
             if (projectImages.isEmpty()) {
-                ImGui.textDisabled(ctx.project.root() == null ? "No project open" : "No .omt/.sbt/.png/.sprites.json files");
+                ImGui.textDisabled(ctx.project.root() == null ? "No project open" : "No texture, .png or .sprites.json files");
             }
             for (UiImageAssets.ProjectImage p : projectImages) {
                 String kind = p.kind() == UiDependency.Kind.SPRITES ? "sheet" : p.kind().wire();

@@ -4,7 +4,7 @@ import com.openmason.engine.format.omt.OMTArchive;
 import com.openmason.engine.format.omt.OMTReader;
 import com.openmason.engine.format.omt.OmtCompositor;
 import com.openmason.engine.format.omt.TextureBytes;
-import com.openmason.engine.format.sbt.SBTParser;
+import com.openmason.engine.format.spi.Formats;
 import io.github.humbleui.skija.Bitmap;
 import io.github.humbleui.skija.Codec;
 import io.github.humbleui.skija.ColorAlphaType;
@@ -20,9 +20,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * A MasonryUI texture loaded from a Stonebreak Texture (.SBT) file.
+ * A MasonryUI texture loaded from a texture container wrapping an OMT (a registered
+ * {@link com.openmason.engine.format.spi.TextureDecoder}, #88), a bare OMT or a PNG.
  *
- * <p>Loads the SBT, extracts the embedded OMT, decodes each visible layer
+ * <p>Unwraps the container, decodes each visible OMT layer
  * and composites them bottom-up onto a single {@link Image} the size of the
  * OMT canvas with {@link OmtCompositor} — the engine's one layer rule
  * (straight-alpha source-over, layer opacity, bottom to top), shared with the
@@ -87,9 +88,10 @@ public final class MTexture implements AutoCloseable {
     }
 
     /**
-     * Load an SBT through {@code opener} and composite its layers into a single Skija
-     * {@link Image}. The opener belongs to the module that owns the resource (JPMS hides game
-     * resources from the engine), e.g. {@code path -> Game.class.getResourceAsStream(path)}.
+     * Load a texture container (e.g. a game's {@code .sbt}) through {@code opener} and composite its
+     * layers into a single Skija {@link Image}. The opener belongs to the module that owns the
+     * resource (JPMS hides game resources from the engine), e.g.
+     * {@code path -> Game.class.getResourceAsStream(path)}.
      *
      * @param resourcePath key and path, e.g. {@code "/ui/shared/game/ui/hud/heart_full.sbt"}
      * @return a ready-to-draw texture, or {@code null} if loading failed
@@ -97,32 +99,38 @@ public final class MTexture implements AutoCloseable {
     public static MTexture loadFromResource(String resourcePath, ResourceOpener opener) {
         if (resourcePath == null || resourcePath.isBlank() || opener == null) return null;
 
-        byte[] sbtBytes;
+        byte[] containerBytes;
         try (InputStream in = opener.open(resourcePath)) {
             if (in == null) {
-                System.err.println("[MTexture] Missing SBT resource: " + resourcePath);
+                System.err.println("[MTexture] Missing texture resource: " + resourcePath);
                 return null;
             }
-            sbtBytes = in.readAllBytes();
+            containerBytes = in.readAllBytes();
         } catch (IOException e) {
-            System.err.println("[MTexture] Failed to read SBT resource " + resourcePath
+            System.err.println("[MTexture] Failed to read texture resource " + resourcePath
                     + ": " + e.getMessage());
             return null;
         }
-        return loadFromSbtBytes(resourcePath, sbtBytes);
+        return loadFromContainerBytes(resourcePath, containerBytes);
     }
 
     /**
-     * Decode SBT bytes (a Stonebreak Texture wrapping an OMT) and composite its layers.
+     * Decode the bytes of a registered texture container (an OMT wrapped with a manifest) and
+     * composite its layers.
      *
      * @param cacheKey identifier for diagnostics and cache lookup only
      * @return a ready-to-draw texture, or {@code null} if decoding failed
      */
-    public static MTexture loadFromSbtBytes(String cacheKey, byte[] sbtBytes) {
-        if (sbtBytes == null || sbtBytes.length == 0) return null;
+    public static MTexture loadFromContainerBytes(String cacheKey, byte[] containerBytes) {
+        if (containerBytes == null || containerBytes.length == 0) return null;
+        byte[] omtBytes = Formats.unwrapTexture(containerBytes);
+        if (omtBytes == null) {
+            System.err.println("[MTexture] " + cacheKey + " is not a registered texture container "
+                    + Formats.textureContainerExtensions());
+            return null;
+        }
         try {
-            SBTParser.Result sbt = new SBTParser().read(sbtBytes);
-            OMTArchive archive = new OMTReader().read(sbt.omtBytes());
+            OMTArchive archive = new OMTReader().read(omtBytes);
             Image composited = compositeLayers(archive);
             if (composited == null) {
                 System.err.println("[MTexture] Compositing produced no image: " + cacheKey);
@@ -131,14 +139,14 @@ public final class MTexture implements AutoCloseable {
             return new MTexture(cacheKey, composited,
                     archive.canvasSize().width(), archive.canvasSize().height());
         } catch (IOException e) {
-            System.err.println("[MTexture] Failed to parse SBT " + cacheKey
+            System.err.println("[MTexture] Failed to parse texture " + cacheKey
                     + ": " + e.getMessage());
             return null;
         }
     }
 
     /**
-     * Decodes texture bytes of any kind a UI dependency may hold — SBT, OMT or PNG — without
+     * Decodes texture bytes of any kind a UI dependency may hold — a registered container, OMT or PNG — without
      * logging the formats it rules out. PNGs decode to straight alpha like OMT layers.
      *
      * @return a ready-to-draw texture, or {@code null} when the bytes are none of them
@@ -150,7 +158,7 @@ public final class MTexture implements AutoCloseable {
         }
         OMTArchive archive = TextureBytes.archive(bytes);
         if (archive == null) {
-            System.err.println("[MTexture] " + cacheKey + " is not an SBT, OMT or PNG texture");
+            System.err.println("[MTexture] " + cacheKey + " is not a texture container, OMT or PNG");
             return null;
         }
         return new MTexture(cacheKey, compositeLayers(archive), archive.canvasSize().width(),

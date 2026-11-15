@@ -28,7 +28,7 @@ module openmason.engine.voxel {
     exports com.openmason.engine.voxel.mms.mmsRegion;
     exports com.openmason.engine.voxel.mms.mmsTexturing;
     exports com.openmason.engine.voxel.net;
-    exports com.openmason.engine.voxel.sbo;
-    exports com.openmason.engine.voxel.sbo.sboRenderer;
+    exports com.openmason.engine.voxel.stamp;
+    exports com.openmason.engine.voxel.stamp.render;
     exports com.openmason.engine.wayfind.voxel;
 }

@@ -1,8 +1,8 @@
 package com.openmason.engine.rendering.model.draw;
 
 import com.openmason.engine.diagnostics.GpuMemoryTracker;
-import com.openmason.engine.entity.sbe.MaterialImage;
-import com.openmason.engine.entity.sbe.SbeModelGeometry;
+import com.openmason.engine.entity.model.MaterialImage;
+import com.openmason.engine.entity.model.EntityGeometry;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 
@@ -35,7 +35,7 @@ public final class UploadedModel implements AutoCloseable, MaterialTextures {
     }
 
     /** Uploads {@code geometry}'s mesh and referenced material images. */
-    public static UploadedModel upload(SbeModelGeometry geometry) {
+    public static UploadedModel upload(EntityGeometry geometry) {
         ModelDrawPlan plan = ModelDrawPlan.of(geometry);
         ModelGpuMesh mesh = new ModelGpuMesh(false, GpuMemoryTracker.Category.ENTITY_MESH);
         mesh.upload(geometry.vertices(), geometry.texCoords(), geometry.indices());

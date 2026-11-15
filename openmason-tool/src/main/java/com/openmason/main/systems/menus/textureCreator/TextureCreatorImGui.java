@@ -647,38 +647,15 @@ public class TextureCreatorImGui {
     }
 
     /**
-     * Wire the Tools → Export SBT menu entry. The supplier provides the
-     * currently-saved .OMT file path (null if none) so the renderer can gate
-     * the entry's enable state without coupling to ModelState.
-     *
-     * @param onExportSBT      action invoked when the menu item is clicked
-     * @param omtPathSupplier  current .OMT path provider; null disables the entry
+     * Wire the Tools menu: the entries asset kinds contribute ({@code AssetFormatContribution.textureActions},
+     * #88) and the current saved .OMT path that gates the entries needing a texture.
      */
-    public void setSBTExportTrigger(Runnable onExportSBT,
-                                    java.util.function.Supplier<String> omtPathSupplier) {
-        menuBarRenderer.setOnExportSBT(onExportSBT);
-        menuBarRenderer.setSBTOMTPathSupplier(omtPathSupplier);
-        windowedMenuBarRenderer.setOnExportSBT(onExportSBT);
-        windowedMenuBarRenderer.setSBTOMTPathSupplier(omtPathSupplier);
-    }
-
-    /**
-     * Wire the Tools → Export SBO menu entry. The OMT path supplier is shared
-     * with the SBT trigger (both formats wrap the same OMT source); only the
-     * action callback differs.
-     */
-    public void setSBOExportTrigger(Runnable onExportSBO) {
-        menuBarRenderer.setOnExportSBO(onExportSBO);
-        windowedMenuBarRenderer.setOnExportSBO(onExportSBO);
-    }
-
-    /**
-     * Wire the Tools → SBO Editor menu entry. Invoked when the user wants to
-     * open and edit an existing .sbo file from the texture editor.
-     */
-    public void setSBOEditorTrigger(Runnable onOpenSBOEditor) {
-        menuBarRenderer.setOnOpenSBOEditor(onOpenSBOEditor);
-        windowedMenuBarRenderer.setOnOpenSBOEditor(onOpenSBOEditor);
+    public void setTextureActions(java.util.function.Supplier<java.util.List<com.openmason.api.asset.TextureAction>> actions,
+                                  java.util.function.Supplier<String> omtPathSupplier) {
+        menuBarRenderer.setTextureActions(actions);
+        menuBarRenderer.setOmtPathSupplier(omtPathSupplier);
+        windowedMenuBarRenderer.setTextureActions(actions);
+        windowedMenuBarRenderer.setOmtPathSupplier(omtPathSupplier);
     }
 
     public TextureCreatorController getController() {

@@ -12,7 +12,7 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * File access under one root by portable relative path ({@code textures/ui/panel.sbt}). Paths
+ * File access under one root by portable relative path ({@code textures/ui/panel.omt}). Paths
  * follow the archive entry rules, so whatever a document records as a {@code sourceHint} can
  * be read here on any OS, and nothing can escape the root — neither lexically ({@code ..}) nor
  * through a symbolic link inside the project that points elsewhere. Writes are atomic.

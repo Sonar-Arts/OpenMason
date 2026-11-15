@@ -113,8 +113,8 @@ module com.openmason {
     exports com.openmason.main.systems.io;
     exports com.openmason.main.systems.services;
     exports com.openmason.main.systems.menus.mainHub.model;
-    exports com.openmason.main.systems.menus;              // asset export/editor menu actions
-    exports com.openmason.main.systems.menus.dialogs;      // SBO/SBE editor windows (file openers)
+    exports com.openmason.main.systems.menus;
+    exports com.openmason.main.systems.menus.dialogs;      // shared dialog widgets plugin asset editors build on
     // ...and what the Stonebreak plugin's SBO/SBE game-data sections and asset tools build on (#431):
     // dialog widgets + numeric-id validation, the Mortar widget kit and Skija bridge, the active game
     // target, the asset catalog, model state and the main-thread executor.
@@ -125,7 +125,6 @@ module com.openmason {
     exports com.openmason.main.systems.mortar.theme;
     exports com.openmason.main.systems.skija;
     exports com.openmason.main.systems.target;
-    exports com.openmason.main.systems.assets;
     exports com.openmason.main.systems.stateHandling;
     exports com.openmason.main.systems.threading;
     exports com.openmason.main.systems.menus.textureCreator.keyboard;

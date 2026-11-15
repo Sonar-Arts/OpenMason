@@ -7,7 +7,6 @@ import com.openmason.engine.rendering.viewer.ViewerFrame;
 import com.openmason.engine.rendering.viewer.ViewerPass;
 import com.openmason.engine.rendering.viewer.ViewerPassOrder;
 import com.openmason.engine.modeling.EditableModel;
-import com.openmason.main.systems.rendering.core.SBTRenderer;
 import com.openmason.engine.rendering.viewer.gizmo.rendering.GizmoRenderer;
 import com.openmason.main.systems.viewport.viewportRendering.bones.BoneGizmoRenderer;
 import com.openmason.main.systems.skeleton.BoneStore;
@@ -74,9 +73,8 @@ public class ViewportRenderPipeline implements ViewerPass {
     private final FaceRenderer faceRenderer;
 
     // External renderers (blocks, items)
-    private final SBTRenderer sbtRenderer = new SBTRenderer();
 
-    /** Block / item / SBT content, drawn through the content-provider registry (#379). */
+    /** Block / item / plugin content, drawn through the content-provider registry (#379). */
     private final List<ViewportContentProvider> builtinContent;
     private Supplier<List<ViewportContentProvider>> contentProviders = this::builtinContentProviders;
 
@@ -141,13 +139,12 @@ public class ViewportRenderPipeline implements ViewerPass {
         this.gizmoRenderer = gizmoRenderer;
         this.knifePreviewRenderer = new KnifePreviewRenderer();
         this.toolPreviewRenderer = new ToolPreviewRenderer();
-        this.sbtRenderer.initialize();
-        this.builtinContent = List.of(new SbtContent());
+        this.builtinContent = List.of();
     }
 
     /**
-     * The asset content this pipeline can draw besides the editable model (a .SBT sprite); the core
-     * registers it as viewport content (#431; game items are a plugin's own, #382).
+     * The asset content this pipeline draws itself besides the editable model: none since #88 (game
+     * content — items, a game's texture sprites — is a plugin's own viewport content, #382).
      */
     public List<ViewportContentProvider> builtinContentProviders() {
         return builtinContent;
@@ -339,42 +336,6 @@ public class ViewportRenderPipeline implements ViewerPass {
     }
 
     /**
-     * The selected .SBT texture as a voxelized sprite (mirrors the geometry that
-     * {@code SpriteVoxelizer} produces for in-game items).
-     */
-    private final class SbtContent implements ViewportContentProvider {
-        @Override
-        public String id() {
-            return "openmason.sbt";
-        }
-
-        @Override
-        public String label() {
-            return "SBT texture sprite";
-        }
-
-        @Override
-        public boolean ready() {
-            return renderingState.isSBTReady();
-        }
-
-        @Override
-        public void render(ViewportContentFrame frame) {
-            ShaderProgram shader = frame.matrixShader();
-            sbtRenderer.renderSBT(
-                    renderingState.getSelectedSbtPath(),
-                    shader.getProgramId(),
-                    shader.getUniformLocation("uMVPMatrix"),
-                    shader.getUniformLocation("uModelMatrix"),
-                    frame.viewProjection(),
-                    frame.modelMatrix(),
-                    shader.getUniformLocation("uUseTexture")
-            );
-            logger.trace("SBT rendered: {}", renderingState.getSelectedSbtPath());
-        }
-    }
-
-    /**
      * Render the editable model (.OMO) through the engine model renderer — the
      * draw path and preview lighting games use for entity models — so the viewport
      * shows the model as it will look in game.
@@ -466,7 +427,7 @@ public class ViewportRenderPipeline implements ViewerPass {
                 if (socketFrame == null) continue; // socket deleted — stale preview
                 Matrix4f model = new Matrix4f(transformState.getTransformMatrix()).mul(socketFrame);
                 var geometry = entry.getValue().asset()
-                        .geometryFor(com.openmason.engine.entity.sbe.SbeEntityAsset.DEFAULT_VARIANT);
+                        .geometryFor(com.openmason.engine.entity.model.EntityAsset.DEFAULT_VARIANT);
                 attachmentPreviewRenderer.render(shaderManager.modelRenderer(), geometry, model,
                         viewMatrix, projectionMatrix);
             }

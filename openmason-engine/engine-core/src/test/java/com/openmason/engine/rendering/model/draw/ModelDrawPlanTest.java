@@ -1,9 +1,9 @@
 package com.openmason.engine.rendering.model.draw;
 
-import com.openmason.engine.entity.sbe.MaterialImage;
-import com.openmason.engine.entity.sbe.SbeFace;
-import com.openmason.engine.entity.sbe.SbeModelGeometry;
-import com.openmason.engine.entity.sbe.SbePart;
+import com.openmason.engine.entity.model.MaterialImage;
+import com.openmason.engine.entity.model.EntityFace;
+import com.openmason.engine.entity.model.EntityGeometry;
+import com.openmason.engine.entity.model.EntityPart;
 import com.openmason.engine.rendering.model.IndexedDrawBatch;
 import org.joml.Vector3f;
 import org.junit.jupiter.api.Test;
@@ -22,17 +22,17 @@ class ModelDrawPlanTest {
 
     private static final MaterialImage IMAGE = new MaterialImage(1, 1, new byte[]{1, 2, 3, -1});
 
-    private static SbePart part(String id, SbeFace... faces) {
-        return new SbePart(id, id, null, new Vector3f(), new Vector3f(), new Vector3f(),
+    private static EntityPart part(String id, EntityFace... faces) {
+        return new EntityPart(id, id, null, new Vector3f(), new Vector3f(), new Vector3f(),
                 new Vector3f(1), List.of(faces));
     }
 
     @Test
     void entityPlanCoalescesWithinEachPartAndSkipsOnlyFacesWithoutAnImage() {
-        SbePart first = part("head", new SbeFace(0, 7, 0, 6), new SbeFace(1, 7, 6, 3),
-                new SbeFace(2, 99, 9, 3), new SbeFace(3, 7, 12, 6), new SbeFace(4, 8, 18, 3));
-        SbePart second = part("jaw", new SbeFace(5, 8, 21, 3));
-        var geometry = new SbeModelGeometry(new float[0], new float[0], new int[24],
+        EntityPart first = part("head", new EntityFace(0, 7, 0, 6), new EntityFace(1, 7, 6, 3),
+                new EntityFace(2, 99, 9, 3), new EntityFace(3, 7, 12, 6), new EntityFace(4, 8, 18, 3));
+        EntityPart second = part("jaw", new EntityFace(5, 8, 21, 3));
+        var geometry = new EntityGeometry(new float[0], new float[0], new int[24],
                 List.of(first, second), Map.of(7, IMAGE, 8, IMAGE, 123, IMAGE), 0, List.of());
 
         ModelDrawPlan plan = ModelDrawPlan.of(geometry);
@@ -49,9 +49,9 @@ class ModelDrawPlanTest {
 
     @Test
     void entityPlanKeepsSparseOutOfOrderRangesInAuthoredOrder() {
-        SbePart sparse = part("sparse", new SbeFace(0, -1, 9, 3), new SbeFace(1, -1, 0, 3),
-                new SbeFace(2, -1, 6, 3));
-        var geometry = new SbeModelGeometry(new float[0], new float[0], new int[12],
+        EntityPart sparse = part("sparse", new EntityFace(0, -1, 9, 3), new EntityFace(1, -1, 0, 3),
+                new EntityFace(2, -1, 6, 3));
+        var geometry = new EntityGeometry(new float[0], new float[0], new int[12],
                 List.of(sparse), Map.of(), 0, List.of());
 
         ModelDrawPlan plan = ModelDrawPlan.of(geometry);
@@ -63,15 +63,15 @@ class ModelDrawPlanTest {
 
     @Test
     void entityPlanRejectsRangesBeyondTheIndexBuffer() {
-        var geometry = new SbeModelGeometry(new float[0], new float[0], new int[3],
-                List.of(part("bad", new SbeFace(0, 1, 0, 6))), Map.of(1, IMAGE), 0, List.of());
+        var geometry = new EntityGeometry(new float[0], new float[0], new int[3],
+                List.of(part("bad", new EntityFace(0, 1, 0, 6))), Map.of(1, IMAGE), 0, List.of());
         assertThrows(IllegalArgumentException.class, () -> ModelDrawPlan.of(geometry));
     }
 
     @Test
     void unknownPartIndexDrawsNothing() {
-        var geometry = new SbeModelGeometry(new float[0], new float[0], new int[3],
-                List.of(part("one", new SbeFace(0, 1, 0, 3))), Map.of(1, IMAGE), 0, List.of());
+        var geometry = new EntityGeometry(new float[0], new float[0], new int[3],
+                List.of(part("one", new EntityFace(0, 1, 0, 3))), Map.of(1, IMAGE), 0, List.of());
         ModelDrawPlan plan = ModelDrawPlan.of(geometry);
         assertTrue(plan.forPart(5).textured().isEmpty());
         assertTrue(plan.forPart(-1).untextured().isEmpty());

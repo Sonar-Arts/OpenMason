@@ -11,14 +11,14 @@ import java.util.List;
  * One "where should this go?" question for the in-app Save Sheet.
  *
  * @param kind                 what is being written (fixes the extension)
- * @param title                short human title ("Save .sbo — requested by Claude")
+ * @param title                short human title ("Save .omo — requested by Claude")
  * @param agentLabel           who is asking ("MCP client", "Assistant")
  * @param suggestedRoot        root pre-selected in the sheet (null = kind default)
  * @param suggestedSubdir      sub-folder pre-filled under that root ("" = root)
  * @param suggestedName        file name pre-filled (with or without extension)
  * @param detailLines          context lines shown under the title
  * @param overwriteTarget      when the agent named an existing file, that file
- * @param requiresPriorOmoSave true when the write is an SBO/SBE export of an
+ * @param requiresPriorOmoSave true when the write is a game asset export of an
  *                             unsaved model and the model will be saved first
  * @param timeout              how long the sheet may stay unanswered
  */

@@ -16,7 +16,7 @@ import java.util.Map;
  * GL-free winding / degeneracy / planarity validator for editable meshes.
  *
  * <p>SBO authoring history left shipped assets with mixed triangle winding
- * (see {@code SBONormalComputer}), so a face's cross-product normal cannot be
+ * (see {@code StampNormalComputer}), so a face's cross-product normal cannot be
  * trusted to point outward. This analyzer derives a geometric ground truth per
  * face and compares the loop-winding (Newell) normal against it:
  *
@@ -41,7 +41,7 @@ import java.util.Map;
  */
 public final class WindingAnalyzer {
 
-    /** Parity probes are capped like SBONormalComputer's parity walk. */
+    /** Parity probes are capped like StampNormalComputer's parity walk. */
     private static final int PARITY_TRIANGLE_LIMIT = 4096;
     /** Dead zone for the centroid-dot fallback (|cos| below this ⇒ INDETERMINATE). */
     private static final float DOT_DEAD_ZONE = 0.2f;

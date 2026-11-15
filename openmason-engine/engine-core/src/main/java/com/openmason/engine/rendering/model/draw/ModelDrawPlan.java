@@ -1,8 +1,8 @@
 package com.openmason.engine.rendering.model.draw;
 
-import com.openmason.engine.entity.sbe.SbeFace;
-import com.openmason.engine.entity.sbe.SbeModelGeometry;
-import com.openmason.engine.entity.sbe.SbePart;
+import com.openmason.engine.entity.model.EntityFace;
+import com.openmason.engine.entity.model.EntityGeometry;
+import com.openmason.engine.entity.model.EntityPart;
 import com.openmason.engine.rendering.model.IndexedDrawBatch;
 
 import java.util.ArrayList;
@@ -66,20 +66,20 @@ public final class ModelDrawPlan {
     }
 
     /**
-     * Plan for an entity model: one entry per {@link SbePart}, faces coalesced in
+     * Plan for an entity model: one entry per {@link EntityPart}, faces coalesced in
      * authored order (never sorted — coplanar and transparent faces keep their
      * draw order). A face whose material has no image skips the lit pass, as the
      * original entity renderer did; it still draws in the untextured list.
      *
      * @throws IllegalArgumentException if a face's index range exceeds the mesh
      */
-    public static ModelDrawPlan of(SbeModelGeometry geometry) {
+    public static ModelDrawPlan of(EntityGeometry geometry) {
         List<PartBatches> parts = new ArrayList<>(geometry.parts().size());
         Set<Integer> usedMaterials = new HashSet<>();
-        for (SbePart part : geometry.parts()) {
+        for (EntityPart part : geometry.parts()) {
             var textured = new IndexedDrawBatch.Builder();
             var untextured = new IndexedDrawBatch.Builder();
-            for (SbeFace face : part.faces()) {
+            for (EntityFace face : part.faces()) {
                 if ((long) face.indexStart() + face.indexCount() > geometry.indices().length) {
                     throw new IllegalArgumentException("Face index range exceeds mesh: " + face.faceId());
                 }

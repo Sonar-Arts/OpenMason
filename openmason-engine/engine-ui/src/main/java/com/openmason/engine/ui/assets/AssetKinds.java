@@ -8,7 +8,7 @@ import java.util.List;
  * File conventions per dependency kind. One layout is used everywhere a shared asset lives by
  * convention — project UI folder, packaged game resources, resource packs and archive
  * {@code assets/}: {@code <namespace>/<path><extension>}, so {@code stonebreak:ui/textures/panel}
- * is {@code stonebreak/ui/textures/panel.sbt}. Extensions are tried in the listed order, which
+ * is {@code stonebreak/ui/textures/panel.omt}. Extensions are tried in the listed order, which
  * makes convention lookup deterministic when two files would match.
  */
 public final class AssetKinds {
@@ -16,10 +16,13 @@ public final class AssetKinds {
     private AssetKinds() {
     }
 
-    /** Accepted file extensions for {@code kind}, preferred first. */
+    /**
+     * Accepted file extensions for {@code kind}, preferred first. Textures: every registered texture
+     * container (a game's OMT wrapper, #88, e.g. {@code .sbt}) before a bare {@code .omt}.
+     */
     public static List<String> extensions(Kind kind) {
         return switch (kind) {
-            case TEXTURE -> List.of(".sbt", ".omt");
+            case TEXTURE -> textureExtensions();
             case SPRITES -> List.of(".sprites.json");
             case IMAGE -> List.of(".png");
             case COMPONENT -> List.of(".omui");
@@ -28,6 +31,14 @@ public final class AssetKinds {
             case FONT -> List.of(".ttf", ".otf");
             case SOUND -> List.of(".ogg", ".wav");
         };
+    }
+
+    private static List<String> textureExtensions() {
+        List<String> out = new java.util.ArrayList<>(com.openmason.engine.format.spi.Formats.textureContainerExtensions());
+        if (!out.contains(".omt")) {
+            out.add(".omt");
+        }
+        return List.copyOf(out);
     }
 
     /** {@code stonebreak:ui/panel} → {@code stonebreak/ui/panel}. Safe because logical ids never contain dots-only segments. */

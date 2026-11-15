@@ -31,7 +31,8 @@ public final class MasonryPreviewPanel implements AutoCloseable {
 
     private static final Logger logger = LoggerFactory.getLogger(MasonryPreviewPanel.class);
     private static final int BACKDROP = 0xFF203040;
-    private static final String HEART = "/ui/shared/stonebreak/ui/hud/heart_full.sbt";
+    /** A packaged target texture to paint as a sample ({@code -Dopenmason.masonry.preview.texture=<resource>}). */
+    private static final String SAMPLE_TEXTURE = System.getProperty("openmason.masonry.preview.texture");
 
     private final ImBoolean visible = new ImBoolean(true);
     private final ImInt zoom = new ImInt(2);
@@ -100,7 +101,7 @@ public final class MasonryPreviewPanel implements AutoCloseable {
             dropdown.open();
         }
         dropdown.render(ui);
-        MTexture heart = TargetUi.targetTexture(HEART);
+        MTexture heart = SAMPLE_TEXTURE == null ? null : TargetUi.targetTexture(SAMPLE_TEXTURE);
         if (heart != null) {
             MPainter.drawImage(ui.canvas(), heart.image(), 200, 100, heart.width() * 2f, heart.height() * 2f);
         }

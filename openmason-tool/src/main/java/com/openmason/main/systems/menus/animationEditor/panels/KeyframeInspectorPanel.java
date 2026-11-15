@@ -80,7 +80,7 @@ public final class KeyframeInspectorPanel {
         if (ImGui.isItemDeactivatedAfterEdit()) {
             controller.setClipName(clipNameBuf.get());
         }
-        AnimUI.tooltip("Clip name. SBE/SBO states bind clips by this name; blank names are ignored.");
+        AnimUI.tooltip("Clip name. Asset states bind clips by this name; blank names are ignored.");
 
         if (!fpsActivePrev) fpsBuf.set(clip.fps());
         ImGui.inputFloat("FPS", fpsBuf, 1f, 5f, "%.1f");

@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * #90: the engine model renderer stays game-agnostic and format-neutral. No
  * compiled class in {@code rendering.model.draw} may refer to a game, the Open
  * Mason tool, the modeling module, or the SBE <em>file format</em> types (it
- * consumes the runtime {@code entity.sbe} model, which survives SBE moving to a
+ * consumes the runtime {@code entity.model} model, which survived SBE moving to a
  * plugin). Scans bytecode, so fully-qualified names and reflection strings count.
  */
 class ModelDrawBoundaryTest {

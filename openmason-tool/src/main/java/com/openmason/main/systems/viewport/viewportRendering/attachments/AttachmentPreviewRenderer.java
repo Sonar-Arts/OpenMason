@@ -1,6 +1,6 @@
 package com.openmason.main.systems.viewport.viewportRendering.attachments;
 
-import com.openmason.engine.entity.sbe.SbeModelGeometry;
+import com.openmason.engine.entity.model.EntityGeometry;
 import com.openmason.engine.rendering.model.draw.ModelLighting;
 import com.openmason.engine.rendering.model.draw.ModelRenderer;
 import com.openmason.engine.rendering.model.draw.PartMatrices;
@@ -15,7 +15,7 @@ import java.util.Map;
 
 /**
  * Draws "socket test" models in the tool viewport: a decoded accessory
- * ({@link SbeModelGeometry}, loaded via the game's attachable-asset pipeline)
+ * ({@link EntityGeometry}, loaded via the game's attachable-asset pipeline)
  * posed at a socket's world frame, so authors can adjust the socket live
  * against the model that will actually be attached in-game.
  *
@@ -34,7 +34,7 @@ public class AttachmentPreviewRenderer {
 
     private boolean initialized = false;
 
-    private final Map<SbeModelGeometry, UploadedModel> gpuByGeometry = new IdentityHashMap<>();
+    private final Map<EntityGeometry, UploadedModel> gpuByGeometry = new IdentityHashMap<>();
 
     public void initialize() {
         initialized = true;
@@ -49,7 +49,7 @@ public class AttachmentPreviewRenderer {
      * world frame — position, orientation, AND scale — composed with the
      * viewport's model-level transform by the caller).
      */
-    public void render(ModelRenderer renderer, SbeModelGeometry geometry, Matrix4f modelMatrix,
+    public void render(ModelRenderer renderer, EntityGeometry geometry, Matrix4f modelMatrix,
                        Matrix4f viewMatrix, Matrix4f projectionMatrix) {
         if (!initialized || renderer == null || geometry == null || geometry.indices().length == 0) {
             return;

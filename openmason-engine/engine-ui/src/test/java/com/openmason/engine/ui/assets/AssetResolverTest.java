@@ -93,19 +93,19 @@ class AssetResolverTest {
         ProjectFolder folder = new ProjectFolder(tmp);
         ProjectAssetSource project = new ProjectAssetSource(folder, CONVENTION_DIR);
         UiBytes tex = bytes("tex");
-        folder.write("UI/stonebreak/ui/textures/panel.sbt", tex);
-        OmuiArchive doc = screenUsing("stonebreak:ui/s", UiSamples.PANEL_TEXTURE_ID, tex, "gone/panel.sbt");
+        folder.write("UI/stonebreak/ui/textures/panel.omt", tex);
+        OmuiArchive doc = screenUsing("stonebreak:ui/s", UiSamples.PANEL_TEXTURE_ID, tex, "gone/panel.omt");
 
         ResolvedAsset a = AssetResolver.forDocument(doc, List.of(project)).resolveAll().get(UiSamples.PANEL_TEXTURE_ID);
 
-        assertEquals("UI/stonebreak/ui/textures/panel.sbt", a.location());
+        assertEquals("UI/stonebreak/ui/textures/panel.omt", a.location());
     }
 
     @Test
     void firstSourceOwnsAnIdAndShadowedCopiesAreVisible() throws Exception {
         ProjectAssetSource project = pauseProject(tmp.resolve("p"));
         MountedAssetSource packaged = MountedAssetSource.packaged("ui/shared/",
-                memory(Map.of("ui/shared/stonebreak/ui/textures/panel.sbt", bytes("packaged panel"))));
+                memory(Map.of("ui/shared/stonebreak/ui/textures/panel.omt", bytes("packaged panel"))));
         AssetResolver resolver = AssetResolver.forDocument(UiSamples.pauseMenu(), List.of(project, packaged));
 
         assertEquals(AssetOrigin.PROJECT, resolver.resolveAll().get(UiSamples.PANEL_TEXTURE_ID).origin());
@@ -132,7 +132,7 @@ class AssetResolverTest {
         ProjectFolder folder = new ProjectFolder(tmp);
         ProjectAssetSource project = new ProjectAssetSource(folder, "");
         UiBytes plain = bytes("plain");
-        folder.write("stonebreak/ui/textures/plain.sbt", plain);
+        folder.write("stonebreak/ui/textures/plain.omt", plain);
         OmuiArchive doc = screenUsing("stonebreak:ui/s", "stonebreak:ui/textures/fancy", bytes("fancy"), null);
         UiDependency fancy = doc.dependencies().find("stonebreak:ui/textures/fancy");
         doc = withRow(doc, with(fancy, List.of(), true, "stonebreak:ui/textures/plain"));
@@ -147,7 +147,7 @@ class AssetResolverTest {
         // a ↔ b optional fallback loop with neither present
         OmuiArchive loop = withRow(doc, with(doc.dependencies().find("stonebreak:ui/textures/plain"), List.of(), true,
                 "stonebreak:ui/textures/fancy"));
-        folder.delete("stonebreak/ui/textures/plain.sbt");
+        folder.delete("stonebreak/ui/textures/plain.omt");
         Resolution looped = AssetResolver.forDocument(loop, List.of(project)).resolveAll();
         assertTrue(looped.diagnostics().stream().anyMatch(d -> d.code() == Code.DEPENDENCY_CYCLE));
     }
@@ -161,7 +161,7 @@ class AssetResolverTest {
         root.put("ui/shared/stonebreak/ui/themes/stone.uss.json", UiBytes.copyOf(UiSamples.THEME_BYTES));
         root.put("ui/shared/stonebreak/ui/scripts/common.lua", UiBytes.copyOf(UiSamples.COMMON_LUA_BYTES));
         // In the default root too: must NOT be used for a row that names a pack.
-        root.put("ui/shared/stonebreak/ui/textures/panel.sbt", bytes("wrong root copy"));
+        root.put("ui/shared/stonebreak/ui/textures/panel.omt", bytes("wrong root copy"));
         MountedAssetSource packaged = MountedAssetSource.packaged("ui/shared/", memory(root));
 
         Resolution unmounted = AssetResolver.forExport(sbui, List.of(packaged)).resolveAll();
@@ -169,7 +169,7 @@ class AssetResolverTest {
         assertTrue(unmounted.diagnostics().stream().anyMatch(d -> d.message().contains("not mounted")));
 
         MountedAssetSource pack = MountedAssetSource.pack("stonebreak:ui-core", memory(Map.of(
-                "stonebreak/ui/textures/panel.sbt", UiBytes.copyOf(UiSamples.PANEL_TEXTURE_BYTES))));
+                "stonebreak/ui/textures/panel.omt", UiBytes.copyOf(UiSamples.PANEL_TEXTURE_BYTES))));
         Resolution r = AssetResolver.forExport(sbui, List.of(packaged, pack)).resolveAll();
         assertTrue(r.complete(), r.diagnostics()::toString);
         assertEquals(AssetOrigin.PACK, r.get(UiSamples.PANEL_TEXTURE_ID).origin());
@@ -180,12 +180,12 @@ class AssetResolverTest {
     @Test
     void projectFolderRefusesEscapingAndUnportablePaths() throws IOException {
         ProjectFolder folder = new ProjectFolder(tmp);
-        for (String bad : List.of("../outside.sbt", "/abs.sbt", "a/./b.sbt", "C:/x.sbt", "a\\b.sbt", ".hidden/x")) {
+        for (String bad : List.of("../outside.omt", "/abs.omt", "a/./b.omt", "C:/x.omt", "a\\b.omt", ".hidden/x")) {
             assertThrows(IOException.class, () -> folder.read(bad), bad);
             assertFalse(folder.exists(bad));
         }
         assertNull(folder.relativize(tmp.getParent()));
-        assertEquals("a/b.sbt", folder.relativize(tmp.resolve("a").resolve("b.sbt")));
+        assertEquals("a/b.omt", folder.relativize(tmp.resolve("a").resolve("b.omt")));
     }
 
     @Test

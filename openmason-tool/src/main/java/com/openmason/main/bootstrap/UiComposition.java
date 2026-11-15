@@ -541,12 +541,8 @@ public final class UiComposition {
                     animationEditor.confirmDiscardThen(() -> controller.importClipBytes(bytes, label));
                 },
                 () -> controller.state().clip().name());
-        if (mainInterface.getSBEEditorWindow() != null) {
-            mainInterface.getSBEEditorWindow().setAnimationBridge(bridge);
-        }
-        if (mainInterface.getSBOEditorWindow() != null) {
-            mainInterface.getSBOEditorWindow().setAnimationBridge(bridge);
-        }
+        // Asset kinds whose states carry clips (a game plugin's editors, #88) read it from here.
+        mainInterface.getServices().put(com.openmason.main.systems.menus.dialogs.AnimationClipBridge.class, bridge);
     }
 
     private void setWindowHandles() {

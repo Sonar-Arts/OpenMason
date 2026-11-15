@@ -42,7 +42,7 @@ module openmason.engine.core {
     exports com.openmason.engine.cearl;
     exports com.openmason.engine.cenda;
     exports com.openmason.engine.diagnostics;
-    exports com.openmason.engine.entity.sbe;
+    exports com.openmason.engine.entity.model;
     exports com.openmason.engine.format.ext;
     exports com.openmason.engine.format.fx;
     exports com.openmason.engine.format.mesh;
@@ -50,10 +50,8 @@ module openmason.engine.core {
     exports com.openmason.engine.format.omo;
     exports com.openmason.engine.format.omsc;
     exports com.openmason.engine.format.omt;
-    exports com.openmason.engine.format.sbe;
-    exports com.openmason.engine.format.sbo;
-    exports com.openmason.engine.format.sbt;
     exports com.openmason.engine.format.sound;
+    exports com.openmason.engine.format.spi;
     exports com.openmason.engine.input;
     exports com.openmason.engine.loop;
     exports com.openmason.engine.net.client;
@@ -83,11 +81,13 @@ module openmason.engine.core {
     exports com.openmason.engine.vram;
     exports com.openmason.engine.wayfind;
 
+    // Format plugin points (#88): whole formats, texture containers and entity model importers are a
+    // game's (its module provides them); the engine ships no game format.
+    uses com.openmason.engine.format.spi.FormatCodec;
+    uses com.openmason.engine.format.spi.TextureDecoder;
+
     // Open format packages for Jackson JSON processing
-    opens com.openmason.engine.format.sbo to com.fasterxml.jackson.databind;
-    opens com.openmason.engine.format.sbe to com.fasterxml.jackson.databind;
     opens com.openmason.engine.format.sound to com.fasterxml.jackson.databind;
-    opens com.openmason.engine.format.sbt to com.fasterxml.jackson.databind;
     opens com.openmason.engine.format.omo to com.fasterxml.jackson.databind;
     opens com.openmason.engine.format.omt to com.fasterxml.jackson.databind;
 }

@@ -1,7 +1,7 @@
 package com.openmason.main.systems.skeleton;
 
-import com.openmason.engine.entity.sbe.SbeEntityLoader;
-import com.openmason.engine.entity.sbe.SbeEntityAsset;
+import com.openmason.engine.entity.model.EntityModelLoader;
+import com.openmason.engine.entity.model.EntityAsset;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -12,19 +12,19 @@ import java.util.concurrent.ConcurrentHashMap;
  * authors can see what an accessory will look like mounted on a socket and
  * adjust the socket's position/rotation/scale live against it.
  *
- * <p>Assets are decoded via the game's {@code SbeEntityLoader.loadAttachable}
+ * <p>Assets are decoded via the game's {@code EntityModelLoader.loadAttachable}
  * (GL-free), so the preview shows exactly the geometry/textures the game would
  * mount. Rendering is {@code AttachmentPreviewRenderer}'s job.
  */
 public final class AttachmentPreviewStore {
 
     /** One active preview: display label (file name) + the decoded asset. */
-    public record Preview(String label, SbeEntityAsset asset) {}
+    public record Preview(String label, EntityAsset asset) {}
 
     private final Map<String, Preview> bySocketId = new ConcurrentHashMap<>();
 
     /** Set (or replace) the test model previewed on a socket. */
-    public void set(String socketId, String label, SbeEntityAsset asset) {
+    public void set(String socketId, String label, EntityAsset asset) {
         bySocketId.put(socketId, new Preview(label, asset));
     }
 

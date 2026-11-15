@@ -1,11 +1,10 @@
 package com.openmason.main.systems.menus.dialogs;
 
-import com.openmason.engine.format.sbo.SBOFormat;
 import imgui.ImGui;
 import imgui.type.ImInt;
 
 /**
- * Small shared ImGui idioms for the SBO/SBE editor sub-sections, so every tab
+ * Small shared ImGui idioms for the asset editor sub-sections, so every tab
  * formats sizes and asset slots the same way instead of each section carrying
  * its own copy. Status colors, destructive/primary buttons, inline errors and
  * section labels live in {@link com.openmason.main.systems.themes.utils.ThemedWidgets}.
@@ -28,13 +27,13 @@ public final class EditorWidgets {
     /** Button that opens the list of numeric / object IDs already in use. */
     public static final String TAKEN_IDS_LABEL = "Taken IDs...";
 
-    /** Loop-mode labels; index-aligned with {@link SBOFormat.LoopMode#values()}. */
+    /** Loop-mode labels (clip default / loop / play once), index-aligned with a game format's loop modes. */
     public static final String[] LOOP_MODE_LABELS = { "Clip default", "Loop", "Play once" };
 
     private EditorWidgets() {
     }
 
-    /** "No SBO loaded." style empty-state line shared by both editors. */
+    /** "No <kind> loaded." style empty-state line shared by both editors. */
     public static String emptyEditorText(String kind) {
         return "No " + kind + " loaded. Use \"Open Different " + kind + "...\" above, "
                 + "or Tools > " + kind + " Editor...";
