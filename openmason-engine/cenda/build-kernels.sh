@@ -156,4 +156,17 @@ if [[ -f "$ENTITY_HEADER" && -f "$ENTITY_BINDING" ]]; then
   fi
 fi
 
+# Physics (cp_*, #117) has no Java fallback either: PhysicsWorld.create throws with this diagnostic.
+PHYSICS_HEADER="$HERE/native/kernels/include/cenda/physics.h"
+PHYSICS_BINDING="$HERE/../engine-core/src/main/java/com/openmason/engine/physics/CendaPhysics.java"
+if [[ -f "$PHYSICS_HEADER" && -f "$PHYSICS_BINDING" ]]; then
+  NATIVE_CP="$(sed -n 's/^#define CP_ABI_VERSION[[:space:]]\+\([0-9]\+\).*/\1/p' "$PHYSICS_HEADER" | head -1)"
+  JAVA_CP="$(sed -n 's/.*EXPECTED_ABI[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' "$PHYSICS_BINDING" | head -1)"
+  if [[ -n "$NATIVE_CP" && -n "$JAVA_CP" && "$NATIVE_CP" != "$JAVA_CP" ]]; then
+    echo "[cenda] ERROR: physics ABI mismatch: physics.h exports $NATIVE_CP but CendaPhysics.EXPECTED_ABI is $JAVA_CP." >&2
+    echo "[cenda] ERROR: physics has no fallback; fix one side to match. Launch stopped." >&2
+    exit 1
+  fi
+fi
+
 echo "[cenda] kernels ready: $LIB"

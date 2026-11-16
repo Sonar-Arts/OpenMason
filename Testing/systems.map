@@ -34,6 +34,7 @@ particles	openmason-engine/engine-core	com/openmason/engine/rendering/particles/
 ui-program	openmason-engine/engine-ui	com/openmason/engine/ui/**/*Test,!com/openmason/engine/ui/cenda/**,!com/openmason/engine/ui/boundary/**
 audio	openmason-engine/engine-core	com/openmason/engine/audio/**/*Test
 entities	openmason-engine/engine-core	com/openmason/engine/entity/**/*Test
+physics	openmason-engine/engine-core	com/openmason/engine/physics/**/*Test
 platform	openmason-engine/engine-core	com/openmason/engine/input/**/*Test,com/openmason/engine/loop/**/*Test
 platform	openmason-engine/engine-platform	com/openmason/engine/platform/**/*Test,!com/openmason/engine/platform/boundary/**
 boundaries	openmason-engine/engine-core	com/openmason/engine/boundary/**/*Test

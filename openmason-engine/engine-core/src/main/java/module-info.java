@@ -61,6 +61,7 @@ module openmason.engine.core {
     exports com.openmason.engine.net.protocol.codec;
     exports com.openmason.engine.net.server;
     exports com.openmason.engine.net.transport;
+    exports com.openmason.engine.physics;
     exports com.openmason.engine.rendering;
     exports com.openmason.engine.rendering.api;
     exports com.openmason.engine.rendering.blockdisplay;
