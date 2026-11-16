@@ -9,6 +9,16 @@ if(CENDA_BUILD_KERNELS)
     foreach(_test IN LISTS _kernel_tests)
         add_executable(${_test} ${_test}_test.cpp)
         target_link_libraries(${_test} PRIVATE cenda_kernels cenda_warnings)
+        # Same float rule as the library (native/kernels/CMakeLists.txt): the tests check kernel
+        # results bit-for-bit against reference math written in the test (entity_world's nearest =
+        # sqrt(dx*dx + (dy*dy + dz*dz))). Where the compiler may fuse a*b+c into an FMA (ARM, macOS,
+        # FMA-enabled x86 builds) the test's own reference rounds differently and the checks fail
+        # although the library is right. Contraction off keeps both sides on plain IEEE ops.
+        if(MSVC)
+            target_compile_options(${_test} PRIVATE /fp:precise)
+        else()
+            target_compile_options(${_test} PRIVATE -ffp-contract=off)
+        endif()
         add_test(NAME ${_test} COMMAND ${_test})
     endforeach()
 
