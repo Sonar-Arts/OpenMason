@@ -35,8 +35,7 @@ class UiBoundaryTest {
     /** Package prefixes owned by the voxel module ({@code openmason.engine.voxel}). */
     static final List<String> VOXEL = List.of(
             "com/openmason/engine/voxel/", "com.openmason.engine.voxel.",
-            "com/openmason/engine/net/replication/", "com.openmason.engine.net.replication.",
-            "com/openmason/engine/wayfind/voxel/", "com.openmason.engine.wayfind.voxel.");
+            "com/openmason/engine/net/replication/", "com.openmason.engine.net.replication.");
 
     /** Package prefixes owned by the modeling module ({@code openmason.engine.modeling}, #91). */
     static final List<String> MODELING = List.of(

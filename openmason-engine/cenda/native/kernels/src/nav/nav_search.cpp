@@ -1,4 +1,4 @@
-// Wayfind in C++ (see nav_search.hpp). Each part names the Java class it ports; the arithmetic is
+// Wayfind in C++ (see nav_search.hpp). Each part names the retired Java class it ports; the arithmetic is
 // written in the same order and the same float/int types so results match bit for bit (the library
 // builds with -ffp-contract=off: no fused multiply-adds).
 

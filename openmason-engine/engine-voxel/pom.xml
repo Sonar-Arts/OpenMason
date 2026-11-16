@@ -15,7 +15,7 @@
 
     <name>OpenMason Engine Voxel</name>
     <description>Voxel abstractions, CCO chunk data, the MMS mesher/region renderer, voxel lighting, the SBO stamp
-        renderer, Wayfind voxel domains and voxel replication (#387).</description>
+        renderer and voxel replication (#387).</description>
 
     <dependencies>
         <dependency>

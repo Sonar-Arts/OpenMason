@@ -36,8 +36,7 @@ class ModelingBoundaryTest {
     /** Package prefixes owned by the voxel module ({@code openmason.engine.voxel}). */
     static final List<String> VOXEL = List.of(
             "com/openmason/engine/voxel/", "com.openmason.engine.voxel.",
-            "com/openmason/engine/net/replication/", "com.openmason.engine.net.replication.",
-            "com/openmason/engine/wayfind/voxel/", "com.openmason.engine.wayfind.voxel.");
+            "com/openmason/engine/net/replication/", "com.openmason.engine.net.replication.");
 
     @Test
     void engineModelingNeverReferencesTheGameTheToolOrTheOtherEngineModules() throws Exception {

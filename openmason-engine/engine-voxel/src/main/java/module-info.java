@@ -1,6 +1,6 @@
 /**
  * Open Mason engine voxel stack (#387): the voxel abstractions, CCO chunk data, the MMS mesher and region
- * renderer, voxel lighting, the SBO stamp renderer, Wayfind's voxel navigation domains, and voxel replication
+ * renderer, voxel lighting, the SBO stamp renderer and voxel replication
  * on the wire ({@code net.replication}, {@code voxel.net}: VoxelChunkCodec, ChunkBlockPayload).
  * Builds on {@code openmason.engine.core} only.
  */
@@ -30,5 +30,4 @@ module openmason.engine.voxel {
     exports com.openmason.engine.voxel.net;
     exports com.openmason.engine.voxel.stamp;
     exports com.openmason.engine.voxel.stamp.render;
-    exports com.openmason.engine.wayfind.voxel;
 }

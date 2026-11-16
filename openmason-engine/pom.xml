@@ -2,7 +2,7 @@
 <!-- The Open Mason engine, split into focused modules (#387, epic #390 P6):
        engine-core   formats, rendering, audio, net core, CEARL/VRAM, diagnostics, util, generic Cenda
        engine-ui     OMUI/SBUI runtime + Masonry + the Cenda Lua/Flex hosts      (requires core)
-       engine-voxel  CCO, MMS, voxel lighting, SBO stamps, Wayfind voxel, replication (requires core)
+       engine-voxel  CCO, MMS, voxel lighting, SBO stamps, replication (requires core)
        engine-modeling  GMR (editable mesh, edit ops, topology, UV) + the model viewer   (requires core, #91)
        engine-platform  window, input devices, frame loop over GLFW                       (requires core + ui, #96)
      JPMS enforces the boundaries: core reads no other engine module, and ui, voxel and modeling never read

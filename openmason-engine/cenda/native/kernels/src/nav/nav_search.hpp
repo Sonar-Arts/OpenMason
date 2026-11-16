@@ -1,9 +1,8 @@
 // Wayfind in C++: A* plus the ground and air domains, over cells read from the physics cache.
-// Engine-internal (the ABI is include/cenda/nav.h). A port of the engine's Java Wayfind
-// (com.openmason.engine.wayfind.AStar, wayfind.voxel.{GroundNavDomain, AirNavDomain, NavCellCache,
-// NavNodes, PathSmoother}) — same float arithmetic, same successor order, same tie-breaks — so a
-// route found here is the route the Java core finds over the same cells (pinned by
-// NavParityTest in engine-voxel).
+// Engine-internal (the ABI is include/cenda/nav.h). A port of the engine's retired Java Wayfind (AStar,
+// GroundNavDomain, AirNavDomain, NavCellCache, NavNodes, PathSmoother) — same float arithmetic, same
+// successor order, same tie-breaks — pinned route for route against what that core produced by
+// engine-core NavGoldenRoutesTest, and rule by rule by NavRulesTest.
 #pragma once
 
 #include "cenda/nav.h"

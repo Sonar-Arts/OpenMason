@@ -1,6 +1,6 @@
 // Cenda navigation (cn_*) conformance: cells from the physics cache, ground and air searches, the
 // service (queue, budget, refusal, release), ground and air agents, probes and steering helpers.
-// Route-for-route parity with the Java Wayfind core is pinned in engine-voxel (NavParityTest).
+// Route-for-route parity with the retired Java Wayfind core is pinned in engine-core (NavGoldenRoutesTest).
 
 #include "cenda/nav.h"
 

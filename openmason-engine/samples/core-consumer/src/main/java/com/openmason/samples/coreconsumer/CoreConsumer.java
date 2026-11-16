@@ -2,37 +2,68 @@ package com.openmason.samples.coreconsumer;
 
 import com.openmason.engine.cenda.CendaKernels;
 import com.openmason.engine.net.protocol.codec.WireCompression;
-import com.openmason.engine.wayfind.AStar;
-import com.openmason.engine.wayfind.SearchDomain;
-import com.openmason.engine.wayfind.SearchResult;
+import com.openmason.engine.nav.CendaNav;
+import com.openmason.engine.nav.GroundProfile;
+import com.openmason.engine.nav.NavLimits;
+import com.openmason.engine.nav.NavWorld;
+import com.openmason.engine.physics.CendaPhysics;
+import com.openmason.engine.physics.PhysicsWorld;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 
 import java.util.Arrays;
 
 /**
- * Uses a slice of {@code openmason.engine.core} the way an unrelated game would: Wayfind routes around a
- * wall on a small grid, the wire codec round-trips a payload, and the native noise kernels sample a grid
- * when the Cenda library is built. Nothing here needs the UI runtime, the voxel stack or Skija (#387).
+ * Uses a slice of {@code openmason.engine.core} the way an unrelated game would: native navigation
+ * ({@code com.openmason.engine.nav} over a {@code PhysicsWorld}) routes around a wall on a small floor,
+ * the wire codec round-trips a payload, and the native noise kernels sample a grid. The native parts
+ * run when the Cenda library is built. Nothing here needs the UI runtime, the voxel stack or Skija (#387).
  */
 public final class CoreConsumer {
 
-    /** What one run produced, so a test can check it without parsing output. */
-    public record Report(int pathLength, float pathCost, boolean payloadRoundTripped, String noise) {}
+    /**
+     * What one run produced, so a test can check it without parsing output. The route fields are -1 /
+     * false when the native library is not built.
+     */
+    public record Report(int waypoints, float pathCost, boolean routedThroughTheGap, boolean payloadRoundTripped,
+                         String noise) {}
 
     private CoreConsumer() {
     }
 
     public static void main(String[] args) {
         Report report = run();
-        System.out.println("path " + report.pathLength() + " nodes, cost " + report.pathCost());
+        System.out.println("route " + report.waypoints() + " waypoints, cost " + report.pathCost()
+            + (report.routedThroughTheGap() ? ", through the gap" : ""));
         System.out.println("wire payload round-trip: " + report.payloadRoundTripped());
         System.out.println("noise: " + report.noise());
     }
 
     public static Report run() {
-        SearchResult path = new AStar().search(new WalledGrid(), WalledGrid.key(0, 0));
-        return new Report(path.length(), path.cost(), payloadRoundTrips(), sampleNoise());
+        if (!CendaPhysics.isAvailable() || !CendaNav.isAvailable()) {
+            return new Report(-1, -1f, false, payloadRoundTrips(), sampleNoise());
+        }
+        try (PhysicsWorld physics = PhysicsWorld.create(WalledFloor::fill, 4, 0, 0)) {
+            physics.defineShape(WalledFloor.BLOCK, new float[] {0, 0, 0, 1, 1, 1}, WalledFloor.SOLID, 0);
+            try (NavWorld nav = NavWorld.create(physics, WalledFloor.SOLID, 0, 0, 0, 16, 8)) {
+                GroundProfile walker = new GroundProfile(0.9f, 0, 0.5f, 1.125f, 1.5f, 3.0f, false, 3.0f, 8.0f,
+                    0.5f, 2.0f, 0.5f);
+                long id = nav.searchGround(new NavWorld.GroundQuery(0.5f, 1, 0.5f, 7.5f, 1, 0.5f, 0f, 4, 2, walker,
+                    new NavLimits(500, Float.MAX_VALUE, 1.0f)));
+                nav.step(Integer.MAX_VALUE);
+                NavWorld.Outcome route = nav.poll(id);
+                nav.release(id);
+                // The wall at x = 4 is open only at z = 7, so a route that got past it reached that row
+                // (straight runs are collapsed, so the gap itself need not be a waypoint).
+                boolean throughGap = route.reachedGoal();
+                float farthestZ = 0f;
+                for (int i = 0; i < route.path().size(); i++) {
+                    farthestZ = Math.max(farthestZ, route.path().z(i));
+                }
+                throughGap &= farthestZ >= 7.5f;
+                return new Report(route.path().size(), route.cost(), throughGap, payloadRoundTrips(), sampleNoise());
+            }
+        }
     }
 
     private static boolean payloadRoundTrips() {
@@ -69,46 +100,30 @@ public final class CoreConsumer {
         }
     }
 
-    /** 8x8 four-connected grid with a wall at x = 4 except a gap at y = 7; goal (7, 0). */
-    static final class WalledGrid implements SearchDomain {
+    /** An 8x8 floor (y 0) with a wall at x = 4 except a gap at z = 7; walk from (0, 0) to (7, 0). */
+    static final class WalledFloor {
         static final int SIZE = 8;
-        private static final int[][] STEPS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        static final int SOLID = 1;
+        static final short BLOCK = 1;
 
-        static long key(int x, int y) {
-            return (long) y * SIZE + x;
+        private static boolean solid(int x, int y, int z) {
+            if (x < 0 || z < 0 || x >= SIZE || z >= SIZE) {
+                return false;
+            }
+            return y == 0 || (x == 4 && z != SIZE - 1 && (y == 1 || y == 2));
         }
 
-        private static boolean open(int x, int y) {
-            return x >= 0 && y >= 0 && x < SIZE && y < SIZE && (x != 4 || y == SIZE - 1);
-        }
-
-        @Override
-        public int successors(long node, long[] outNodes, float[] outCosts) {
-            int x = (int) (node % SIZE);
-            int y = (int) (node / SIZE);
-            int n = 0;
-            for (int[] s : STEPS) {
-                if (open(x + s[0], y + s[1])) {
-                    outNodes[n] = key(x + s[0], y + s[1]);
-                    outCosts[n++] = 1f;
+        static boolean fill(int x0, int y0, int z0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
+            for (int y = 0; y < sy; y++) {
+                for (int z = 0; z < sz; z++) {
+                    for (int x = 0; x < sx; x++) {
+                        if (solid(x0 + x, y0 + y, z0 + z)) {
+                            shapes[(y * sz + z) * sx + x] = BLOCK;
+                        }
+                    }
                 }
             }
-            return n;
-        }
-
-        @Override
-        public float heuristic(long node) {
-            return Math.abs(7 - (int) (node % SIZE)) + (int) (node / SIZE);
-        }
-
-        @Override
-        public boolean isGoal(long node) {
-            return node == key(7, 0);
-        }
-
-        @Override
-        public int maxSuccessors() {
-            return 4;
+            return true;
         }
     }
 }

@@ -82,7 +82,6 @@ module openmason.engine.core {
     exports com.openmason.engine.util;
     exports com.openmason.engine.util.easing;
     exports com.openmason.engine.vram;
-    exports com.openmason.engine.wayfind;
 
     // Format plugin points (#88): whole formats, texture containers and entity model importers are a
     // game's (its module provides them); the engine ships no game format.
