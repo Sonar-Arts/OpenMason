@@ -142,4 +142,18 @@ if [[ -f "$AUDIO_HEADER" && -f "$AUDIO_BINDING" ]]; then
   fi
 fi
 
+# The entity model (ce_*, #114) has no Java fallback either, and a game cannot run its
+# entities without it: EntityWorld.create throws with this same diagnostic.
+ENTITY_HEADER="$HERE/native/kernels/include/cenda/entity.h"
+ENTITY_BINDING="$HERE/../engine-core/src/main/java/com/openmason/engine/entity/CendaEntities.java"
+if [[ -f "$ENTITY_HEADER" && -f "$ENTITY_BINDING" ]]; then
+  NATIVE_CE="$(sed -n 's/^#define CE_ABI_VERSION[[:space:]]\+\([0-9]\+\).*/\1/p' "$ENTITY_HEADER" | head -1)"
+  JAVA_CE="$(sed -n 's/.*EXPECTED_ABI[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' "$ENTITY_BINDING" | head -1)"
+  if [[ -n "$NATIVE_CE" && -n "$JAVA_CE" && "$NATIVE_CE" != "$JAVA_CE" ]]; then
+    echo "[cenda] ERROR: entity ABI mismatch: entity.h exports $NATIVE_CE but CendaEntities.EXPECTED_ABI is $JAVA_CE." >&2
+    echo "[cenda] ERROR: the entity model has no fallback; fix one side to match. Launch stopped." >&2
+    exit 1
+  fi
+fi
+
 echo "[cenda] kernels ready: $LIB"

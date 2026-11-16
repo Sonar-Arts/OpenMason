@@ -103,7 +103,8 @@ add_library(cenda_kernels SHARED
         src/zstd_codec.cpp
         src/lua_host.cpp
         src/flex_host.cpp
-        src/audio/audio_engine.cpp)
+        src/audio/audio_engine.cpp
+        src/entity/entity_world.cpp)
 
 target_include_directories(cenda_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cenda_kernels
