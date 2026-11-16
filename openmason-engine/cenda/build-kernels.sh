@@ -169,4 +169,24 @@ if [[ -f "$PHYSICS_HEADER" && -f "$PHYSICS_BINDING" ]]; then
   fi
 fi
 
+# The behaviour scheduler (cb_*, #115) and navigation (cn_*, #116) have no Java fallback either:
+# BehaviorScheduler.create / NavWorld.create throw with these diagnostics.
+check_abi() { # name header define binding
+  local name="$1" header="$2" define="$3" binding="$4"
+  if [[ -f "$header" && -f "$binding" ]]; then
+    local native java
+    native="$(sed -n "s/^#define $define[[:space:]]\+\([0-9]\+\).*/\1/p" "$header" | head -1)"
+    java="$(sed -n 's/.*EXPECTED_ABI[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' "$binding" | head -1)"
+    if [[ -n "$native" && -n "$java" && "$native" != "$java" ]]; then
+      echo "[cenda] ERROR: $name ABI mismatch: $(basename "$header") exports $native but $(basename "$binding" .java).EXPECTED_ABI is $java." >&2
+      echo "[cenda] ERROR: $name has no fallback; fix one side to match. Launch stopped." >&2
+      exit 1
+    fi
+  fi
+}
+check_abi "behaviour scheduler" "$HERE/native/kernels/include/cenda/behavior.h" CB_ABI_VERSION \
+  "$HERE/../engine-core/src/main/java/com/openmason/engine/entity/CendaBehaviors.java"
+check_abi "navigation" "$HERE/native/kernels/include/cenda/nav.h" CN_ABI_VERSION \
+  "$HERE/../engine-core/src/main/java/com/openmason/engine/nav/CendaNav.java"
+
 echo "[cenda] kernels ready: $LIB"

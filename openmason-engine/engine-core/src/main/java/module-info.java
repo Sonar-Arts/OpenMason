@@ -55,6 +55,7 @@ module openmason.engine.core {
     exports com.openmason.engine.format.spi;
     exports com.openmason.engine.input;
     exports com.openmason.engine.loop;
+    exports com.openmason.engine.nav;
     exports com.openmason.engine.net.client;
     exports com.openmason.engine.net.pipeline;
     exports com.openmason.engine.net.protocol;

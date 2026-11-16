@@ -11,6 +11,7 @@
 //  - All geometry runs in double; bodies and hits are float at the ABI.
 
 #include "cenda/physics.h"
+#include "physics_internal.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1490,3 +1491,57 @@ int32_t cp_ray_boxes(const float origin[3], const float direction[3], float max_
 }
 
 } // extern "C"
+
+// ---- engine-internal access (physics_internal.hpp) --------------------------------------------
+
+namespace cenda::physics_detail {
+
+void begin(cp_world* world) {
+    begin_call(world);
+}
+
+bool CellView::read(int64_t x, int64_t y, int64_t z, uint16_t& shape, uint16_t& fluid) {
+    const int s = world_->shift;
+    int64_t bx = x >> s, by = y >> s, bz = z >> s;
+    uint64_t k = brick_key(bx, by, bz);
+    if (k != key_ || !known_) {
+        key_ = k;
+        brick_ = brick_at(world_, bx, by, bz);
+        known_ = true;
+    }
+    const Brick* brick = static_cast<const Brick*>(brick_);
+    if (brick == nullptr) {
+        shape = world_->unloaded_shape;
+        fluid = 0;
+        return false;
+    }
+    const int m = world_->mask_local;
+    const size_t ue = static_cast<size_t>(world_->edge);
+    size_t i = (static_cast<size_t>(y & m) * ue + static_cast<size_t>(z & m)) * ue + static_cast<size_t>(x & m);
+    shape = brick->shapes ? brick->shapes[i] : brick->uniform_shape;
+    fluid = brick->fluids ? brick->fluids[i] : brick->uniform_fluid;
+    return true;
+}
+
+float shape_top(const cp_world* world, uint16_t shape, uint32_t mask) {
+    const Shape* s = shape_of(world, shape);
+    if (s == nullptr || (s->category & mask) == 0u) return 0.0f;
+    float top = 0.0f;
+    for (uint32_t i = 0; i < s->count; ++i) {
+        // The whole cell [0,1]^2 overlaps every box (inclusive edges, as cp_cell_top).
+        if (s->boxes[i].max_y > top) top = s->boxes[i].max_y;
+    }
+    return top;
+}
+
+uint32_t shape_category(const cp_world* world, uint16_t shape) {
+    const Shape* s = shape_of(world, shape);
+    return s == nullptr ? 0u : s->category;
+}
+
+float fluid_surface(const cp_world* world, uint16_t fluid, uint32_t mask) {
+    const cp_fluid* f = fluid_of(world, fluid, mask);
+    return f == nullptr ? -1.0f : f->surface;
+}
+
+} // namespace cenda::physics_detail

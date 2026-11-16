@@ -209,6 +209,17 @@ public final class PhysicsWorld implements AutoCloseable {
         return world == null;
     }
 
+    /**
+     * The native {@code cp_world}, for engine bindings whose native code reads this world's cache
+     * (Cenda navigation, {@code com.openmason.engine.nav}). Owner thread; invalid once the world is
+     * closed (close those users first).
+     *
+     * @throws IllegalStateException when the world is closed
+     */
+    public MemorySegment nativeHandle() {
+        return w();
+    }
+
     private MemorySegment w() {
         MemorySegment current = world;
         if (current == null) {

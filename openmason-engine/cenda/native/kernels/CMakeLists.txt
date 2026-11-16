@@ -105,7 +105,11 @@ add_library(cenda_kernels SHARED
         src/flex_host.cpp
         src/audio/audio_engine.cpp
         src/entity/entity_world.cpp
-        src/physics/physics_world.cpp)
+        src/entity/behavior_scheduler.cpp
+        src/physics/physics_world.cpp
+        src/nav/nav_search.cpp
+        src/nav/nav_world.cpp
+        src/nav/nav_agents.cpp)
 
 target_include_directories(cenda_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cenda_kernels
