@@ -143,6 +143,10 @@ public:
     Searcher& operator=(const Searcher&) = delete;
 
     Route ground(const CellRules& rules, physics_detail::CellView& view, const GroundJob& job);
+    // Every cell reachable from the (snapped) start, cheapest first; see cn_reach_ground.
+    int32_t reach(const CellRules& rules, physics_detail::CellView& view, const int32_t start[3], int32_t snap_down,
+                  int32_t snap_up, int32_t radius, int32_t max_cells, float max_cost, const cn_ground_profile& profile,
+                  cn_reach_cell* out, int32_t cap);
     Route air(const CellRules& rules, physics_detail::CellView& view, const AirJob& job);
 
     struct Impl;

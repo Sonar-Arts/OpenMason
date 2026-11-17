@@ -407,6 +407,19 @@ float cn_probe_column_peak(cp_world* physics, float x, float z, float from_y, in
     return -std::numeric_limits<float>::infinity();
 }
 
+int32_t cn_reach_ground(cn_world* w, const cn_reach_query* q, cn_reach_cell* out, int32_t cap) {
+    if (w == nullptr || q == nullptr || !finite3(q->feet) || q->max_cells <= 0 || q->radius < 0
+        || !(q->max_cost > 0.0f) || !(q->profile.height > 0.0f)) {
+        return fail(CN_ERR_ARG, "bad reach query");
+    }
+    const int32_t start[3] = {ifloor(q->feet[0]), ifloor(q->feet[1] + 0.001f), ifloor(q->feet[2])};
+    if (!in_range(start[0], start[1], start[2])) return 0;
+    cenda::physics_detail::begin(w->rules.physics);
+    cenda::physics_detail::CellView view(w->rules.physics);
+    return w->searcher.reach(w->rules, view, start, q->snap_down, q->snap_up, q->radius, q->max_cells, q->max_cost,
+                             q->profile, out, cap);
+}
+
 int32_t cn_flood(cp_world* physics, const cn_flood_query* q, int32_t* out, int32_t cap) {
     if (physics == nullptr || q == nullptr || q->max_cells <= 0 || q->max_steps < 0 || q->max_steps >= (1 << 20)
         || q->max_y <= q->min_y) {

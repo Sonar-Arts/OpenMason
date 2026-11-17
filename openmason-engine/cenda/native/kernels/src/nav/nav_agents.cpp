@@ -183,6 +183,7 @@ bool jump_obstacle(const cn_steering* st, cp_world* physics, const Body& b, floa
     if (b.in_water) return stroke_over_shore(st, view, b, bx, by, bz, feet_y);
     const uint32_t mask = st->d.collide_mask;
     if (!blocks(view, bx, by, bz, mask)) return false;
+    if (st->d.step_height >= 1.0f) return false; // a whole block is a step to this body: no hop
     return !blocks(view, bx, by + 1, bz, mask) && !blocks(view, bx, by + 2, bz, mask);
 }
 
@@ -297,6 +298,14 @@ void follow(cn_ground_agent* a, cn_steering* st, cp_world* physics, Body& b, flo
     }
     if (horizontal < 1e-4f) {
         stop_moving(b.out);
+        return;
+    }
+    // A glider floating down onto the waypoint: hold over it rather than overshooting and circling
+    // back all the way down.
+    if ((in.flags & CN_BODY_GLIDING) != 0u && horizontal < a->d.waypoint_radius && !b.on_ground
+        && feet_y - a->path.y(a->cursor) >= a->d.waypoint_vertical_slack) {
+        stop_moving(b.out);
+        a->status = CN_AGENT_FOLLOWING;
         return;
     }
     steer_along(st, physics, b, dx / horizontal, dz / horizontal, a->speed_multiplier, dt, true);

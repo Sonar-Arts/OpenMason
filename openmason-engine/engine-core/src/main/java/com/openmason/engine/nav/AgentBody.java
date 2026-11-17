@@ -20,4 +20,9 @@ public final class AgentBody {
     /** How high a swim stroke carries it. */
     public float swimStrokeReach;
     public boolean onGround, inWater;
+    /**
+     * It floats down slowly (a glider): over a waypoint well below it, the agent holds it there to
+     * sink onto it instead of overshooting.
+     */
+    public boolean gliding;
 }

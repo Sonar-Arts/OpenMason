@@ -56,6 +56,37 @@ public final class NavWorld implements AutoCloseable {
                            float goalRadius, int goalSnapCells, AirProfile profile, NavLimits limits) {
     }
 
+    /**
+     * Cells a walker can reach ({@link #reachGround}), cheapest first: cell {@code i}'s feet cell,
+     * the index of the cell it was reached from ({@code -1} for the start), the height its feet rest
+     * at and its route cost. Walk {@code parent} back from any cell for the way there.
+     */
+    public record Reach(int count, int[] cells, int[] parents, float[] surfaces, float[] costs) {
+        public int x(int i) {
+            return cells[i * 3];
+        }
+
+        public int y(int i) {
+            return cells[i * 3 + 1];
+        }
+
+        public int z(int i) {
+            return cells[i * 3 + 2];
+        }
+
+        public int parent(int i) {
+            return parents[i];
+        }
+
+        public float surface(int i) {
+            return surfaces[i];
+        }
+
+        public float cost(int i) {
+            return costs[i];
+        }
+    }
+
     /** A finished search. */
     public record Outcome(int status, NavPath path, int expansions, float cost) {
         public boolean reachedGoal() {
@@ -221,6 +252,50 @@ public final class NavWorld implements AutoCloseable {
             throw rethrow(t);
         } finally {
             lifetime.readLock().unlock();
+        }
+    }
+
+    // ---- reach ------------------------------------------------------------------------------------
+
+    /**
+     * Every cell a walker standing at its feet can reach by the ground search's own moves (native
+     * {@code cn_reach_ground}): cheapest first, within {@code radius} columns of the start, at most
+     * {@code maxCells}, none costing more than {@code maxCost}. Synchronous, owner thread.
+     */
+    public Reach reachGround(float feetX, float feetY, float feetZ, int snapDown, int snapUp, int radius, int maxCells,
+                             float maxCost, GroundProfile profile) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment q = a.allocate(CendaNav.REACH_QUERY_BYTES, 8);
+            q.set(F32, 0, feetX);
+            q.set(F32, 4, feetY);
+            q.set(F32, 8, feetZ);
+            q.set(I32, 12, snapDown);
+            q.set(I32, 16, snapUp);
+            q.set(I32, 20, radius);
+            q.set(I32, 24, maxCells);
+            q.set(F32, 28, maxCost);
+            CendaNav.writeGroundProfile(q, 32, profile);
+            MemorySegment out = a.allocate(CendaNav.REACH_CELL_BYTES * Math.max(1, maxCells), 8);
+            int n = (int) CendaNav.REACH_GROUND.invokeExact(w(), q, out, maxCells);
+            if (n < 0) {
+                throw new IllegalArgumentException("cn_reach_ground: " + CendaNav.lastError());
+            }
+            int[] cells = new int[n * 3];
+            int[] parents = new int[n];
+            float[] surfaces = new float[n];
+            float[] costs = new float[n];
+            for (int i = 0; i < n; i++) {
+                long o = i * CendaNav.REACH_CELL_BYTES;
+                cells[i * 3] = out.get(I32, o);
+                cells[i * 3 + 1] = out.get(I32, o + 4);
+                cells[i * 3 + 2] = out.get(I32, o + 8);
+                parents[i] = out.get(I32, o + 12);
+                surfaces[i] = out.get(F32, o + 16);
+                costs[i] = out.get(F32, o + 20);
+            }
+            return new Reach(n, cells, parents, surfaces, costs);
+        } catch (Throwable t) {
+            throw rethrow(t);
         }
     }
 

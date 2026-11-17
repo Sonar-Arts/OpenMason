@@ -285,6 +285,41 @@ class NavWorldTest {
     }
 
     @Test
+    void reach_returns_the_walkable_cells_cheapest_first() {
+        NavWorld.Reach reach = nav.reachGround(0.5f, 64, 0.5f, 4, 2, 2, 1000, Float.MAX_VALUE, walker());
+        assertEquals(25, reach.count(), "5x5 columns of open floor");
+        assertEquals(-1, reach.parent(0));
+        assertEquals(0.0f, reach.cost(0));
+        for (int i = 1; i < reach.count(); i++) {
+            assertTrue(reach.parent(i) >= 0 && reach.parent(i) < i);
+            assertTrue(reach.cost(i) >= reach.cost(i - 1) - 1e-4f);
+            assertEquals(64.0f, reach.surface(i));
+        }
+    }
+
+    @Test
+    void a_body_that_steps_a_full_block_is_never_hopped() {
+        set(2, 64, 0, FULL, 0);
+        physics.invalidateAll();
+        AgentBody body = new AgentBody();
+        body.x = 1.5f;
+        body.y = 64.4f;
+        body.z = 0.5f;
+        body.legHeight = 0.4f;
+        body.halfWidth = 0.4f;
+        body.halfLength = 0.4f;
+        body.moveSpeed = 2.0f;
+        body.speedMultiplier = 1.0f;
+        body.onGround = true;
+        AgentApply out = new AgentApply();
+        try (NavSteering steering = NavSteering.create(new SteeringDesc(180.0f, 0.0f, 0.0f, 1.0f, 0.35f, 0.15f, 0.1f,
+                3, 0.0f, SOLID, 1.0f))) {
+            steering.steerAlong(physics, body, 1, 0, 1.0f, 0.1f, true, out);
+            assertFalse(out.jump());
+        }
+    }
+
+    @Test
     void a_closed_world_is_no_service() {
         nav.close();
         assertTrue(nav.isClosed());

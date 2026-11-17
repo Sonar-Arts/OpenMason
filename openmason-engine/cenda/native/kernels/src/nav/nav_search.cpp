@@ -777,6 +777,68 @@ Route Searcher::ground(const CellRules& rules, physics_detail::CellView& view, c
     return route;
 }
 
+int32_t Searcher::reach(const CellRules& rules, physics_detail::CellView& view, const int32_t start_cell[3],
+                        int32_t snap_down, int32_t snap_up, int32_t radius, int32_t max_cells, float max_cost,
+                        const cn_ground_profile& profile, cn_reach_cell* out, int32_t cap) {
+    Impl& s = *impl_;
+    s.cells.reset(&rules, &view);
+    // The goal is irrelevant (heuristic 0, never a goal): a uniform-cost flood over the ground moves.
+    GroundDomain domain(s.cells, profile, start_cell[0], start_cell[1], start_cell[2], -1.0f);
+    int64_t start = domain.snap_to_surface(start_cell[0], start_cell[1], start_cell[2], snap_down, snap_up);
+    if (start == kNoNode) return 0;
+    const int32_t sx = node_x(start), sz = node_z(start);
+
+    s.reset();
+    std::vector<int32_t> out_index; // node id -> settled index
+    const int32_t first = s.add_node(start, 0.0f, 0.0f, kNoParent, 1.0f);
+    s.push(first);
+    int32_t settled = 0;
+    while (s.heap_size > 0 && settled < max_cells) {
+        const int32_t current = s.pop();
+        const size_t uc = static_cast<size_t>(current);
+        if (out_index.size() <= uc) out_index.resize(uc + 1, -1);
+        if (out_index[uc] >= 0) continue; // settled already (a cheaper route reopened it)
+        out_index[uc] = settled;
+        const int64_t key = s.key[uc];
+        if (out != nullptr && settled < cap) {
+            cn_reach_cell& c = out[settled];
+            c.x = node_x(key);
+            c.y = node_y(key);
+            c.z = node_z(key);
+            const int32_t par = s.parent[uc];
+            c.parent = par == kNoParent ? -1 : out_index[static_cast<size_t>(par)];
+            const float surface = domain.surface_of(key);
+            c.surface = std::isnan(surface) ? static_cast<float>(c.y) : surface;
+            c.cost = s.g[uc];
+        }
+        ++settled;
+        const int32_t count = domain.successors(key, s.succ_nodes, s.succ_costs);
+        for (int32_t i = 0; i < count; ++i) {
+            const int64_t sk = s.succ_nodes[i];
+            if (std::abs(node_x(sk) - sx) > radius || std::abs(node_z(sk) - sz) > radius) continue;
+            const float tentative = s.g[uc] + s.succ_costs[i];
+            if (tentative > max_cost) continue;
+            int32_t successor = s.index.get(sk, kUnknownNode);
+            if (successor == kUnknownNode) {
+                successor = s.add_node(sk, tentative, 0.0f, current, 1.0f);
+                s.push(successor);
+            } else if (tentative + kRelaxEpsilon < s.g[static_cast<size_t>(successor)]) {
+                const size_t us = static_cast<size_t>(successor);
+                if (us < out_index.size() && out_index[us] >= 0) continue; // settled is final
+                s.g[us] = tentative;
+                s.f[us] = tentative;
+                s.parent[us] = current;
+                if (s.heap_pos[us] == kNotInHeap) {
+                    s.push(successor);
+                } else {
+                    s.sift_up(s.heap_pos[us]);
+                }
+            }
+        }
+    }
+    return settled;
+}
+
 Route Searcher::air(const CellRules& rules, physics_detail::CellView& view, const AirJob& job) {
     Route route;
     Impl& s = *impl_;

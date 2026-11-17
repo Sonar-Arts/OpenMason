@@ -340,6 +340,7 @@ cn_steering_desc steering_desc(float hop_boost = 2.0f) {
     d.max_shore_probe_cells = 3;
     d.model_yaw_offset = 180.0f;
     d.collide_mask = SOLID;
+    d.step_height = 0.5f;
     return d;
 }
 
@@ -613,6 +614,92 @@ void flood_reaches_face_neighbours_breadth_first() {
     cp_world_destroy(physics);
 }
 
+void a_full_block_stepper_never_hops() {
+    Fixture f;
+    f.tw.floor(63, -2, 4, -2, 2, FULL);
+    f.tw.set(2, 64, 0, FULL);
+    cn_steering_desc sd = steering_desc(3.0f);
+    sd.step_height = 1.0f;
+    cn_steering* st = cn_steering_create(&sd);
+    cn_body b = body_at(1.5f, 64.5f, 0.5f);
+    cn_apply out{};
+    CHECK(cn_steering_steer(st, f.physics, &b, 1.0f, 0.0f, 1.0f, 0.1f, 1, &out) == CN_OK);
+    CHECK((out.apply & CN_APPLY_JUMP) == 0u); // the step carries it up
+    CHECK(near(out.vx, 2.0f));
+    cn_steering_destroy(st);
+}
+
+void a_glider_holds_over_a_waypoint_below_it() {
+    Fixture f;
+    f.tw.floor(63, -2, 12, -2, 2, FULL);
+    cn_ground_agent_desc d = agent_desc();
+    d.profile.max_fall = 20.0f;
+    cn_steering_desc sd = steering_desc();
+    cn_steering* st = cn_steering_create(&sd);
+    // Floating 4 blocks up, right over the route's first waypoint (its own column).
+    cn_body b = body_at(0.5f, 68.5f, 0.5f);
+    b.flags = CN_BODY_GLIDING;
+    cn_ground_agent* a = cn_ground_agent_create(&d, b.x, b.y, b.z);
+    cn_agent_view v{};
+    cn_apply out{};
+    cn_ground_agent_move_to(a, 0.5f, 64.0f, 0.5f, 0.0f, 1.0f, &v);
+    cn_ground_agent_tick(a, st, f.nav, f.physics, &b, 0.05f, &out, &v);
+    cn_world_step(f.nav, 1 << 30);
+    // 0.3 off the waypoint horizontally and 4 above it: a glider holds and sinks onto it.
+    b.x = 0.2f;
+    cn_ground_agent_tick(a, st, f.nav, f.physics, &b, 0.05f, &out, &v);
+    CHECK(v.status == CN_AGENT_FOLLOWING && v.path_points == 1);
+    CHECK((out.apply & CN_APPLY_VELOCITY) != 0u && out.vx == 0.0f && out.vz == 0.0f);
+    CHECK((out.apply & CN_APPLY_YAW) == 0u); // held, not steered
+    // The same body without the flag steers at the waypoint.
+    b.flags = 0;
+    cn_ground_agent_tick(a, st, f.nav, f.physics, &b, 0.05f, &out, &v);
+    CHECK((out.apply & CN_APPLY_YAW) != 0u && out.vx > 0.0f);
+    cn_ground_agent_destroy(a);
+    cn_steering_destroy(st);
+}
+
+void reach_floods_the_ground_moves_cheapest_first() {
+    Fixture f;
+    f.tw.floor(63, 0, 8, 0, 8, FULL);
+    for (int z = 0; z <= 7; ++z) {          // a wall at x 4, open at z 8
+        f.tw.set(4, 64, z, FULL);
+        f.tw.set(4, 65, z, FULL);
+    }
+    cn_reach_query q{};
+    q.feet[0] = 0.5f; q.feet[1] = 64.0f; q.feet[2] = 0.5f;
+    q.snap_down = 4;
+    q.snap_up = 2;
+    q.radius = 16;
+    q.max_cells = 1000;
+    q.max_cost = 3.4e38f;
+    q.profile = walker();
+    std::vector<cn_reach_cell> cells(200);
+    int32_t n = cn_reach_ground(f.nav, &q, cells.data(), 200);
+    // 9x9 floor minus the 8 wall cells: 73 standable cells, all reachable through the gap.
+    CHECK(n == 73);
+    CHECK(cells[0].x == 0 && cells[0].z == 0 && cells[0].parent == -1 && cells[0].cost == 0.0f);
+    bool far_side = false, ordered = true;
+    for (int32_t i = 1; i < n; ++i) {
+        CHECK(cells[static_cast<size_t>(i)].parent >= 0 && cells[static_cast<size_t>(i)].parent < i);
+        if (cells[static_cast<size_t>(i)].cost < cells[static_cast<size_t>(i - 1)].cost - 1e-4f) ordered = false;
+        if (cells[static_cast<size_t>(i)].x == 8 && cells[static_cast<size_t>(i)].z == 0) {
+            far_side = true;
+            CHECK(cells[static_cast<size_t>(i)].cost > 16.0f); // round through the gap
+        }
+        CHECK(near(cells[static_cast<size_t>(i)].surface, 64.0f));
+    }
+    CHECK(ordered && far_side);
+    q.radius = 2;
+    CHECK(cn_reach_ground(f.nav, &q, cells.data(), 200) == 9); // columns 0..2 x 0..2
+    q.max_cells = 5;
+    CHECK(cn_reach_ground(f.nav, &q, cells.data(), 200) == 5);
+    q.feet[1] = 40.0f; // buried: nowhere to stand
+    CHECK(cn_reach_ground(f.nav, &q, cells.data(), 200) == 0);
+    q.max_cells = 0;
+    CHECK(cn_reach_ground(f.nav, &q, cells.data(), 200) == CN_ERR_ARG);
+}
+
 void bad_input() {
     CHECK(cn_world_create(nullptr) == nullptr);
     cn_world_desc d{};
@@ -640,6 +727,9 @@ int main() {
     probes_and_steering();
     steering_on_its_own();
     flood_reaches_face_neighbours_breadth_first();
+    a_full_block_stepper_never_hops();
+    a_glider_holds_over_a_waypoint_below_it();
+    reach_floods_the_ground_moves_cheapest_first();
     bad_input();
     if (failures != 0) {
         std::fprintf(stderr, "nav_world: %d check(s) failed\n", failures);

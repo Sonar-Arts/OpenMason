@@ -27,7 +27,7 @@ public final class CendaNav {
     private static final Logger LOGGER = LoggerFactory.getLogger(CendaNav.class);
 
     /** Must equal {@code CN_ABI_VERSION} in nav.h (build-kernels.sh checks both sides). */
-    static final int EXPECTED_ABI = 1;
+    static final int EXPECTED_ABI = 2;
 
     static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;
@@ -47,7 +47,9 @@ public final class CendaNav {
     static final long APPLY_BYTES = 24;
     static final long VIEW_BYTES = 32;
     static final long GROUND_AGENT_DESC_BYTES = 112;
-    static final long STEERING_DESC_BYTES = 40;
+    static final long STEERING_DESC_BYTES = 44;
+    static final long REACH_QUERY_BYTES = 80;
+    static final long REACH_CELL_BYTES = 24;
     static final long AIR_AGENT_DESC_BYTES = 96;
     static final long FLOOD_QUERY_BYTES = 32;
 
@@ -92,6 +94,7 @@ public final class CendaNav {
     static final MethodHandle PROBE_CLEAR;
     static final MethodHandle PROBE_COLUMN_PEAK;
     static final MethodHandle FLOOD;
+    static final MethodHandle REACH_GROUND;
 
     static {
         String failure = null;
@@ -176,6 +179,7 @@ public final class CendaNav {
         PROBE_COLUMN_PEAK = handle(lookup, "cn_probe_column_peak",
             FunctionDescriptor.of(F32, ADDR, F32, F32, F32, I32, I32));
         FLOOD = handle(lookup, "cn_flood", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32));
+        REACH_GROUND = handle(lookup, "cn_reach_ground", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32));
     }
 
     private CendaNav() {
@@ -269,7 +273,7 @@ public final class CendaNav {
         s.set(F32, 32, b.speedMultiplier);
         s.set(F32, 36, b.waterSpeedFactor);
         s.set(F32, 40, b.swimStrokeReach);
-        s.set(I32, 44, (b.onGround ? 1 : 0) | (b.inWater ? 2 : 0));
+        s.set(I32, 44, (b.onGround ? 1 : 0) | (b.inWater ? 2 : 0) | (b.gliding ? 4 : 0));
     }
 
     /** Reads a {@code cn_agent_view} into an {@link AgentView}. */

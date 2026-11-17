@@ -60,7 +60,7 @@
 extern "C" {
 #endif
 
-#define CN_ABI_VERSION 1
+#define CN_ABI_VERSION 2
 
 typedef struct cn_world cn_world;
 typedef struct cn_steering cn_steering;
@@ -221,6 +221,8 @@ enum {
 /* Body flags (in). */
 #define CN_BODY_ON_GROUND 1u
 #define CN_BODY_IN_WATER 2u
+#define CN_BODY_GLIDING 4u  /* floats down slowly: over a waypoint well below it, the agent holds and
+                               lets it sink rather than overshooting (ABI 2) */
 
 /* A ground body as it stands this tick (48 bytes). */
 typedef struct cn_body {
@@ -258,10 +260,10 @@ typedef struct cn_agent_view {
     int32_t path_points;
 } cn_agent_view;
 
-/* Steering: how a body turns, hops and strokes (40 bytes). Its state (jump cooldown, hop boost) lives
+/* Steering: how a body turns, hops and strokes. Its state (jump cooldown, hop boost) lives
  * in a cn_steering, shared by the ground agent that steers along routes and by host code that steers
  * the body directly (fleeing straight away, paddling at a bank). */
-typedef struct cn_steering_desc {
+typedef struct cn_steering_desc { /* 44 bytes */
     float rotation_speed;          /* degrees per second */
     float hop_boost_speed;         /* horizontal speed mid-hop (<= 0: no boost) */
     float hop_duration;            /* hop boost safety cap, seconds (ends on landing) */
@@ -272,6 +274,8 @@ typedef struct cn_steering_desc {
     int32_t max_shore_probe_cells; /* how far up a shore is measured */
     float model_yaw_offset;        /* degrees added to the travel direction's yaw */
     uint32_t collide_mask;         /* shape categories the obstacle probe treats as solid */
+    float step_height;             /* the body's own auto-step: at a full block or more, an obstacle
+                                      one block high is stepped, never hopped (ABI 2) */
 } cn_steering_desc;
 
 typedef struct cn_ground_agent_desc { /* 112 bytes */
@@ -379,6 +383,34 @@ float cn_probe_fluid_top(cp_world* physics, float x, float y, float z, int32_t s
 int32_t cn_probe_clear(cp_world* physics, float x, float y, float z, float radius, uint32_t mask);
 /* y + 1 of the highest blocking cell within range of floor(from_y) in the column; -INFINITY when none. */
 float cn_probe_column_peak(cp_world* physics, float x, float z, float from_y, int32_t range, uint32_t mask);
+
+/* ---- reach ------------------------------------------------------------------------------------- *
+ * Every cell a walker can reach, by the same moves a ground search makes: from the start (snapped
+ * like a ground search's start), cheapest first (ties: discovery order), within radius columns of it
+ * (Chebyshev, horizontal), at most max_cells of them, none costing more than max_cost. The host
+ * applies its own goal ("any cell under open sky", "is this site reachable") to the result. Owner
+ * thread of the world's physics. (ABI 2) */
+typedef struct cn_reach_query { /* 80 bytes */
+    float feet[3];         /* the walker's feet (cell = floor(x), floor(y + 0.001), floor(z)) */
+    int32_t snap_down;     /* the start snaps onto a standable cell this far down ... */
+    int32_t snap_up;       /* ... and up */
+    int32_t radius;        /* columns either side of the start that may be entered */
+    int32_t max_cells;     /* cells expanded (> 0) */
+    float max_cost;        /* FLT_MAX for none */
+    cn_ground_profile profile;
+} cn_reach_query;
+
+typedef struct cn_reach_cell { /* 24 bytes */
+    int32_t x, y, z;       /* the cell the walker's feet occupy */
+    int32_t parent;        /* index of the cell it was reached from (-1 for the start) */
+    float surface;         /* world y the feet rest at */
+    float cost;            /* route cost from the start */
+} cn_reach_cell;
+
+/* Writes the reached cells in the order they were settled (cheapest first) to out, the first cap of
+ * them; returns how many were settled (0 when the start has nowhere to stand, CN_ERR_ARG on a bad
+ * query). A parent always comes before its children. */
+int32_t cn_reach_ground(cn_world* world, const cn_reach_query* query, cn_reach_cell* out, int32_t cap);
 
 /* ---- flood ------------------------------------------------------------------------------------ *
  * A bounded breadth-first flood over the six face neighbours, for reachability questions that are not
