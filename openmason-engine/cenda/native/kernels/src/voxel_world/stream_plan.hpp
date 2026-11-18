@@ -80,7 +80,7 @@ struct LoadItem {
 // LoadItem::key rule (tie-break) values.
 enum : uint64_t { kRuleBand = 0, kRuleEllipsoid = 1, kRuleSupport = 2, kRuleVisible = 3 };
 constexpr double kBandBias = 32.0;   // blocks: the band (+ its completing cube above/below) is preferred by one cube
-// A column's TOP request in the same order (workers run TOP and generation jobs by key, see stream.cpp
+// A column's TOP request in the same order (workers run TOP and generation jobs by key, see stream_jobs.cpp
 // worker_main): kTopLead blocks ahead of its band cubes, so the column is planned before its cubes are due.
 constexpr double kTopLead = 64.0;
 inline uint64_t top_request_key(double horizontal_d2) {

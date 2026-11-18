@@ -1,7 +1,14 @@
 // Private structures of the octree LOD (cv_lod_*, OpenMason #122 / Phase 5; contract in voxel_world.h "LOD").
 // lod_data.cpp: node data (classification, level-0 sources, downsampling, digests, records, cache);
 // lod_mesh.cpp: node meshes (LODQUAD16 node mode, greedy, boundary cover rule);
-// lod.cpp: the cv_lod object (workers, dirty propagation, persistence, selection + handover, C ABI).
+// the cv_lod object (struct cv_lod + the runtime's shared types / declarations: lod_runtime.hpp), by concern:
+//  - lod.cpp: lifecycle (cv_lod_create / cv_lod_destroy) + the cv_lod_* C ABI (cv_lod_tick: lod_owner.cpp);
+//  - lod_sources.cpp: block classification, the per-level node stores, level-0 sources (loaded cubes, the cube
+//    store, column facts), node reads / rebuilds and prepares (data + mesh);
+//  - lod_dirty.cpp: dirty propagation, held notes, the revision watch (scanner), the worker threads;
+//  - lod_persist.cpp: the store meta ("lod.meta") + the deferred dirty set ("deferred.bin");
+//  - lod_select.cpp: the selection (Selector) + the planner thread and its state;
+//  - lod_owner.cpp: the owner's drawn cover, cv_lod_tick, events.
 //
 // THREADS AND LOCKS
 //  - OWNER: cv_lod_tick, cv_lod_note_events, cv_lod_set_column_ready, cv_lod_mesh_get. Owns `Owner` (node

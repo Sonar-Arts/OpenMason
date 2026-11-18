@@ -12,6 +12,7 @@
 // Lock order: owner_mutex -> stats_mutex -> plan_mutex; owner_mutex -> {q_mutex | done_mutex | list_mutex |
 // pool_mutex} (never held together). stats_get only TRY-locks owner_mutex. World calls (cv_*) take only the
 // world's own locks and are never made while holding plan/q/done/list/stats/pool mutexes.
+// Functions shared by the stream*.cpp files (and the map of which file holds what): stream_internal.hpp.
 #pragma once
 
 #include "cenda/voxel_world.h"
@@ -169,7 +170,7 @@ struct cv_stream {
 
     std::atomic<int64_t> generated_total{0}, loaded_total{0}, saved_total{0}, errors_total{0};
     // Worker time per job kind (ns, jobs; Populate counts origins): the owner sizes its in-flight limits from
-    // them (stream.cpp "IN-FLIGHT LIMITS").
+    // them (stream_tick.cpp "IN-FLIGHT LIMITS").
     std::atomic<int64_t> job_ns[cenda::voxel::streaming::kJobKinds] = {}, job_runs[cenda::voxel::streaming::kJobKinds] = {};
 
     // ---- planner -------------------------------------------------------------------------------------------

@@ -154,10 +154,21 @@ target_sources(cenda_kernels PRIVATE
         src/voxel_world/mesh_pack.cpp
         src/voxel_world/visibility.cpp
         src/voxel_world/stream.cpp
+        src/voxel_world/stream_jobs.cpp
+        src/voxel_world/stream_planner.cpp
+        src/voxel_world/stream_state.cpp
+        src/voxel_world/stream_tick.cpp
+        src/voxel_world/stream_save.cpp
+        src/voxel_world/stream_remote.cpp
         src/voxel_world/stream_plan.cpp
         src/voxel_world/stream_toygen.cpp)
 # Octree LOD from cubes (cv_lod_*, OpenMason #122 / Phase 5).
 target_sources(cenda_kernels PRIVATE
         src/voxel_world/lod.cpp
+        src/voxel_world/lod_sources.cpp
+        src/voxel_world/lod_dirty.cpp
+        src/voxel_world/lod_persist.cpp
+        src/voxel_world/lod_select.cpp
+        src/voxel_world/lod_owner.cpp
         src/voxel_world/lod_data.cpp
         src/voxel_world/lod_mesh.cpp)
