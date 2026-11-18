@@ -17,7 +17,13 @@
 #include "cv_internal.hpp"
 #include "lod_internal.hpp"
 
+#if defined(_WIN32)
+#include <process.h>
+#define CV_TEST_PID() _getpid()
+#else
 #include <unistd.h>
+#define CV_TEST_PID() ::getpid()
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -77,7 +83,7 @@ int64_t now_us() {
 
 std::string tmp_dir(const char* name) {
     const auto base = std::filesystem::temp_directory_path() /
-                      ("cv_lod_test_" + std::to_string(static_cast<long long>(::getpid())) + "_" + name);
+                      ("cv_lod_test_" + std::to_string(static_cast<long long>(CV_TEST_PID())) + "_" + name);
     std::filesystem::remove_all(base);
     std::filesystem::create_directories(base);
     return base.string();

@@ -16,6 +16,7 @@
 #include "mesh_internal.hpp"
 #include "cv_error.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cstring>
 #include <vector>

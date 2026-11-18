@@ -314,12 +314,6 @@ struct MergeTable {
     }
 };
 
-// Output list of a cube id: 0 opaque, 1 cutout, 2 translucent.
-inline int list_of(const MeshWork& w, uint16_t id) {
-    const uint8_t c = w.cls[id];
-    return ((c >> 2) & 1) + ((c >> 6) & 1);
-}
-static_assert(kClsTranspCube == 4 && kClsTranslucentCube == 64, "list_of() reads the class bits by position");
 
 } // namespace
 

@@ -56,12 +56,12 @@ if(CENDA_BUILD_KERNELS)
     else()
         target_compile_options(voxel_world PRIVATE -ffp-contract=off)
     endif()
+    add_test(NAME voxel_world COMMAND voxel_world)
+    set_tests_properties(voxel_world PROPERTIES TIMEOUT 300)
     if(WIN32)
         set_tests_properties(voxel_world PROPERTIES
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
     endif()
-    add_test(NAME voxel_world COMMAND voxel_world)
-    set_tests_properties(voxel_world PROPERTIES TIMEOUT 300)
 endif()
 
 # Native cube mesher + visibility (#143/#123, Phase 1b): shared lib + the mesher's internal headers.
@@ -75,12 +75,12 @@ if(CENDA_BUILD_KERNELS)
     else()
         target_compile_options(voxel_mesh PRIVATE -ffp-contract=off)
     endif()
+    add_test(NAME voxel_mesh COMMAND voxel_mesh)
+    set_tests_properties(voxel_mesh PROPERTIES TIMEOUT 600)
     if(WIN32)
         set_tests_properties(voxel_mesh PROPERTIES
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
     endif()
-    add_test(NAME voxel_mesh COMMAND voxel_mesh)
-    set_tests_properties(voxel_mesh PROPERTIES TIMEOUT 600)
 
     # Differential test: the mesher against a test-only copy of its pre-rewrite code (byte-identical output).
     add_executable(voxel_mesh_diff voxel_mesh_diff_test.cpp voxel_mesh_ref.cpp)
@@ -110,12 +110,12 @@ if(CENDA_BUILD_KERNELS)
     else()
         target_compile_options(voxel_stream PRIVATE -ffp-contract=off)
     endif()
+    add_test(NAME voxel_stream COMMAND voxel_stream)
+    set_tests_properties(voxel_stream PROPERTIES TIMEOUT 600)
     if(WIN32)
         set_tests_properties(voxel_stream PROPERTIES
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
     endif()
-    add_test(NAME voxel_stream COMMAND voxel_stream)
-    set_tests_properties(voxel_stream PROPERTIES TIMEOUT 600)
 endif()
 
 # Octree LOD (cv_lod_*, #122 / Phase 5): shared lib + the LOD's internal header (downsampling / record tests).
@@ -129,10 +129,10 @@ if(CENDA_BUILD_KERNELS)
     else()
         target_compile_options(voxel_lod PRIVATE -ffp-contract=off)
     endif()
+    add_test(NAME voxel_lod COMMAND voxel_lod)
+    set_tests_properties(voxel_lod PROPERTIES TIMEOUT 1500)   # ~6 min under ASan
     if(WIN32)
         set_tests_properties(voxel_lod PROPERTIES
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
     endif()
-    add_test(NAME voxel_lod COMMAND voxel_lod)
-    set_tests_properties(voxel_lod PROPERTIES TIMEOUT 1500)   # ~6 min under ASan
 endif()

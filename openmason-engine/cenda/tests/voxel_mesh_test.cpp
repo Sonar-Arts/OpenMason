@@ -1137,7 +1137,7 @@ void test_packing() {
 
 constexpr uint16_t GEL = 11;     // translucent host geometry bound to a model (model rules)
 constexpr uint16_t NOID = 12;    // never placed
-constexpr int32_t kRuleWater = 1, kRuleSnow = 2, kRuleState = 3;
+constexpr int32_t kRuleWater = 1, kRuleState = 3;   // layer 2 (snow) is defined by rule_world but unused here
 
 cv_world* rule_world() {
     cv_world* w = make_world(-1024, 1024);
