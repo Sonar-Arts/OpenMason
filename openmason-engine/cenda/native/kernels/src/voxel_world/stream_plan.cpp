@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <utility>
 
 namespace cenda::voxel::streaming {
 

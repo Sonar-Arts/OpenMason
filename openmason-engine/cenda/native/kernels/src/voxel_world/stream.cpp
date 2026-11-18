@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstring>
 #include <new>
+#include <utility>
 
 using namespace cenda::voxel;
 using namespace cenda::voxel::streaming;

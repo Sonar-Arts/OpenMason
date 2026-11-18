@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <utility>
 
 namespace cenda::voxel {
 

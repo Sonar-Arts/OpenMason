@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include <mutex>
+#include <utility>
 
 namespace cenda::voxel {
 

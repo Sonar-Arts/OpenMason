@@ -24,6 +24,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 
 // Layouts the Java binding (CendaVoxelWorld LOD_*_BYTES, CubeLod, LodMesh, LodEvents, LodStats) reads.
 static_assert(sizeof(cv_lod_desc) == 80 && offsetof(cv_lod_desc, max_level) == 48 && offsetof(cv_lod_desc, fill_id) == 60,

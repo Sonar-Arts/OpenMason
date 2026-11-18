@@ -28,6 +28,7 @@
 #include <thread>
 #include <tuple>
 #include <vector>
+#include <utility>
 
 using namespace cenda::voxel;
 using namespace cenda::voxel::streaming;

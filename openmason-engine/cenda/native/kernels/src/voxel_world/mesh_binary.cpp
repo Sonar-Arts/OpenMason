@@ -42,6 +42,7 @@
 #include <climits>
 #include <cstddef>
 #include <cstring>
+#include <algorithm>
 
 namespace cenda::voxel {
 

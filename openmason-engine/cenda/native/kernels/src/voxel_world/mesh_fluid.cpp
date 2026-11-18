@@ -21,6 +21,7 @@
 #include "mesh_internal.hpp"
 
 #include <cmath>
+#include <bit>
 
 namespace cenda::voxel {
 

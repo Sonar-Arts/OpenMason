@@ -21,6 +21,8 @@
 #include <thread>
 #include <tuple>
 #include <vector>
+#include <initializer_list>
+#include <utility>
 
 using namespace cenda::voxel;
 
