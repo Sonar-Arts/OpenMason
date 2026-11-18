@@ -27,22 +27,24 @@ public final class CendaEntities {
     private static final Logger LOGGER = LoggerFactory.getLogger(CendaEntities.class);
 
     /** Must equal {@code CE_ABI_VERSION} in entity.h (build-kernels.sh checks both sides). */
-    static final int EXPECTED_ABI = 1;
+    static final int EXPECTED_ABI = 2;
 
     static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;
     static final ValueLayout.OfFloat F32 = ValueLayout.JAVA_FLOAT;
+    static final ValueLayout.OfDouble F64 = ValueLayout.JAVA_DOUBLE;
     static final ValueLayout ADDR = ValueLayout.ADDRESS;
 
     // struct sizes (entity.h)
     static final long TYPE_DESC_BYTES = 24;
-    static final long BODY_BYTES = 48;
+    static final long BODY_BYTES = 64; // ABI 2: double x, y, z
     static final long FILTER_BYTES = 24;
     static final long CLIP_BYTES = 16;
 
     private static final String FAILURE;
     static final MethodHandle LAST_ERROR;
     static final MethodHandle WORLD_CREATE;
+    static final MethodHandle SET_ORIGIN;
     static final MethodHandle WORLD_DESTROY;
     static final MethodHandle TYPE_DEFINE;
     static final MethodHandle TYPE_GET;
@@ -102,12 +104,13 @@ public final class CendaEntities {
         FAILURE = failure;
         Linker.Option fast = Linker.Option.critical(false);
         LAST_ERROR = handle(lookup, "ce_last_error", FunctionDescriptor.of(ADDR));
-        WORLD_CREATE = handle(lookup, "ce_world_create", FunctionDescriptor.of(ADDR, F32));
+        WORLD_CREATE = handle(lookup, "ce_world_create", FunctionDescriptor.of(ADDR, I32));
+        SET_ORIGIN = handle(lookup, "ce_set_origin", FunctionDescriptor.of(I32, ADDR, I64, I64, I64), fast);
         WORLD_DESTROY = handle(lookup, "ce_world_destroy", FunctionDescriptor.ofVoid(ADDR));
         TYPE_DEFINE = handle(lookup, "ce_type_define", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
         TYPE_GET = handle(lookup, "ce_type_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR), fast);
         TYPE_MODEL_ID = handle(lookup, "ce_type_model_id", FunctionDescriptor.of(ADDR, ADDR, I32), fast);
-        SPAWN = handle(lookup, "ce_spawn", FunctionDescriptor.of(I64, ADDR, I32, I32, F32, F32, F32, F32));
+        SPAWN = handle(lookup, "ce_spawn", FunctionDescriptor.of(I64, ADDR, I32, I32, F64, F64, F64, F32));
         DESPAWN = handle(lookup, "ce_despawn", FunctionDescriptor.of(I32, ADDR, I64));
         COMMIT_SPAWNS = handle(lookup, "ce_commit_spawns", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
         COMMIT_DESPAWNS = handle(lookup, "ce_commit_despawns", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
@@ -119,9 +122,9 @@ public final class CendaEntities {
         SYNC_BODIES = handle(lookup, "ce_sync_bodies", FunctionDescriptor.of(I32, ADDR, ADDR, I32), fast);
         BODY_GET = handle(lookup, "ce_body_get", FunctionDescriptor.of(I32, ADDR, I64, ADDR), fast);
         QUERY_RADIUS = handle(lookup, "ce_query_radius",
-            FunctionDescriptor.of(I32, ADDR, F32, F32, F32, F32, ADDR, ADDR, I32), fast);
+            FunctionDescriptor.of(I32, ADDR, F64, F64, F64, F64, ADDR, ADDR, I32), fast);
         QUERY_NEAREST = handle(lookup, "ce_query_nearest",
-            FunctionDescriptor.of(I64, ADDR, F32, F32, F32, F32, ADDR, ADDR), fast);
+            FunctionDescriptor.of(I64, ADDR, F64, F64, F64, F64, ADDR, ADDR), fast);
         QUERY_BOX = handle(lookup, "ce_query_box", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, I32), fast);
         QUERY_AABB = handle(lookup, "ce_query_aabb", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, I32), fast);
         QUERY_ALL = handle(lookup, "ce_query_all", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32), fast);

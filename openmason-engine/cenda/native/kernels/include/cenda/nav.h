@@ -49,6 +49,17 @@
  * THREADING: a cn_world, its agents' ticks and commands, and the probes run on the owner thread of
  * the cp_world they read. cn_stats_get may be called from any thread. Destroy the cn_world before its
  * cp_world.
+ *
+ * COORDINATES (ABI 3, OpenMason #142): cells are int64 and ABSOLUTE everywhere (cn_cell, world and
+ * air-profile Y bounds, reach cells, flood cells); Y is signed and unbounded (CN_Y_UNBOUNDED_*).
+ * Positions are doubles relative to a FRAME ORIGIN, and every object that takes positions has its
+ * own (default 0): a cn_world's (cn_world_set_origin: raw search queries, their waypoints, reach
+ * surfaces), an agent's (cn_*_agent_set_origin: bodies, goals, routes, steer targets, views), and
+ * a probe's or cn_steering_steer's is its cp_world's (cp_set_origin). A host normally keeps them all
+ * equal. Results are stored against absolute cells, so moving an origin never invalidates a queued
+ * search, a finished result or a route. Searches do their float math (surfaces, costs, waypoints)
+ * relative to an anchor on a 4096-block grid near their start: the retired Java Wayfind's arithmetic
+ * exactly within 2048 blocks of the frame origin, full precision at any distance.
  */
 #pragma once
 
@@ -60,7 +71,7 @@
 extern "C" {
 #endif
 
-#define CN_ABI_VERSION 2
+#define CN_ABI_VERSION 3
 
 typedef struct cn_world cn_world;
 typedef struct cn_steering cn_steering;
@@ -72,6 +83,10 @@ enum {
     CN_OK = 0,
     CN_ERR_ARG = -1  /* null world/agent, bad sizes, non-finite input */
 };
+
+/* Unbounded Y range sentinels (cn_world_desc, cn_air_profile, cn_flood_query). */
+#define CN_Y_UNBOUNDED_MIN INT64_MIN
+#define CN_Y_UNBOUNDED_MAX INT64_MAX
 
 /* Cell flags (cn_cell). OPEN is 0. */
 #define CN_CELL_UNKNOWN 1u
@@ -86,7 +101,7 @@ enum {
     CN_SEARCH_PARTIAL_UNREACHABLE = 2, /* explored everything reachable: chain to the best node */
     CN_SEARCH_NO_PATH = 3,             /* nothing beat the start (boxed in), or no standable start */
     CN_SEARCH_CANCELLED = 4,
-    CN_SEARCH_OUT_OF_RANGE = 5         /* start or goal outside the node range: not searched */
+    CN_SEARCH_OUT_OF_RANGE = 5         /* start or goal beyond +-2^62: not searched */
 };
 
 /* Bounds on one search (16 bytes). */
@@ -113,28 +128,27 @@ typedef struct cn_ground_profile {
     float fall_cost_per_block; /* surcharge per block dropped */
 } cn_ground_profile;
 
-/* How a flyer routes (40 bytes). */
+/* How a flyer routes (48 bytes). */
 typedef struct cn_air_profile {
     int32_t cell_size;     /* blocks per node edge; also the route's clearance */
-    float cruise_y;        /* world y the route prefers */
     float altitude_cost;   /* per cell away from cruise_y */
     float climb_cost;      /* per cell of ascent */
     float descend_cost;    /* per cell of descent */
     int32_t allow_unknown; /* route through unloaded cells */
     float unknown_cost;    /* surcharge for entering one */
-    int32_t min_y;         /* lowest world y a route may occupy */
-    int32_t max_y;         /* highest */
-    int32_t reserved;      /* 0 */
+    double cruise_y;       /* frame y the route prefers (ABI 3: double, relative to the frame origin) */
+    int64_t min_y;         /* lowest ABSOLUTE y a route may occupy (CN_Y_UNBOUNDED_MIN: none) */
+    int64_t max_y;         /* highest (CN_Y_UNBOUNDED_MAX: none) */
 } cn_air_profile;
 
-typedef struct cn_world_desc {
+typedef struct cn_world_desc { /* 40 bytes */
     cp_world* physics;
     uint32_t solid_mask;    /* shape categories that occupy space */
     uint32_t hazard_mask;   /* shape categories that are impassable hazards (0 = none) */
     uint32_t fluid_mask;    /* fluid categories that are liquid */
-    int32_t min_y;          /* cells below are UNKNOWN */
-    int32_t max_y;          /* cells at or above are UNKNOWN */
     int32_t max_in_flight;  /* queued searches before refusing; <= 0 picks 64 */
+    int64_t min_y;          /* absolute; cells below are UNKNOWN (CN_Y_UNBOUNDED_MIN: none) */
+    int64_t max_y;          /* absolute; cells at or above are UNKNOWN (CN_Y_UNBOUNDED_MAX: none) */
 } cn_world_desc;
 
 int32_t cn_abi_version(void);
@@ -145,9 +159,14 @@ cn_world* cn_world_create(const cn_world_desc* desc);
 /* Drops every queued search and result. */
 void cn_world_destroy(cn_world* world);
 
-/* The cell's flags (CN_CELL_*); *out_top (may be NULL) receives its quantised top (0 when OPEN or
- * UNKNOWN). */
-uint32_t cn_cell(cn_world* world, int32_t x, int32_t y, int32_t z, float* out_top);
+/* The frame of raw search queries, their waypoints and reach surfaces (default 0). Queued searches
+ * and finished results stay valid: waypoints are read out in the frame current at that time. */
+int32_t cn_world_set_origin(cn_world* world, int64_t ox, int64_t oy, int64_t oz);
+int32_t cn_world_get_origin(const cn_world* world, int64_t* out);
+
+/* The (absolute) cell's flags (CN_CELL_*); *out_top (may be NULL) receives its quantised top (0 when
+ * OPEN or UNKNOWN). */
+uint32_t cn_cell(cn_world* world, int64_t x, int64_t y, int64_t z, float* out_top);
 
 /* Runs queued searches in submission order until expansion_budget expansions have been spent this
  * step (a search always runs to its own limit once started). Returns how many ran. */
@@ -167,9 +186,9 @@ typedef struct cn_stats {
 void cn_stats_get(const cn_world* world, cn_stats* out);
 
 /* ---- raw searches --------------------------------------------------------------------------- */
-typedef struct cn_ground_query { /* 104 bytes */
-    float feet[3];         /* the walker's FEET (cell = floor(x), floor(y + 0.001), floor(z)) */
-    float goal[3];         /* cell = floor(x), floor(y + 0.001), floor(z) */
+typedef struct cn_ground_query { /* 128 bytes */
+    double feet[3];        /* the walker's FEET, in the world's frame (cell = floor(x), floor(y + 0.001), floor(z)) */
+    double goal[3];        /* cell = floor(x), floor(y + 0.001), floor(z) */
     float goal_radius;     /* arrival distance in cells (0 = the exact cell) */
     int32_t snap_down;     /* start/goal are snapped onto a standable cell this far down ... */
     int32_t snap_up;       /* ... and up */
@@ -178,9 +197,9 @@ typedef struct cn_ground_query { /* 104 bytes */
     cn_limits limits;
 } cn_ground_query;
 
-typedef struct cn_air_query { /* 88 bytes */
-    float from[3];           /* the flyer's position (cell = floor) */
-    float goal[3];
+typedef struct cn_air_query { /* 120 bytes */
+    double from[3];          /* the flyer's position, in the world's frame (cell = floor) */
+    double goal[3];
     float goal_radius;       /* in blocks */
     int32_t goal_snap_cells; /* the goal is nudged onto flyable air within this many cells */
     cn_air_profile profile;
@@ -202,8 +221,9 @@ int64_t cn_search_ground(cn_world* world, const cn_ground_query* query);
 int64_t cn_search_air(cn_world* world, const cn_air_query* query);
 /* 1 when done (info filled), 0 while queued, CN_ERR_ARG for an unknown id. */
 int32_t cn_search_poll(cn_world* world, int64_t id, cn_search_info* info);
-/* Copies up to cap waypoints (xyz) of a finished search; returns its waypoint count. */
-int32_t cn_search_points(cn_world* world, int64_t id, float* xyz, int32_t cap);
+/* Copies up to cap waypoints (xyz, in the world's current frame) of a finished search; returns its
+ * waypoint count. */
+int32_t cn_search_points(cn_world* world, int64_t id, double* xyz, int32_t cap);
 /* Cancels a queued search or forgets a result. */
 void cn_search_release(cn_world* world, int64_t id);
 
@@ -224,9 +244,9 @@ enum {
 #define CN_BODY_GLIDING 4u  /* floats down slowly: over a waypoint well below it, the agent holds and
                                lets it sink rather than overshooting (ABI 2) */
 
-/* A ground body as it stands this tick (48 bytes). */
+/* A ground body as it stands this tick (64 bytes). */
 typedef struct cn_body {
-    float x, y, z;             /* origin (the top of the legs) */
+    double x, y, z;            /* origin (the top of the legs), in the caller's frame (ABI 3: double) */
     float yaw;                 /* degrees */
     float leg_height;          /* feet = y - leg_height */
     float half_width;          /* half the body's x extent (obstacle reach) */
@@ -236,6 +256,7 @@ typedef struct cn_body {
     float water_speed_factor;  /* speed factor while in water */
     float swim_stroke_reach;   /* how high a swim stroke carries it */
     uint32_t flags;            /* CN_BODY_* */
+    uint32_t reserved;         /* 0 */
 } cn_body;
 
 /* What to apply to the body, in this order: yaw, jump/stroke, horizontal velocity (24 bytes). */
@@ -250,14 +271,15 @@ typedef struct cn_apply {
     uint32_t reserved[2];
 } cn_apply;
 
-/* An agent's state after a call (32 bytes). path_version changes whenever the route changes. */
+/* An agent's state after a call (48 bytes). path_version changes whenever the route changes. */
 typedef struct cn_agent_view {
     int32_t status;       /* CN_AGENT_* */
     int32_t cursor;       /* waypoint being walked / flown toward */
     int32_t has_goal;
     int32_t path_version;
-    float goal_x, goal_y, goal_z; /* the destination (when has_goal) */
+    double goal_x, goal_y, goal_z; /* the destination (when has_goal), in the agent's frame */
     int32_t path_points;
+    int32_t reserved;
 } cn_agent_view;
 
 /* Steering: how a body turns, hops and strokes. Its state (jump cooldown, hop boost) lives
@@ -294,7 +316,7 @@ typedef struct cn_ground_agent_desc { /* 112 bytes */
     float jump_approach;           /* ... within this horizontal distance of it */
 } cn_ground_agent_desc;
 
-typedef struct cn_air_agent_desc { /* 96 bytes */
+typedef struct cn_air_agent_desc { /* 104 bytes */
     cn_air_profile profile;   /* cruise_y is the agent's cruise altitude, set per agent */
     cn_limits limits;
     float plan_range;         /* how far ahead one search plans */
@@ -308,13 +330,19 @@ typedef struct cn_air_agent_desc { /* 96 bytes */
     int32_t reserved[2];      /* 0 */
 } cn_air_agent_desc;
 
-/* Ground agents. The body position seeds the stuck detector. */
-cn_ground_agent* cn_ground_agent_create(const cn_ground_agent_desc* desc, float x, float y, float z);
+/* Ground agents. Every position an agent call takes or returns is in the agent's frame: origin
+ * (absolute xyz; NULL = 0) at creation, moved by cn_ground_agent_set_origin. The body position seeds
+ * the stuck detector. */
+cn_ground_agent* cn_ground_agent_create(const cn_ground_agent_desc* desc, const int64_t* origin, double x, double y,
+                                        double z);
 /* Frees the agent (a search it still had queued is dropped when its world next steps or expires). */
 void cn_ground_agent_destroy(cn_ground_agent* agent);
+/* Moves the agent's frame origin: its stored goal, route and stuck anchor are shifted by old - new,
+ * and later calls take and give positions in the new frame. (ABI 3) */
+int32_t cn_ground_agent_set_origin(cn_ground_agent* agent, int64_t ox, int64_t oy, int64_t oz);
 /* Sets where to go; cheap to repeat every tick. goal_radius: arrival distance; speed: multiplier on
  * the body's speed while walking this route. */
-int32_t cn_ground_agent_move_to(cn_ground_agent* agent, float x, float y, float z, float goal_radius,
+int32_t cn_ground_agent_move_to(cn_ground_agent* agent, double x, double y, double z, float goal_radius,
                                 float speed, cn_agent_view* view);
 /* Abandons the destination and the route (the world may be NULL); writes a stop to out. */
 int32_t cn_ground_agent_stop(cn_ground_agent* agent, cn_world* world, cn_apply* out, cn_agent_view* view);
@@ -326,21 +354,25 @@ int32_t cn_ground_agent_replan(cn_ground_agent* agent, cn_world* world, cn_agent
 int32_t cn_ground_agent_tick(cn_ground_agent* agent, cn_steering* steering, cn_world* world, cp_world* physics,
                              const cn_body* body, float dt, cn_apply* out, cn_agent_view* view);
 /* Copies up to cap waypoints (xyz) of the current route; returns its waypoint count. */
-int32_t cn_ground_agent_path(const cn_ground_agent* agent, float* xyz, int32_t cap, int32_t* out_complete);
+int32_t cn_ground_agent_path(const cn_ground_agent* agent, double* xyz, int32_t cap, int32_t* out_complete);
 
-/* Air agents. cruise starts at y. */
-cn_air_agent* cn_air_agent_create(const cn_air_agent_desc* desc, float x, float y, float z);
+/* Air agents. cruise starts at y. Positions in the agent's frame (origin at creation, NULL = 0;
+ * cn_air_agent_set_origin). */
+cn_air_agent* cn_air_agent_create(const cn_air_agent_desc* desc, const int64_t* origin, double x, double y,
+                                  double z);
 void cn_air_agent_destroy(cn_air_agent* agent);
-void cn_air_agent_set_cruise(cn_air_agent* agent, float cruise_y);
-int32_t cn_air_agent_move_to(cn_air_agent* agent, float x, float y, float z, cn_agent_view* view);
+/* As cn_ground_agent_set_origin (destination, cruise, route and plan origin shift). (ABI 3) */
+int32_t cn_air_agent_set_origin(cn_air_agent* agent, int64_t ox, int64_t oy, int64_t oz);
+void cn_air_agent_set_cruise(cn_air_agent* agent, double cruise_y);
+int32_t cn_air_agent_move_to(cn_air_agent* agent, double x, double y, double z, cn_agent_view* view);
 int32_t cn_air_agent_stop(cn_air_agent* agent, cn_world* world, cn_agent_view* view);
 int32_t cn_air_agent_replan(cn_air_agent* agent, cn_world* world, cn_agent_view* view);
 /* One tick at the flyer's position. */
-int32_t cn_air_agent_tick(cn_air_agent* agent, cn_world* world, float x, float y, float z, float dt,
+int32_t cn_air_agent_tick(cn_air_agent* agent, cn_world* world, double x, double y, double z, float dt,
                           cn_agent_view* view);
 /* The point to fly at from (x, y, z): the next waypoint, or the horizon while there is no route. */
-int32_t cn_air_agent_steer_target(const cn_air_agent* agent, float x, float y, float z, float* out_xyz);
-int32_t cn_air_agent_path(const cn_air_agent* agent, float* xyz, int32_t cap, int32_t* out_complete);
+int32_t cn_air_agent_steer_target(const cn_air_agent* agent, double x, double y, double z, double* out_xyz);
+int32_t cn_air_agent_path(const cn_air_agent* agent, double* xyz, int32_t cap, int32_t* out_complete);
 
 /* ---- steering ---------------------------------------------------------------------------------- */
 cn_steering* cn_steering_create(const cn_steering_desc* desc);
@@ -352,7 +384,7 @@ int32_t cn_steering_tick(cn_steering* steering, int32_t on_ground, float dt);
  * rotation speed, hop an obstacle in the way (allow_jump; from water: stroke over a shore a stroke
  * can top), and set horizontal velocity = heading * (hop boost while hopping, else move_speed *
  * speed_multiplier * the body's own multiplier, times the water factor in water). physics may be
- * NULL (no probe). */
+ * NULL (no probe). The body is in the physics world's frame. */
 int32_t cn_steering_steer(cn_steering* steering, cp_world* physics, const cn_body* body, float dir_x, float dir_z,
                           float speed_multiplier, float dt, int32_t allow_jump, cn_apply* out);
 /* Gets the body upward: a swim stroke in water, a jump when standing, sharing one cooldown. Returns 1
@@ -369,20 +401,21 @@ float cn_steer_yaw_error(float yaw, float target_yaw);
 
 /* ---- probes over the physics cache ------------------------------------------------------------ *
  * A cell BLOCKS when its shape is in mask and its top over the whole cell is a full block. Unloaded
- * cells read as the physics world's unloaded shape. Owner thread. */
+ * cells read as the physics world's unloaded shape. Positions in, heights out, are in the physics
+ * world's frame. Owner thread. */
 /* Top of the first blocking cell with a non-blocking cell above it, scanning down from
  * floor(start_y) + scan_up to floor(start_y) - scan_down in the column at (x, z): that cell's y + 1.
  * -INFINITY when none. */
-float cn_probe_ground_level(cp_world* physics, float x, float z, float start_y, int32_t scan_up,
-                            int32_t scan_down, uint32_t mask);
+double cn_probe_ground_level(cp_world* physics, double x, double z, double start_y, int32_t scan_up,
+                             int32_t scan_down, uint32_t mask);
 /* y + 1 of the highest cell holding a fluid in fluid_mask from floor(y) + scan_up down to
  * floor(y) - scan_down in the column at (x, z); -INFINITY when none. */
-float cn_probe_fluid_top(cp_world* physics, float x, float y, float z, int32_t scan_up, int32_t scan_down,
-                         uint32_t fluid_mask);
+double cn_probe_fluid_top(cp_world* physics, double x, double y, double z, int32_t scan_up, int32_t scan_down,
+                          uint32_t fluid_mask);
 /* 1 when no blocking cell touches the cube of half extent radius around (x, y, z). */
-int32_t cn_probe_clear(cp_world* physics, float x, float y, float z, float radius, uint32_t mask);
+int32_t cn_probe_clear(cp_world* physics, double x, double y, double z, float radius, uint32_t mask);
 /* y + 1 of the highest blocking cell within range of floor(from_y) in the column; -INFINITY when none. */
-float cn_probe_column_peak(cp_world* physics, float x, float z, float from_y, int32_t range, uint32_t mask);
+double cn_probe_column_peak(cp_world* physics, double x, double z, double from_y, int32_t range, uint32_t mask);
 
 /* ---- reach ------------------------------------------------------------------------------------- *
  * Every cell a walker can reach, by the same moves a ground search makes: from the start (snapped
@@ -390,21 +423,22 @@ float cn_probe_column_peak(cp_world* physics, float x, float z, float from_y, in
  * (Chebyshev, horizontal), at most max_cells of them, none costing more than max_cost. The host
  * applies its own goal ("any cell under open sky", "is this site reachable") to the result. Owner
  * thread of the world's physics. (ABI 2) */
-typedef struct cn_reach_query { /* 80 bytes */
-    float feet[3];         /* the walker's feet (cell = floor(x), floor(y + 0.001), floor(z)) */
+typedef struct cn_reach_query { /* 96 bytes */
+    double feet[3];        /* the walker's feet, in the world's frame (cell = floor(x), floor(y + 0.001), floor(z)) */
     int32_t snap_down;     /* the start snaps onto a standable cell this far down ... */
     int32_t snap_up;       /* ... and up */
     int32_t radius;        /* columns either side of the start that may be entered */
     int32_t max_cells;     /* cells expanded (> 0) */
     float max_cost;        /* FLT_MAX for none */
+    int32_t reserved;      /* 0 */
     cn_ground_profile profile;
 } cn_reach_query;
 
-typedef struct cn_reach_cell { /* 24 bytes */
-    int32_t x, y, z;       /* the cell the walker's feet occupy */
+typedef struct cn_reach_cell { /* 40 bytes */
+    int64_t x, y, z;       /* the ABSOLUTE cell the walker's feet occupy */
     int32_t parent;        /* index of the cell it was reached from (-1 for the start) */
-    float surface;         /* world y the feet rest at */
     float cost;            /* route cost from the start */
+    double surface;        /* frame y the feet rest at (the world's frame) */
 } cn_reach_cell;
 
 /* Writes the reached cells in the order they were settled (cheapest first) to out, the first cap of
@@ -419,19 +453,25 @@ int32_t cn_reach_ground(cn_world* world, const cn_reach_query* query, cn_reach_c
  * pass_mask, and it is at most max_steps steps from the start. Cells expand in breadth-first order
  * (by distance, then discovery; neighbours in the order +x, -x, +y, -y, +z, -z), at most max_cells of
  * them. Owner thread of the physics world. */
-typedef struct cn_flood_query { /* 32 bytes */
-    int32_t x, y, z;     /* start cell */
-    int32_t max_steps;   /* farthest distance entered (0 .. 2^20 - 1) */
+typedef struct cn_flood_query { /* 56 bytes */
+    int64_t x, y, z;     /* start cell (absolute) */
+    int32_t max_steps;   /* farthest distance entered (>= 0) */
     int32_t max_cells;   /* expansion cap (> 0) */
     uint32_t pass_mask;  /* shape categories that can be entered */
-    int32_t min_y;       /* cells outside [min_y, max_y) are never entered */
-    int32_t max_y;
+    int32_t reserved;    /* 0 */
+    int64_t min_y;       /* absolute; cells outside [min_y, max_y) are never entered (CN_Y_UNBOUNDED_*) */
+    int64_t max_y;
 } cn_flood_query;
 
-/* Writes the expanded cells in expansion order as (x, y, z, category) int quadruples, the first cap of
- * them (category = the cell's shape category word, 0 when it holds none); returns how many expanded
+typedef struct cn_flood_cell { /* 32 bytes */
+    int64_t x, y, z;     /* absolute */
+    uint32_t category;   /* the cell's shape category word, 0 when it holds none */
+    uint32_t reserved;
+} cn_flood_cell;
+
+/* Writes the expanded cells in expansion order, the first cap of them; returns how many expanded
  * (CN_ERR_ARG on a bad query). */
-int32_t cn_flood(cp_world* physics, const cn_flood_query* query, int32_t* out, int32_t cap);
+int32_t cn_flood(cp_world* physics, const cn_flood_query* query, cn_flood_cell* out, int32_t cap);
 
 #ifdef __cplusplus
 }

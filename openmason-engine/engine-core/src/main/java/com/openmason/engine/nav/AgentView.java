@@ -2,7 +2,8 @@ package com.openmason.engine.nav;
 
 /**
  * An agent's state after its last call ({@code cn_agent_view}). Written by the owner thread; the
- * fields are volatile so a reader on another thread (a debug overlay) sees a recent value.
+ * fields are volatile so a reader on another thread (a debug overlay) sees a recent value. The goal is
+ * in the agent's frame.
  */
 public final class AgentView {
 
@@ -17,12 +18,12 @@ public final class AgentView {
     private volatile int cursor;
     private volatile boolean hasGoal;
     private volatile int pathVersion;
-    private volatile float goalX;
-    private volatile float goalY;
-    private volatile float goalZ;
+    private volatile double goalX;
+    private volatile double goalY;
+    private volatile double goalZ;
     private volatile int pathPoints;
 
-    void set(int status, int cursor, boolean hasGoal, int pathVersion, float goalX, float goalY, float goalZ,
+    void set(int status, int cursor, boolean hasGoal, int pathVersion, double goalX, double goalY, double goalZ,
              int pathPoints) {
         this.goalX = goalX;
         this.goalY = goalY;
@@ -53,15 +54,15 @@ public final class AgentView {
         return pathVersion;
     }
 
-    public float goalX() {
+    public double goalX() {
         return goalX;
     }
 
-    public float goalY() {
+    public double goalY() {
         return goalY;
     }
 
-    public float goalZ() {
+    public double goalZ() {
         return goalZ;
     }
 

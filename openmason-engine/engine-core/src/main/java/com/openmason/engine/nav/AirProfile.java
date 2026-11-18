@@ -5,25 +5,25 @@ package com.openmason.engine.nav;
  * flyable only when every cell in it is open.
  *
  * @param cellSize     blocks per node edge
- * @param cruiseY      world y the route prefers (an air agent sets its own)
+ * @param cruiseY      frame y the route prefers (relative to the frame origin; an air agent sets its own)
  * @param altitudeCost cost per cell away from cruiseY
  * @param climbCost    surcharge per cell of ascent
  * @param descendCost  surcharge per cell of descent
  * @param allowUnknown route through unloaded cells
  * @param unknownCost  surcharge for entering one
- * @param minY         lowest world y a route may occupy
- * @param maxY         highest world y a route may occupy
+ * @param minY         lowest ABSOLUTE y a route may occupy ({@link NavWorld#Y_UNBOUNDED_MIN}: none)
+ * @param maxY         highest ABSOLUTE y a route may occupy ({@link NavWorld#Y_UNBOUNDED_MAX}: none)
  */
 public record AirProfile(
         int cellSize,
-        float cruiseY,
+        double cruiseY,
         float altitudeCost,
         float climbCost,
         float descendCost,
         boolean allowUnknown,
         float unknownCost,
-        int minY,
-        int maxY) {
+        long minY,
+        long maxY) {
 
     public AirProfile {
         if (cellSize <= 0) {

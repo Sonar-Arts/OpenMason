@@ -10,7 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Pins the CEARL-authored cull kernel's compiled shape — everything the
  * dispatcher and the GPU contract depend on, verifiable without a GL context.
  * The std430 layouts must match {@code MmsChunkRegion}'s buffer strides
- * (48-byte metadata, 20-byte tightly packed indirect commands).
+ * (48-byte metadata, 20-byte tightly packed indirect commands). The plane
+ * math itself is pinned against its CPU twin in {@link MmsRegionCullTest}.
  */
 class MmsGpuCullerKernelTest {
 
@@ -27,50 +28,15 @@ class MmsGpuCullerKernelTest {
         assertEquals("cmds", kernel.buffers().get(1).name());
         assertEquals(1, kernel.buffers().get(1).binding());
 
-        // Uniforms: the six frustum + four keep-box planes as a uniform array + the live mesh count.
-        assertEquals(2, kernel.uniforms().size());
+        // Uniforms: six render-space frustum planes, the region's camera-relative origin, the live count.
+        assertEquals(3, kernel.uniforms().size());
         assertEquals("planes", kernel.uniforms().getFirst().name());
         assertEquals(MmsGpuCuller.PLANES, kernel.uniforms().getFirst().arraySize());
-        assertEquals("mesh_count", kernel.uniforms().get(1).name());
-        assertEquals("uint", kernel.uniforms().get(1).glslType());
-    }
-
-    /** The kernel's positive-vertex test, against all ten planes of a pass. */
-    private static boolean visible(float[] planes, float[] min, float[] max) {
-        for (int p = 0; p < MmsGpuCuller.PLANES; p++) {
-            float a = planes[p * 4], b = planes[p * 4 + 1], c = planes[p * 4 + 2], d = planes[p * 4 + 3];
-            float x = a > 0 ? max[0] : min[0], y = b > 0 ? max[1] : min[1], z = c > 0 ? max[2] : min[2];
-            if (a * x + b * y + c * z + d < 0) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /** Frustum slots 0..5 left always-pass, so only the keep box decides. */
-    private static float[] pass(float[] keepXZ) {
-        float[] planes = new float[MmsGpuCuller.PLANES * 4];
-        for (int p = 0; p < 6; p++) {
-            planes[p * 4 + 3] = 1f;
-        }
-        MmsGpuCuller.keepBoxPlanes(keepXZ, planes);
-        return planes;
-    }
-
-    @Test
-    void keepBoxDropsMeshesOutsideItAndOnlyThose() {
-        // A 3x3-chunk square around chunk (0,0), inset half a block like the camera pass's.
-        float[] planes = pass(new float[]{-16f + 0.5f, -16f + 0.5f, 32f - 0.5f, 32f - 0.5f});
-        for (int cx = -3; cx <= 3; cx++) {
-            for (int cz = -3; cz <= 3; cz++) {
-                boolean inside = Math.abs(cx) <= 1 && Math.abs(cz) <= 1;
-                float[] min = {cx * 16f, 60f, cz * 16f};
-                float[] max = {cx * 16f + 16f, 90f, cz * 16f + 16f};
-                assertEquals(inside, visible(planes, min, max), "chunk " + cx + "," + cz);
-            }
-        }
-        assertTrue(visible(pass(null), new float[]{1e6f, 0f, -1e6f}, new float[]{1e6f + 16f, 9f, -1e6f + 16f}),
-            "no box: nothing culled by it");
+        assertEquals(6, MmsGpuCuller.PLANES, "the keep-box planes are gone (enable bit instead)");
+        assertEquals("origin", kernel.uniforms().get(1).name());
+        assertEquals("vec4", kernel.uniforms().get(1).glslType());
+        assertEquals("mesh_count", kernel.uniforms().get(2).name());
+        assertEquals("uint", kernel.uniforms().get(2).glslType());
     }
 
     @Test
@@ -83,7 +49,8 @@ class MmsGpuCullerKernelTest {
         assertTrue(glsl.contains(
             "layout(std430, binding = 1) writeonly buffer cearl_cmds { DrawCmd cmds[]; };"),
             glsl);
-        assertTrue(glsl.contains("uniform vec4 planes[10];"), glsl);
+        assertTrue(glsl.contains("uniform vec4 planes[6];"), glsl);
+        assertTrue(glsl.contains("uniform vec4 origin;"), glsl);
         assertTrue(glsl.contains("uniform uint mesh_count;"), glsl);
         // The five tightly packed uints of DrawElementsIndirectCommand, in order.
         int a = glsl.indexOf("uint index_count;");
@@ -92,7 +59,43 @@ class MmsGpuCullerKernelTest {
         int d = glsl.indexOf("uint base_vertex;");
         int e = glsl.indexOf("uint base_instance;");
         assertTrue(a >= 0 && a < b && b < c && c < d && d < e, glsl);
-        // pick() lowers to the branchless ternary of the original hand GLSL.
+        // pick() lowers to the branchless ternary; the enable bit is draw.w bit 0.
         assertTrue(glsl.contains("((pl.x > 0.0) ? m.maxb.x : m.minb.x)"), glsl);
+        assertTrue(glsl.contains("m.draw.w & "), glsl);
+        assertTrue(glsl.contains("origin.xyz"), glsl);
+    }
+
+    @Test
+    void hizKernelsCompileWithTheirDispatchContract() {
+        CearlKernel early = MmsGpuCuller.compileKernel("cull_early");
+        assertEquals(64, early.localSize());
+        assertEquals(java.util.List.of("meshes", "cmds", "vis", "stats"),
+            early.buffers().stream().map(CearlKernel.BufferBinding::name).toList());
+        assertEquals(java.util.List.of("planes", "origin", "mesh_count", "history", "stats_base"),
+            early.uniforms().stream().map(CearlKernel.UniformBinding::name).toList());
+
+        CearlKernel late = MmsGpuCuller.compileKernel("cull_late");
+        assertEquals(java.util.List.of("meshes", "cmds", "vis", "pyramid", "stats"),
+            late.buffers().stream().map(CearlKernel.BufferBinding::name).toList());
+        assertEquals(java.util.List.of("planes", "view_proj", "origin", "mesh_count", "early_rule", "use_pyramid",
+                "screen_w", "screen_h", "levels", "stats_base"),
+            late.uniforms().stream().map(CearlKernel.UniformBinding::name).toList());
+        assertEquals(4, late.uniforms().get(1).arraySize(), "view_proj = four vec4 columns");
+        String glsl = late.glsl();
+        assertTrue(glsl.contains("readonly buffer cearl_pyramid { float pyramid[]; };"), glsl);
+        assertTrue(glsl.contains("buffer cearl_vis { uint vis[]; };"), glsl);
+
+        CearlKernel reduce = MmsGpuCuller.compileKernel("hiz_reduce");
+        assertEquals(java.util.List.of("pyramid"),
+            reduce.buffers().stream().map(CearlKernel.BufferBinding::name).toList());
+        assertTrue(reduce.glsl().contains("max(max("), reduce.glsl());
+    }
+
+    @Test
+    void frustumKernelIsUnchangedByTheHizAdditions() {
+        // The frustum-only kernel (shadow / torch passes, CPU twin parity) keeps its exact signature.
+        CearlKernel kernel = MmsGpuCuller.compileKernel();
+        assertEquals(2, kernel.buffers().size());
+        assertEquals(3, kernel.uniforms().size());
     }
 }

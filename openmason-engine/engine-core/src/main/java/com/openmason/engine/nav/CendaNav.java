@@ -21,42 +21,49 @@ import java.nio.file.Path;
  *
  * <p>No Java fallback: when the library is missing or fails the {@code cn_abi_version} handshake,
  * {@link #isAvailable()} is false and every factory throws with {@link #unavailableReason()}.
+ *
+ * <p>ABI 3 (OpenMason #142): cells are absolute {@code long}s, positions {@code double}s relative to a
+ * frame origin (the nav world's, an agent's, or for probes the physics world's), Y signed and
+ * unbounded.
  */
 public final class CendaNav {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CendaNav.class);
 
     /** Must equal {@code CN_ABI_VERSION} in nav.h (build-kernels.sh checks both sides). */
-    static final int EXPECTED_ABI = 2;
+    static final int EXPECTED_ABI = 3;
 
     static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;
     static final ValueLayout.OfFloat F32 = ValueLayout.JAVA_FLOAT;
+    static final ValueLayout.OfDouble F64 = ValueLayout.JAVA_DOUBLE;
     static final java.lang.foreign.AddressLayout ADDR = ValueLayout.ADDRESS;
 
-    // struct sizes (nav.h)
+    // struct sizes (nav.h, ABI 3)
     static final long LIMITS_BYTES = 16;
     static final long GROUND_PROFILE_BYTES = 48;
-    static final long AIR_PROFILE_BYTES = 40;
-    static final long WORLD_DESC_BYTES = 32;
+    static final long AIR_PROFILE_BYTES = 48;
+    static final long WORLD_DESC_BYTES = 40;
     static final long STATS_BYTES = 56;
-    static final long GROUND_QUERY_BYTES = 104;
-    static final long AIR_QUERY_BYTES = 88;
+    static final long GROUND_QUERY_BYTES = 128;
+    static final long AIR_QUERY_BYTES = 120;
     static final long SEARCH_INFO_BYTES = 24;
-    static final long BODY_BYTES = 48;
+    static final long BODY_BYTES = 64;
     static final long APPLY_BYTES = 24;
-    static final long VIEW_BYTES = 32;
+    static final long VIEW_BYTES = 48;
     static final long GROUND_AGENT_DESC_BYTES = 112;
     static final long STEERING_DESC_BYTES = 44;
-    static final long REACH_QUERY_BYTES = 80;
-    static final long REACH_CELL_BYTES = 24;
-    static final long AIR_AGENT_DESC_BYTES = 96;
-    static final long FLOOD_QUERY_BYTES = 32;
+    static final long REACH_QUERY_BYTES = 96;
+    static final long REACH_CELL_BYTES = 40;
+    static final long AIR_AGENT_DESC_BYTES = 104;
+    static final long FLOOD_QUERY_BYTES = 56;
+    static final long FLOOD_CELL_BYTES = 32;
 
     private static final String FAILURE;
     static final MethodHandle LAST_ERROR;
     static final MethodHandle WORLD_CREATE;
     static final MethodHandle WORLD_DESTROY;
+    static final MethodHandle WORLD_SET_ORIGIN;
     static final MethodHandle CELL;
     static final MethodHandle WORLD_STEP;
     static final MethodHandle STATS_GET;
@@ -72,6 +79,7 @@ public final class CendaNav {
     static final MethodHandle STEERING_REQUEST_JUMP;
     static final MethodHandle GROUND_CREATE;
     static final MethodHandle GROUND_DESTROY;
+    static final MethodHandle GROUND_SET_ORIGIN;
     static final MethodHandle GROUND_MOVE_TO;
     static final MethodHandle GROUND_STOP;
     static final MethodHandle GROUND_REPLAN;
@@ -79,6 +87,7 @@ public final class CendaNav {
     static final MethodHandle GROUND_PATH;
     static final MethodHandle AIR_CREATE;
     static final MethodHandle AIR_DESTROY;
+    static final MethodHandle AIR_SET_ORIGIN;
     static final MethodHandle AIR_SET_CRUISE;
     static final MethodHandle AIR_MOVE_TO;
     static final MethodHandle AIR_STOP;
@@ -133,7 +142,9 @@ public final class CendaNav {
         LAST_ERROR = handle(lookup, "cn_last_error", FunctionDescriptor.of(ADDR));
         WORLD_CREATE = handle(lookup, "cn_world_create", FunctionDescriptor.of(ADDR, ADDR));
         WORLD_DESTROY = handle(lookup, "cn_world_destroy", FunctionDescriptor.ofVoid(ADDR));
-        CELL = handle(lookup, "cn_cell", FunctionDescriptor.of(I32, ADDR, I32, I32, I32, ADDR));
+        WORLD_SET_ORIGIN = handle(lookup, "cn_world_set_origin", FunctionDescriptor.of(I32, ADDR, I64, I64, I64),
+            critical);
+        CELL = handle(lookup, "cn_cell", FunctionDescriptor.of(I32, ADDR, I64, I64, I64, ADDR));
         WORLD_STEP = handle(lookup, "cn_world_step", FunctionDescriptor.of(I32, ADDR, I32));
         STATS_GET = handle(lookup, "cn_stats_get", FunctionDescriptor.ofVoid(ADDR, ADDR), critical);
         SEARCH_GROUND = handle(lookup, "cn_search_ground", FunctionDescriptor.of(I64, ADDR, ADDR), critical);
@@ -141,10 +152,12 @@ public final class CendaNav {
         SEARCH_POLL = handle(lookup, "cn_search_poll", FunctionDescriptor.of(I32, ADDR, I64, ADDR), critical);
         SEARCH_POINTS = handle(lookup, "cn_search_points", FunctionDescriptor.of(I32, ADDR, I64, ADDR, I32), critical);
         SEARCH_RELEASE = handle(lookup, "cn_search_release", FunctionDescriptor.ofVoid(ADDR, I64), critical);
-        GROUND_CREATE = handle(lookup, "cn_ground_agent_create", FunctionDescriptor.of(ADDR, ADDR, F32, F32, F32));
+        GROUND_CREATE = handle(lookup, "cn_ground_agent_create", FunctionDescriptor.of(ADDR, ADDR, ADDR, F64, F64, F64));
         GROUND_DESTROY = handle(lookup, "cn_ground_agent_destroy", FunctionDescriptor.ofVoid(ADDR));
+        GROUND_SET_ORIGIN = handle(lookup, "cn_ground_agent_set_origin",
+            FunctionDescriptor.of(I32, ADDR, I64, I64, I64), critical);
         GROUND_MOVE_TO = handle(lookup, "cn_ground_agent_move_to",
-            FunctionDescriptor.of(I32, ADDR, F32, F32, F32, F32, F32, ADDR), critical);
+            FunctionDescriptor.of(I32, ADDR, F64, F64, F64, F32, F32, ADDR), critical);
         GROUND_STOP = handle(lookup, "cn_ground_agent_stop", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR), critical);
         GROUND_REPLAN = handle(lookup, "cn_ground_agent_replan", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR), critical);
         GROUND_TICK = handle(lookup, "cn_ground_agent_tick",
@@ -157,27 +170,29 @@ public final class CendaNav {
         STEERING_REQUEST_JUMP = handle(lookup, "cn_steering_request_jump", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR),
             critical);
         GROUND_PATH = handle(lookup, "cn_ground_agent_path", FunctionDescriptor.of(I32, ADDR, ADDR, I32, ADDR), critical);
-        AIR_CREATE = handle(lookup, "cn_air_agent_create", FunctionDescriptor.of(ADDR, ADDR, F32, F32, F32));
+        AIR_CREATE = handle(lookup, "cn_air_agent_create", FunctionDescriptor.of(ADDR, ADDR, ADDR, F64, F64, F64));
         AIR_DESTROY = handle(lookup, "cn_air_agent_destroy", FunctionDescriptor.ofVoid(ADDR));
-        AIR_SET_CRUISE = handle(lookup, "cn_air_agent_set_cruise", FunctionDescriptor.ofVoid(ADDR, F32), critical);
-        AIR_MOVE_TO = handle(lookup, "cn_air_agent_move_to", FunctionDescriptor.of(I32, ADDR, F32, F32, F32, ADDR), critical);
+        AIR_SET_ORIGIN = handle(lookup, "cn_air_agent_set_origin", FunctionDescriptor.of(I32, ADDR, I64, I64, I64),
+            critical);
+        AIR_SET_CRUISE = handle(lookup, "cn_air_agent_set_cruise", FunctionDescriptor.ofVoid(ADDR, F64), critical);
+        AIR_MOVE_TO = handle(lookup, "cn_air_agent_move_to", FunctionDescriptor.of(I32, ADDR, F64, F64, F64, ADDR), critical);
         AIR_STOP = handle(lookup, "cn_air_agent_stop", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR), critical);
         AIR_REPLAN = handle(lookup, "cn_air_agent_replan", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR), critical);
-        AIR_TICK = handle(lookup, "cn_air_agent_tick", FunctionDescriptor.of(I32, ADDR, ADDR, F32, F32, F32, F32, ADDR),
+        AIR_TICK = handle(lookup, "cn_air_agent_tick", FunctionDescriptor.of(I32, ADDR, ADDR, F64, F64, F64, F32, ADDR),
             critical);
         AIR_STEER_TARGET = handle(lookup, "cn_air_agent_steer_target",
-            FunctionDescriptor.of(I32, ADDR, F32, F32, F32, ADDR), critical);
+            FunctionDescriptor.of(I32, ADDR, F64, F64, F64, ADDR), critical);
         AIR_PATH = handle(lookup, "cn_air_agent_path", FunctionDescriptor.of(I32, ADDR, ADDR, I32, ADDR), critical);
         STEER_YAW_FOR = handle(lookup, "cn_steer_yaw_for", FunctionDescriptor.of(F32, F32, F32, F32), critical);
         STEER_TURN = handle(lookup, "cn_steer_turn", FunctionDescriptor.of(F32, F32, F32, F32), critical);
         STEER_YAW_ERROR = handle(lookup, "cn_steer_yaw_error", FunctionDescriptor.of(F32, F32, F32), critical);
         PROBE_GROUND_LEVEL = handle(lookup, "cn_probe_ground_level",
-            FunctionDescriptor.of(F32, ADDR, F32, F32, F32, I32, I32, I32));
+            FunctionDescriptor.of(F64, ADDR, F64, F64, F64, I32, I32, I32));
         PROBE_FLUID_TOP = handle(lookup, "cn_probe_fluid_top",
-            FunctionDescriptor.of(F32, ADDR, F32, F32, F32, I32, I32, I32));
-        PROBE_CLEAR = handle(lookup, "cn_probe_clear", FunctionDescriptor.of(I32, ADDR, F32, F32, F32, F32, I32));
+            FunctionDescriptor.of(F64, ADDR, F64, F64, F64, I32, I32, I32));
+        PROBE_CLEAR = handle(lookup, "cn_probe_clear", FunctionDescriptor.of(I32, ADDR, F64, F64, F64, F32, I32));
         PROBE_COLUMN_PEAK = handle(lookup, "cn_probe_column_peak",
-            FunctionDescriptor.of(F32, ADDR, F32, F32, F32, I32, I32));
+            FunctionDescriptor.of(F64, ADDR, F64, F64, F64, I32, I32));
         FLOOD = handle(lookup, "cn_flood", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32));
         REACH_GROUND = handle(lookup, "cn_reach_ground", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32));
     }
@@ -247,38 +262,49 @@ public final class CendaNav {
         s.set(F32, o + 44, p.fallCostPerBlock());
     }
 
+    // cn_air_profile (48 bytes): int32 cell_size; float altitude, climb, descend; int32 allow_unknown;
+    // float unknown_cost; double cruise_y; int64 min_y, max_y.
     static void writeAirProfile(MemorySegment s, long o, AirProfile p) {
         s.set(I32, o, p.cellSize());
-        s.set(F32, o + 4, p.cruiseY());
-        s.set(F32, o + 8, p.altitudeCost());
-        s.set(F32, o + 12, p.climbCost());
-        s.set(F32, o + 16, p.descendCost());
-        s.set(I32, o + 20, p.allowUnknown() ? 1 : 0);
-        s.set(F32, o + 24, p.unknownCost());
-        s.set(I32, o + 28, p.minY());
-        s.set(I32, o + 32, p.maxY());
-        s.set(I32, o + 36, 0);
+        s.set(F32, o + 4, p.altitudeCost());
+        s.set(F32, o + 8, p.climbCost());
+        s.set(F32, o + 12, p.descendCost());
+        s.set(I32, o + 16, p.allowUnknown() ? 1 : 0);
+        s.set(F32, o + 20, p.unknownCost());
+        s.set(F64, o + 24, p.cruiseY());
+        s.set(I64, o + 32, p.minY());
+        s.set(I64, o + 40, p.maxY());
     }
 
-    /** Writes a {@code cn_body}. */
+    /** Writes a {@code cn_body} (64 bytes: double x, y, z; 8 floats; uint32 flags, reserved). */
     static void writeBody(MemorySegment s, AgentBody b) {
-        s.set(F32, 0, b.x);
-        s.set(F32, 4, b.y);
-        s.set(F32, 8, b.z);
-        s.set(F32, 12, b.yaw);
-        s.set(F32, 16, b.legHeight);
-        s.set(F32, 20, b.halfWidth);
-        s.set(F32, 24, b.halfLength);
-        s.set(F32, 28, b.moveSpeed);
-        s.set(F32, 32, b.speedMultiplier);
-        s.set(F32, 36, b.waterSpeedFactor);
-        s.set(F32, 40, b.swimStrokeReach);
-        s.set(I32, 44, (b.onGround ? 1 : 0) | (b.inWater ? 2 : 0) | (b.gliding ? 4 : 0));
+        s.set(F64, 0, b.x);
+        s.set(F64, 8, b.y);
+        s.set(F64, 16, b.z);
+        s.set(F32, 24, b.yaw);
+        s.set(F32, 28, b.legHeight);
+        s.set(F32, 32, b.halfWidth);
+        s.set(F32, 36, b.halfLength);
+        s.set(F32, 40, b.moveSpeed);
+        s.set(F32, 44, b.speedMultiplier);
+        s.set(F32, 48, b.waterSpeedFactor);
+        s.set(F32, 52, b.swimStrokeReach);
+        s.set(I32, 56, (b.onGround ? 1 : 0) | (b.inWater ? 2 : 0) | (b.gliding ? 4 : 0));
+        s.set(I32, 60, 0);
     }
 
-    /** Reads a {@code cn_agent_view} into an {@link AgentView}. */
+    /** Reads a {@code cn_agent_view} (48 bytes) into an {@link AgentView}. */
     static void readView(MemorySegment v, AgentView out) {
         out.set(v.get(I32, 0), v.get(I32, 4), v.get(I32, 8) != 0, v.get(I32, 12),
-            v.get(F32, 16), v.get(F32, 20), v.get(F32, 24), v.get(I32, 28));
+            v.get(F64, 16), v.get(F64, 24), v.get(F64, 32), v.get(I32, 40));
+    }
+
+    /** Writes an absolute origin as three int64s ({@code const int64_t*} arguments). */
+    static MemorySegment origin(java.lang.foreign.Arena arena, long ox, long oy, long oz) {
+        MemorySegment o = arena.allocate(I64, 3);
+        o.set(I64, 0, ox);
+        o.set(I64, 8, oy);
+        o.set(I64, 16, oz);
+        return o;
     }
 }

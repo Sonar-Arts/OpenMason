@@ -19,14 +19,14 @@ public final class RayHit {
     public int kind;
     /** The side of the collider that was hit; {@link #FACE_NONE} when the start was already inside. */
     public int face = FACE_NONE;
-    /** The cell hit (for a dynamic box: the cell holding the hit point). */
-    public int x, y, z;
+    /** The ABSOLUTE cell hit (for a dynamic box: the cell holding the hit point). */
+    public long x, y, z;
     /** Shape id, fluid id or dynamic box id. */
     public int id;
     /** Along the ray in world units, or the fraction 0..1 of a sweep. */
-    public float distance = Float.POSITIVE_INFINITY;
-    /** The hit point (a sweep: the swept box's centre there). */
-    public float px, py, pz;
+    public double distance = Double.POSITIVE_INFINITY;
+    /** The hit point in the world's frame (a sweep: the swept box's centre there). */
+    public double px, py, pz;
     /** The dynamic box's host value. */
     public long user;
 

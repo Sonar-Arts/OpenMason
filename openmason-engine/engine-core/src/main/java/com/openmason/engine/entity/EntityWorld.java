@@ -8,6 +8,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import static com.openmason.engine.entity.CendaEntities.BODY_BYTES;
 import static com.openmason.engine.entity.CendaEntities.CLIP_BYTES;
 import static com.openmason.engine.entity.CendaEntities.F32;
+import static com.openmason.engine.entity.CendaEntities.F64;
 import static com.openmason.engine.entity.CendaEntities.FILTER_BYTES;
 import static com.openmason.engine.entity.CendaEntities.I32;
 import static com.openmason.engine.entity.CendaEntities.I64;
@@ -22,6 +23,11 @@ import static com.openmason.engine.entity.CendaEntities.rethrow;
  * <p><b>Handles</b> are 64-bit, never 0; a handle kept after its entity left stops matching anything
  * (its slot's generation moved on). {@link #slotOf(long)} gives a small dense index a host can key
  * its own per-entity objects by.
+ *
+ * <p><b>Coordinates (OpenMason #142, CE ABI 2).</b> Positions are {@code double}s relative to the
+ * world's frame origin ({@link #setOrigin}, default 0). The spatial index is a 3D grid of
+ * {@code cellSize}-block cells keyed by absolute {@code long} cell triples, exact at any distance;
+ * moving the origin shifts the stored bodies into the new frame.
  *
  * <p><b>Threads.</b> {@link #spawn} and {@link #despawn} may be called from any thread. Every other
  * method belongs to the world's owner thread (the one that commits). The query/output buffers are
@@ -62,7 +68,8 @@ public final class EntityWorld implements AutoCloseable {
     private MemorySegment handles;
     private MemorySegment bodies;
     private final MemorySegment filter;
-    private final MemorySegment scratch; // ce_type_desc / ce_body / ce_clip_state / float[6] / out distance
+    private final MemorySegment scratch; // ce_type_desc / ce_body / ce_clip_state / double[6] / out distance
+    private long originX, originY, originZ;
 
     private EntityWorld(MemorySegment world) {
         this.world = world;
@@ -74,12 +81,12 @@ public final class EntityWorld implements AutoCloseable {
     }
 
     /**
-     * Creates a native world. {@code cellSize} is the spatial grid's cell edge in world units
+     * Creates a native world. {@code cellSize} is the 3D spatial grid's cell edge in blocks
      * (&lt;= 0 picks 8).
      *
      * @throws IllegalStateException when the Cenda entity model is unavailable (the message says why)
      */
-    public static EntityWorld create(float cellSize) {
+    public static EntityWorld create(int cellSize) {
         if (!CendaEntities.isAvailable()) {
             throw new IllegalStateException("Cenda entity model unavailable: " + CendaEntities.unavailableReason());
         }
@@ -131,6 +138,37 @@ public final class EntityWorld implements AutoCloseable {
         }
     }
 
+    /**
+     * Moves the frame origin (absolute cell). Stored bodies (pending ones too) shift by old - new so they
+     * keep their absolute place; positions passed or returned afterwards are relative to the new origin.
+     * Owner thread.
+     */
+    public void setOrigin(long ox, long oy, long oz) {
+        try {
+            int rc = (int) CendaEntities.SET_ORIGIN.invokeExact(w(), ox, oy, oz);
+            if (rc != 0) {
+                throw new IllegalStateException("ce_set_origin: " + CendaEntities.lastError());
+            }
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+        originX = ox;
+        originY = oy;
+        originZ = oz;
+    }
+
+    public long originX() {
+        return originX;
+    }
+
+    public long originY() {
+        return originY;
+    }
+
+    public long originZ() {
+        return originZ;
+    }
+
     public boolean isClosed() {
         return world == null;
     }
@@ -178,7 +216,7 @@ public final class EntityWorld implements AutoCloseable {
      * Queues an entity (any thread). Returns its handle (state PENDING until {@link #commitSpawns}),
      * or 0 when the type is undefined or the world is closed.
      */
-    public long spawn(int typeId, int flags, float x, float y, float z, float yaw) {
+    public long spawn(int typeId, int flags, double x, double y, double z, float yaw) {
         lifetime.readLock().lock();
         try {
             if (world == null) {
@@ -327,7 +365,7 @@ public final class EntityWorld implements AutoCloseable {
      * Writes body {@code index} of the next {@link #syncBodies} batch. The body box is
      * [x - w/2, x + w/2] x [y - legHeight, y + height] x [z - l/2, z + l/2].
      */
-    public void body(int index, long handle, float x, float y, float z, float yaw,
+    public void body(int index, long handle, double x, double y, double z, float yaw,
                      float width, float height, float length, float legHeight, int flags) {
         long base = index * BODY_BYTES;
         if (base + BODY_BYTES > bodies.byteSize()) {
@@ -336,17 +374,20 @@ public final class EntityWorld implements AutoCloseable {
             bodies = grown;
         }
         MemorySegment b = bodies;
+        // ce_body (64 bytes): handle; double x, y, z; float yaw, width, height, length, leg; uint32
+        // flags, reserved[2].
         b.set(I64, base, handle);
-        b.set(F32, base + 8, x);
-        b.set(F32, base + 12, y);
-        b.set(F32, base + 16, z);
-        b.set(F32, base + 20, yaw);
-        b.set(F32, base + 24, width);
-        b.set(F32, base + 28, height);
-        b.set(F32, base + 32, length);
-        b.set(F32, base + 36, legHeight);
-        b.set(I32, base + 40, flags);
-        b.set(I32, base + 44, 0);
+        b.set(F64, base + 8, x);
+        b.set(F64, base + 16, y);
+        b.set(F64, base + 24, z);
+        b.set(F32, base + 32, yaw);
+        b.set(F32, base + 36, width);
+        b.set(F32, base + 40, height);
+        b.set(F32, base + 44, length);
+        b.set(F32, base + 48, legHeight);
+        b.set(I32, base + 52, flags);
+        b.set(I32, base + 56, 0);
+        b.set(I32, base + 60, 0);
     }
 
     /** Pushes bodies 0..count-1 written with {@link #body}; returns how many named an entity. */
@@ -358,15 +399,21 @@ public final class EntityWorld implements AutoCloseable {
         }
     }
 
-    /** The entity's x, y, z, yaw, width, height, length, legHeight into {@code out8}; false when absent. */
-    public boolean bodyOf(long handle, float[] out8) {
+    /**
+     * The entity's x, y, z (frame), yaw, width, height, length, legHeight into {@code out8}; false when
+     * absent.
+     */
+    public boolean bodyOf(long handle, double[] out8) {
         try {
             MemorySegment b = scratch;
             if ((int) CendaEntities.BODY_GET.invokeExact(w(), handle, b) == 0) {
                 return false;
             }
-            for (int i = 0; i < 8; i++) {
-                out8[i] = b.get(F32, 8 + 4L * i);
+            out8[0] = b.get(F64, 8);
+            out8[1] = b.get(F64, 16);
+            out8[2] = b.get(F64, 24);
+            for (int i = 0; i < 5; i++) {
+                out8[3 + i] = b.get(F32, 32 + 4L * i);
             }
             return true;
         } catch (Throwable t) {
@@ -378,7 +425,7 @@ public final class EntityWorld implements AutoCloseable {
     public int bodyFlags(long handle) {
         try {
             MemorySegment b = scratch;
-            return (int) CendaEntities.BODY_GET.invokeExact(w(), handle, b) == 0 ? 0 : b.get(I32, 40);
+            return (int) CendaEntities.BODY_GET.invokeExact(w(), handle, b) == 0 ? 0 : b.get(I32, 52);
         } catch (Throwable t) {
             throw rethrow(t);
         }
@@ -399,7 +446,7 @@ public final class EntityWorld implements AutoCloseable {
     }
 
     /** Entities whose position is within {@code r} of (x, y, z), in live order, into {@code out}. */
-    public void queryRadius(float x, float y, float z, float r, EntityFilter f, HandleList out) {
+    public void queryRadius(double x, double y, double z, double r, EntityFilter f, HandleList out) {
         try {
             MemorySegment fs = filter(f);
             int cap = (int) (handles.byteSize() / 8);
@@ -417,10 +464,10 @@ public final class EntityWorld implements AutoCloseable {
     }
 
     /**
-     * The entity nearest (x, y, z) within {@code maxR} ({@code Float.POSITIVE_INFINITY} = any), or 0.
+     * The entity nearest (x, y, z) within {@code maxR} ({@code Double.POSITIVE_INFINITY} = any), or 0.
      * Ties go to the entity that entered the world first.
      */
-    public long queryNearest(float x, float y, float z, float maxR, EntityFilter f) {
+    public long queryNearest(double x, double y, double z, double maxR, EntityFilter f) {
         try {
             return (long) CendaEntities.QUERY_NEAREST.invokeExact(w(), x, y, z, maxR, filter(f), MemorySegment.NULL);
         } catch (Throwable t) {
@@ -432,27 +479,27 @@ public final class EntityWorld implements AutoCloseable {
      * Entities whose position satisfies min &lt;= p &lt; max on every axis; an axis from -inf to +inf is
      * not tested. Into {@code out}, live order.
      */
-    public void queryBox(float minX, float minY, float minZ, float maxX, float maxY, float maxZ,
+    public void queryBox(double minX, double minY, double minZ, double maxX, double maxY, double maxZ,
                          EntityFilter f, HandleList out) {
         boxQuery(KIND_BOX, minX, minY, minZ, maxX, maxY, maxZ, f, out);
     }
 
     /** Entities whose body box overlaps the box (strict), into {@code out}, live order. */
-    public void queryAabb(float minX, float minY, float minZ, float maxX, float maxY, float maxZ,
+    public void queryAabb(double minX, double minY, double minZ, double maxX, double maxY, double maxZ,
                           EntityFilter f, HandleList out) {
         boxQuery(KIND_AABB, minX, minY, minZ, maxX, maxY, maxZ, f, out);
     }
 
-    private void boxQuery(int kind, float minX, float minY, float minZ, float maxX, float maxY, float maxZ,
+    private void boxQuery(int kind, double minX, double minY, double minZ, double maxX, double maxY, double maxZ,
                           EntityFilter f, HandleList out) {
         try {
             MemorySegment box = scratch;
-            box.set(F32, 0, minX);
-            box.set(F32, 4, minY);
-            box.set(F32, 8, minZ);
-            box.set(F32, 12, maxX);
-            box.set(F32, 16, maxY);
-            box.set(F32, 20, maxZ);
+            box.set(F64, 0, minX);
+            box.set(F64, 8, minY);
+            box.set(F64, 16, minZ);
+            box.set(F64, 24, maxX);
+            box.set(F64, 32, maxY);
+            box.set(F64, 40, maxZ);
             MemorySegment fs = filter(f);
             int cap = (int) (handles.byteSize() / 8);
             int total = invokeBox(kind, box, fs, cap);

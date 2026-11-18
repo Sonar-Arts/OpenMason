@@ -127,3 +127,37 @@ if(MSVC)
 else()
     target_compile_options(cenda_kernels PRIVATE -ffp-contract=off)
 endif()
+
+# Region store (cv_store_*, OpenMason #120): an object library so its ctest links just the store.
+add_library(cenda_voxel_store OBJECT
+        src/voxel_store/crc32c.cpp
+        src/voxel_store/store_io.cpp
+        src/voxel_store/region_file.cpp
+        src/voxel_store/region_store.cpp)
+target_include_directories(cenda_voxel_store PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(cenda_voxel_store PRIVATE libzstd_static cenda_warnings)
+# The store's error reporting (cv_set_error/cv_last_error) lives in src/voxel_world/cv_world.cpp.
+target_sources(cenda_kernels PRIVATE $<TARGET_OBJECTS:cenda_voxel_store>)
+
+# Voxel world core (cv_*, OpenMason #141/#144) + native mesher/visibility (mesh_*.cpp, visibility.cpp,
+# #143/#123) + streamer (stream*.cpp, #121; stream_toygen.cpp = the test-only toy generator).
+target_sources(cenda_kernels PRIVATE
+        src/voxel_world/cv_section.cpp
+        src/voxel_world/cv_world.cpp
+        src/voxel_world/cv_surface.cpp
+        src/voxel_world/cv_internal.cpp
+        src/voxel_world/mesh_state.cpp
+        src/voxel_world/mesh_core_access.cpp
+        src/voxel_world/mesh_binary.cpp
+        src/voxel_world/mesh_models.cpp
+        src/voxel_world/mesh_fluid.cpp
+        src/voxel_world/mesh_pack.cpp
+        src/voxel_world/visibility.cpp
+        src/voxel_world/stream.cpp
+        src/voxel_world/stream_plan.cpp
+        src/voxel_world/stream_toygen.cpp)
+# Octree LOD from cubes (cv_lod_*, OpenMason #122 / Phase 5).
+target_sources(cenda_kernels PRIVATE
+        src/voxel_world/lod.cpp
+        src/voxel_world/lod_data.cpp
+        src/voxel_world/lod_mesh.cpp)

@@ -27,28 +27,32 @@ public final class CendaPhysics {
     private static final Logger LOGGER = LoggerFactory.getLogger(CendaPhysics.class);
 
     /** Must equal {@code CP_ABI_VERSION} in physics.h (build-kernels.sh checks both sides). */
-    static final int EXPECTED_ABI = 1;
+    static final int EXPECTED_ABI = 2;
 
     static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;
     static final ValueLayout.OfFloat F32 = ValueLayout.JAVA_FLOAT;
+    static final ValueLayout.OfDouble F64 = ValueLayout.JAVA_DOUBLE;
     static final ValueLayout.OfShort I16 = ValueLayout.JAVA_SHORT;
     static final java.lang.foreign.AddressLayout ADDR = ValueLayout.ADDRESS;
 
-    // struct sizes (physics.h)
-    static final long BOX_BYTES = 24;
+    // struct sizes (physics.h, ABI 2)
+    static final long BOX_BYTES = 24;   // cp_box: cell-local floats (shapes)
+    static final long AABB_BYTES = 48;  // cp_aabb: frame doubles (dynamic boxes, overlaps, hitboxes)
     static final long FLUID_BYTES = 24;
     static final long DESC_BYTES = 32;
     static final long STATS_BYTES = 40;
-    static final long BODY_BYTES = 64;
+    static final long BODY_BYTES = 80;
     static final long INTEGRATOR_BYTES = 32;
-    static final long SAMPLE_BYTES = 24;
-    static final long HIT_BYTES = 48;
+    static final long SAMPLE_BYTES = 32;
+    static final long HIT_BYTES = 80;
 
     private static final String FAILURE;
     static final MethodHandle LAST_ERROR;
     static final MethodHandle WORLD_CREATE;
     static final MethodHandle WORLD_DESTROY;
+    static final MethodHandle SET_ORIGIN;
+    static final MethodHandle GET_ORIGIN;
     static final MethodHandle SHAPE_DEFINE;
     static final MethodHandle FLUID_DEFINE;
     static final MethodHandle INVALIDATE_CELL;
@@ -72,9 +76,9 @@ public final class CendaPhysics {
     static final MethodHandle SWEEP;
     static final MethodHandle RAY_BOXES;
 
-    /** {@code cp_fill_fn}: (user, x0, y0, z0, sx, sy, sz, shapes, fluids) -> int. */
+    /** {@code cp_fill_fn}: (user, int64 x0, y0, z0, int32 sx, sy, sz, shapes, fluids) -> int. */
     static final FunctionDescriptor FILL_FN =
-        FunctionDescriptor.of(I32, ADDR, I32, I32, I32, I32, I32, I32, ADDR, ADDR);
+        FunctionDescriptor.of(I32, ADDR, I64, I64, I64, I32, I32, I32, ADDR, ADDR);
 
     static {
         String failure = null;
@@ -113,32 +117,34 @@ public final class CendaPhysics {
         LAST_ERROR = handle(lookup, "cp_last_error", FunctionDescriptor.of(ADDR));
         WORLD_CREATE = handle(lookup, "cp_world_create", FunctionDescriptor.of(ADDR, ADDR));
         WORLD_DESTROY = handle(lookup, "cp_world_destroy", FunctionDescriptor.ofVoid(ADDR));
+        SET_ORIGIN = handle(lookup, "cp_set_origin", FunctionDescriptor.of(I32, ADDR, I64, I64, I64), critical);
+        GET_ORIGIN = handle(lookup, "cp_get_origin", FunctionDescriptor.of(I32, ADDR, ADDR), critical);
         SHAPE_DEFINE = handle(lookup, "cp_shape_define", FunctionDescriptor.of(I32, ADDR, I32, ADDR, I32, I32, I32), critical);
         FLUID_DEFINE = handle(lookup, "cp_fluid_define", FunctionDescriptor.of(I32, ADDR, I32, ADDR), critical);
-        INVALIDATE_CELL = handle(lookup, "cp_invalidate_cell", FunctionDescriptor.ofVoid(ADDR, I32, I32, I32));
+        INVALIDATE_CELL = handle(lookup, "cp_invalidate_cell", FunctionDescriptor.ofVoid(ADDR, I64, I64, I64));
         INVALIDATE_BOX = handle(lookup, "cp_invalidate_box",
-            FunctionDescriptor.ofVoid(ADDR, I32, I32, I32, I32, I32, I32));
+            FunctionDescriptor.ofVoid(ADDR, I64, I64, I64, I64, I64, I64));
         INVALIDATE_ALL = handle(lookup, "cp_invalidate_all", FunctionDescriptor.ofVoid(ADDR));
-        CELL_GET = handle(lookup, "cp_cell_get", FunctionDescriptor.of(I32, ADDR, I32, I32, I32, ADDR, ADDR));
+        CELL_GET = handle(lookup, "cp_cell_get", FunctionDescriptor.of(I32, ADDR, I64, I64, I64, ADDR, ADDR));
         STATS_GET = handle(lookup, "cp_stats_get", FunctionDescriptor.ofVoid(ADDR, ADDR), critical);
         BOX_ADD = handle(lookup, "cp_box_add", FunctionDescriptor.of(I32, ADDR, ADDR, I32, I32, I64), critical);
         BOX_SET = handle(lookup, "cp_box_set", FunctionDescriptor.of(I32, ADDR, I32, ADDR, I32, I32), critical);
         BOX_REMOVE = handle(lookup, "cp_box_remove", FunctionDescriptor.of(I32, ADDR, I32), critical);
         BOX_CLEAR = handle(lookup, "cp_box_clear", FunctionDescriptor.ofVoid(ADDR), critical);
         CELL_TOP = handle(lookup, "cp_cell_top",
-            FunctionDescriptor.of(F32, ADDR, I32, I32, I32, F32, F32, F32, F32, I32));
+            FunctionDescriptor.of(F32, ADDR, I64, I64, I64, F64, F64, F64, F64, I32));
         OVERLAPS = handle(lookup, "cp_overlaps", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
         NEAREST_OPEN_CELL = handle(lookup, "cp_nearest_open_cell",
             FunctionDescriptor.of(I32, ADDR, ADDR, I32, ADDR, I32));
         MOVE = handle(lookup, "cp_move", FunctionDescriptor.of(I32, ADDR, ADDR, F32));
         MOVE_MANY = handle(lookup, "cp_move_many", FunctionDescriptor.of(I32, ADDR, ADDR, I32, F32));
         FLUID_MEASURE = handle(lookup, "cp_fluid_measure",
-            FunctionDescriptor.of(I32, ADDR, F32, F32, F32, F32, F32, F32, F32, I32, ADDR));
+            FunctionDescriptor.of(I32, ADDR, F64, F64, F64, F32, F32, F64, F32, I32, ADDR));
         BUOYANCY_VY = handle(lookup, "cp_buoyancy_vy", FunctionDescriptor.of(F32, F32, F32, F32, ADDR), critical);
         STEP = handle(lookup, "cp_step", FunctionDescriptor.of(I32, ADDR, ADDR, I32, F32, ADDR, ADDR));
-        RAYCAST = handle(lookup, "cp_raycast", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, F32, I32, I32, ADDR));
+        RAYCAST = handle(lookup, "cp_raycast", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, F64, I32, I32, ADDR));
         SWEEP = handle(lookup, "cp_sweep", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, F32, F32, F32, I32, ADDR));
-        RAY_BOXES = handle(lookup, "cp_ray_boxes", FunctionDescriptor.of(I32, ADDR, ADDR, F32, ADDR, I32, F32, ADDR),
+        RAY_BOXES = handle(lookup, "cp_ray_boxes", FunctionDescriptor.of(I32, ADDR, ADDR, F64, ADDR, I32, F64, ADDR),
             critical);
     }
 

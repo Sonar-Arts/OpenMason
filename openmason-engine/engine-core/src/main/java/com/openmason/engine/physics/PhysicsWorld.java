@@ -12,10 +12,12 @@ import java.lang.invoke.MethodType;
 import java.lang.ref.Cleaner;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static com.openmason.engine.physics.CendaPhysics.AABB_BYTES;
 import static com.openmason.engine.physics.CendaPhysics.BODY_BYTES;
 import static com.openmason.engine.physics.CendaPhysics.BOX_BYTES;
 import static com.openmason.engine.physics.CendaPhysics.DESC_BYTES;
 import static com.openmason.engine.physics.CendaPhysics.F32;
+import static com.openmason.engine.physics.CendaPhysics.F64;
 import static com.openmason.engine.physics.CendaPhysics.FLUID_BYTES;
 import static com.openmason.engine.physics.CendaPhysics.HIT_BYTES;
 import static com.openmason.engine.physics.CendaPhysics.I16;
@@ -42,6 +44,16 @@ import static com.openmason.engine.physics.CendaPhysics.rethrow;
  * changed (block edits, state changes, chunk loads/unloads). Invalidation is lazy and cheap — the
  * region is refilled the next time a query touches it.
  *
+ * <p><b>Coordinates (OpenMason #142, CP ABI 2).</b> Cells are ABSOLUTE {@code long}s everywhere
+ * (the source's regions, invalidation, cell queries, {@link RayHit} cells). Positions — bodies,
+ * dynamic boxes, rays, sweeps, footprints, fluid points, hit points — are {@code double}s RELATIVE to
+ * the world's frame origin ({@link #setOrigin}, default 0): the cell holding a local position
+ * {@code p} is {@code origin + floor(p)}. Geometry runs in that local frame, so precision depends on
+ * the distance from the origin (~1/4000 block at 2^40 from it); a host that keeps the origin near its
+ * players gets that precision across the whole {@code long} range. Moving the origin keeps every
+ * cached cell valid (the cache is keyed by absolute cells) and every dynamic box in its absolute
+ * place.
+ *
  * <p><b>Threads.</b> The {@code invalidate*} methods may be called from any thread. Every other
  * method belongs to the world's owner thread; the source is called on it. Result objects passed in
  * are filled in place.
@@ -63,7 +75,7 @@ public final class PhysicsWorld implements AutoCloseable {
     static {
         try {
             FILL_TARGET = MethodHandles.lookup().findVirtual(PhysicsWorld.class, "fillUpcall",
-                MethodType.methodType(int.class, MemorySegment.class, int.class, int.class, int.class, int.class,
+                MethodType.methodType(int.class, MemorySegment.class, long.class, long.class, long.class, int.class,
                     int.class, int.class, MemorySegment.class, MemorySegment.class));
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
@@ -85,12 +97,15 @@ public final class PhysicsWorld implements AutoCloseable {
     private final MemorySegment integrator;
     private final MemorySegment sample;
     private final MemorySegment hit;
-    private final MemorySegment vec;      // float[6]: origin + direction / from + to / a box
-    private final MemorySegment cells;    // grown on demand (nearestOpenCell)
-    private MemorySegment boxes;          // grown on demand (rayBoxes / shapes)
-    private MemorySegment floats;         // grown on demand (rayBoxes out)
+    private final MemorySegment vec;      // double[6]: origin + direction / from + to / a box
+    private final MemorySegment cells;    // int64 xyz triplets (nearestOpenCell)
+    private final MemorySegment shapeBoxes; // cp_box floats (defineShape)
+    private MemorySegment boxes;          // cp_aabb doubles, grown on demand (rayBoxes)
+    private MemorySegment doubles;        // grown on demand (rayBoxes out)
     private final MemorySegment cellOut;  // uint16 shape + uint16 fluid
     private final MemorySegment statsOut;
+    private final MemorySegment originOut;
+    private long originX, originY, originZ;
 
     private PhysicsWorld(VoxelPhysicsSource source, int brickShift, int cacheBricks, int unloadedShape) {
         this.source = source;
@@ -101,12 +116,14 @@ public final class PhysicsWorld implements AutoCloseable {
         this.integrator = arena.allocate(INTEGRATOR_BYTES, 8);
         this.sample = arena.allocate(SAMPLE_BYTES, 8);
         this.hit = arena.allocate(HIT_BYTES, 8);
-        this.vec = arena.allocate(F32, 6);
-        this.cells = arena.allocate(I32, 3 * 64);
-        this.boxes = arena.allocate(BOX_BYTES * SHAPE_MAX_BOXES, 8);
-        this.floats = arena.allocate(F32, 64);
+        this.vec = arena.allocate(F64, 6);
+        this.cells = arena.allocate(I64, 3 * 64);
+        this.shapeBoxes = arena.allocate(BOX_BYTES * SHAPE_MAX_BOXES, 8);
+        this.boxes = arena.allocate(AABB_BYTES * 16, 8);
+        this.doubles = arena.allocate(F64, 64);
         this.cellOut = arena.allocate(I16, 2);
         this.statsOut = arena.allocate(STATS_BYTES, 8);
+        this.originOut = arena.allocate(I64, 3);
 
         MemorySegment stub = Linker.nativeLinker().upcallStub(FILL_TARGET.bindTo(this), CendaPhysics.FILL_FN, arena);
         MemorySegment desc = arena.allocate(DESC_BYTES, 8);
@@ -169,7 +186,7 @@ public final class PhysicsWorld implements AutoCloseable {
     // Called by native code inside an owner-thread call. Must never throw: an exception escaping an
     // upcall terminates the JVM. A failing source reads as "not loaded" (nothing cached).
     @SuppressWarnings("unused")
-    private int fillUpcall(MemorySegment user, int x0, int y0, int z0, int sx, int sy, int sz,
+    private int fillUpcall(MemorySegment user, long x0, long y0, long z0, int sx, int sy, int sz,
                            MemorySegment shapesOut, MemorySegment fluidsOut) {
         try {
             int n = sx * sy * sz;
@@ -228,6 +245,53 @@ public final class PhysicsWorld implements AutoCloseable {
         return current;
     }
 
+    // ---- the frame ---------------------------------------------------------------------------------
+
+    /**
+     * Moves the frame origin (an absolute cell). Every position passed in or returned afterwards is
+     * relative to it. Cached cells stay valid; dynamic boxes keep their absolute place (their stored
+     * coordinates shift by old - new). Owner thread.
+     */
+    public void setOrigin(long ox, long oy, long oz) {
+        try {
+            int rc = (int) CendaPhysics.SET_ORIGIN.invokeExact(w(), ox, oy, oz);
+            if (rc != 0) {
+                throw new IllegalStateException("cp_set_origin: " + CendaPhysics.lastError());
+            }
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+        originX = ox;
+        originY = oy;
+        originZ = oz;
+    }
+
+    /** The frame origin's absolute x (the cell of local 0). */
+    public long originX() {
+        return originX;
+    }
+
+    public long originY() {
+        return originY;
+    }
+
+    public long originZ() {
+        return originZ;
+    }
+
+    /** The native origin, read back (for checks; {@link #originX} etc. mirror it). */
+    long[] nativeOrigin() {
+        try {
+            int rc = (int) CendaPhysics.GET_ORIGIN.invokeExact(w(), originOut);
+            if (rc != 0) {
+                throw new IllegalStateException("cp_get_origin: " + CendaPhysics.lastError());
+            }
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+        return new long[] {originOut.get(I64, 0), originOut.get(I64, 8), originOut.get(I64, 16)};
+    }
+
     // ---- tables ------------------------------------------------------------------------------------
 
     /**
@@ -244,10 +308,10 @@ public final class PhysicsWorld implements AutoCloseable {
             throw new IllegalArgumentException("a shape has at most " + SHAPE_MAX_BOXES + " boxes, got " + count);
         }
         if (count > 0) {
-            MemorySegment.copy(boxes, 0, this.boxes, F32, 0, count * 6);
+            MemorySegment.copy(boxes, 0, this.shapeBoxes, F32, 0, count * 6);
         }
         try {
-            int rc = (int) CendaPhysics.SHAPE_DEFINE.invokeExact(w(), id, this.boxes, count, category, flags);
+            int rc = (int) CendaPhysics.SHAPE_DEFINE.invokeExact(w(), id, this.shapeBoxes, count, category, flags);
             if (rc != 0) {
                 throw new IllegalArgumentException("cp_shape_define(" + id + "): " + CendaPhysics.lastError());
             }
@@ -280,8 +344,8 @@ public final class PhysicsWorld implements AutoCloseable {
 
     // ---- the cache ----------------------------------------------------------------------------------
 
-    /** Any thread. The cell is refilled the next time a query touches it. */
-    public void invalidateCell(int x, int y, int z) {
+    /** Any thread. The (absolute) cell is refilled the next time a query touches it. */
+    public void invalidateCell(long x, long y, long z) {
         lifetime.readLock().lock();
         try {
             MemorySegment current = world;
@@ -295,8 +359,8 @@ public final class PhysicsWorld implements AutoCloseable {
         }
     }
 
-    /** Any thread. The half-open box {@code [x0,x1) x [y0,y1) x [z0,z1)} is refilled when next touched. */
-    public void invalidateBox(int x0, int y0, int z0, int x1, int y1, int z1) {
+    /** Any thread. The half-open absolute box {@code [x0,x1) x [y0,y1) x [z0,z1)} is refilled when next touched. */
+    public void invalidateBox(long x0, long y0, long z0, long x1, long y1, long z1) {
         lifetime.readLock().lock();
         try {
             MemorySegment current = world;
@@ -325,19 +389,19 @@ public final class PhysicsWorld implements AutoCloseable {
         }
     }
 
-    /** The cell's shape id (pulling it in if needed). */
-    public int cellShape(int x, int y, int z) {
+    /** The (absolute) cell's shape id (pulling it in if needed). */
+    public int cellShape(long x, long y, long z) {
         readCell(x, y, z);
         return Short.toUnsignedInt(cellOut.get(I16, 0));
     }
 
-    /** The cell's fluid id (pulling it in if needed). */
-    public int cellFluid(int x, int y, int z) {
+    /** The (absolute) cell's fluid id (pulling it in if needed). */
+    public int cellFluid(long x, long y, long z) {
         readCell(x, y, z);
         return Short.toUnsignedInt(cellOut.get(I16, 2));
     }
 
-    private void readCell(int x, int y, int z) {
+    private void readCell(long x, long y, long z) {
         try {
             int rc = (int) CendaPhysics.CELL_GET.invokeExact(w(), x, y, z, cellOut, cellOut.asSlice(2));
             if (rc != 0) {
@@ -361,8 +425,8 @@ public final class PhysicsWorld implements AutoCloseable {
 
     // ---- dynamic boxes -------------------------------------------------------------------------------
 
-    /** Adds a world-space box. Returns its id (&gt; 0). */
-    public int addBox(float minX, float minY, float minZ, float maxX, float maxY, float maxZ,
+    /** Adds a box (frame coordinates). Returns its id (&gt; 0). */
+    public int addBox(double minX, double minY, double minZ, double maxX, double maxY, double maxZ,
                       int category, int flags, long user) {
         putBox(vec, minX, minY, minZ, maxX, maxY, maxZ);
         try {
@@ -376,7 +440,7 @@ public final class PhysicsWorld implements AutoCloseable {
         }
     }
 
-    public void setBox(int id, float minX, float minY, float minZ, float maxX, float maxY, float maxZ,
+    public void setBox(int id, double minX, double minY, double minZ, double maxX, double maxY, double maxZ,
                        int category, int flags) {
         putBox(vec, minX, minY, minZ, maxX, maxY, maxZ);
         try {
@@ -406,22 +470,24 @@ public final class PhysicsWorld implements AutoCloseable {
         }
     }
 
-    private static void putBox(MemorySegment s, float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
-        s.set(F32, 0, minX);
-        s.set(F32, 4, minY);
-        s.set(F32, 8, minZ);
-        s.set(F32, 12, maxX);
-        s.set(F32, 16, maxY);
-        s.set(F32, 20, maxZ);
+    private static void putBox(MemorySegment s, double minX, double minY, double minZ, double maxX, double maxY,
+                               double maxZ) {
+        s.set(F64, 0, minX);
+        s.set(F64, 8, minY);
+        s.set(F64, 16, minZ);
+        s.set(F64, 24, maxX);
+        s.set(F64, 32, maxY);
+        s.set(F64, 40, maxZ);
     }
 
     // ---- cell and point queries ----------------------------------------------------------------------
 
     /**
-     * Height above the cell floor of the tallest box of the cell's shape (in {@code mask}) that
-     * overlaps the world-space XZ footprint (inclusive edges, clipped to the cell); 0 when none does.
+     * Height above the cell floor of the tallest box of the (absolute) cell's shape (in {@code mask})
+     * that overlaps the XZ footprint (frame coordinates, inclusive edges, clipped to the cell); 0 when
+     * none does.
      */
-    public float cellTop(int x, int y, int z, float minX, float minZ, float maxX, float maxZ, int mask) {
+    public float cellTop(long x, long y, long z, double minX, double minZ, double maxX, double maxZ, int mask) {
         try {
             return (float) CendaPhysics.CELL_TOP.invokeExact(w(), x, y, z, minX, minZ, maxX, maxZ, mask);
         } catch (Throwable t) {
@@ -429,13 +495,14 @@ public final class PhysicsWorld implements AutoCloseable {
         }
     }
 
-    /** {@link #cellTop} over the whole cell. */
-    public float cellTop(int x, int y, int z, int mask) {
-        return cellTop(x, y, z, x, z, x + 1.0f, z + 1.0f, mask);
+    /** {@link #cellTop} over the whole (absolute) cell. */
+    public float cellTop(long x, long y, long z, int mask) {
+        double lx = (double) (x - originX), lz = (double) (z - originZ);
+        return cellTop(x, y, z, lx, lz, lx + 1.0, lz + 1.0, mask);
     }
 
-    /** Whether any collider in {@code mask} overlaps the box by more than the contact tolerance. */
-    public boolean overlaps(float minX, float minY, float minZ, float maxX, float maxY, float maxZ, int mask) {
+    /** Whether any collider in {@code mask} overlaps the box (frame coordinates) by more than the contact tolerance. */
+    public boolean overlaps(double minX, double minY, double minZ, double maxX, double maxY, double maxZ, int mask) {
         putBox(vec, minX, minY, minZ, maxX, maxY, maxZ);
         try {
             return (int) CendaPhysics.OVERLAPS.invokeExact(w(), vec, mask) == 1;
@@ -445,20 +512,21 @@ public final class PhysicsWorld implements AutoCloseable {
     }
 
     /**
-     * Of {@code count} candidate cells ({@code xyz} triplets in {@code cellsXyz}), the index of the one
-     * holding nothing in {@code mask} whose centre is nearest {@code (px, py, pz)} (ties to the earlier
-     * candidate). With {@code preferenceGiven} false, the first open candidate. -1 when none is open.
+     * Of {@code count} candidate cells (absolute {@code xyz} triplets in {@code cellsXyz}), the index of
+     * the one holding nothing in {@code mask} whose centre is nearest the frame position
+     * {@code (px, py, pz)} (ties to the earlier candidate). With {@code preferenceGiven} false, the first
+     * open candidate. -1 when none is open.
      */
-    public int nearestOpenCell(int[] cellsXyz, int count, boolean preferenceGiven, float px, float py, float pz,
+    public int nearestOpenCell(long[] cellsXyz, int count, boolean preferenceGiven, double px, double py, double pz,
                                int mask) {
         if (count <= 0) return -1;
         if (count > 64) throw new IllegalArgumentException("at most 64 candidates");
-        MemorySegment.copy(cellsXyz, 0, cells, I32, 0, count * 3);
+        MemorySegment.copy(cellsXyz, 0, cells, I64, 0, count * 3);
         MemorySegment pref = MemorySegment.NULL;
         if (preferenceGiven) {
-            vec.set(F32, 0, px);
-            vec.set(F32, 4, py);
-            vec.set(F32, 8, pz);
+            vec.set(F64, 0, px);
+            vec.set(F64, 8, py);
+            vec.set(F64, 16, pz);
             pref = vec;
         }
         try {
@@ -503,9 +571,9 @@ public final class PhysicsWorld implements AutoCloseable {
         if (out != null) readSample(out);
     }
 
-    /** Measures fluid around a body (see {@code cp_fluid_measure}) into {@code out}. */
-    public FluidSample measureFluid(float x, float feetY, float z, float height, float halfX,
-                                    float flowBaseY, float flowHeight, int mask, FluidSample out) {
+    /** Measures fluid around a body (frame positions; see {@code cp_fluid_measure}) into {@code out}. */
+    public FluidSample measureFluid(double x, double feetY, double z, float height, float halfX,
+                                    double flowBaseY, float flowHeight, int mask, FluidSample out) {
         try {
             int rc = (int) CendaPhysics.FLUID_MEASURE.invokeExact(w(), x, feetY, z, height, halfX, flowBaseY,
                 flowHeight, mask, sample);
@@ -536,36 +604,39 @@ public final class PhysicsWorld implements AutoCloseable {
         }
     }
 
+    // cp_body (80 bytes): double x, y, z; float vx, vy, vz, half_x, half_z, below, above, step,
+    // partial step; uint32 mask, flags, contacts, reserved[2].
     private void writeBody(PhysicsBody b) {
         MemorySegment s = body;
-        s.set(F32, 0, b.x);
-        s.set(F32, 4, b.y);
-        s.set(F32, 8, b.z);
-        s.set(F32, 12, b.vx);
-        s.set(F32, 16, b.vy);
-        s.set(F32, 20, b.vz);
-        s.set(F32, 24, b.halfX);
-        s.set(F32, 28, b.halfZ);
-        s.set(F32, 32, b.below);
-        s.set(F32, 36, b.above);
-        s.set(F32, 40, b.stepHeight);
-        s.set(F32, 44, b.partialStepHeight);
-        s.set(I32, 48, b.mask);
-        s.set(I32, 52, b.flags);
-        s.set(I32, 56, 0);
-        s.set(I32, 60, 0);
+        s.set(F64, 0, b.x);
+        s.set(F64, 8, b.y);
+        s.set(F64, 16, b.z);
+        s.set(F32, 24, b.vx);
+        s.set(F32, 28, b.vy);
+        s.set(F32, 32, b.vz);
+        s.set(F32, 36, b.halfX);
+        s.set(F32, 40, b.halfZ);
+        s.set(F32, 44, b.below);
+        s.set(F32, 48, b.above);
+        s.set(F32, 52, b.stepHeight);
+        s.set(F32, 56, b.partialStepHeight);
+        s.set(I32, 60, b.mask);
+        s.set(I32, 64, b.flags);
+        s.set(I32, 68, 0);
+        s.set(I32, 72, 0);
+        s.set(I32, 76, 0);
     }
 
     private void readBody(PhysicsBody b) {
         MemorySegment s = body;
-        b.x = s.get(F32, 0);
-        b.y = s.get(F32, 4);
-        b.z = s.get(F32, 8);
-        b.vx = s.get(F32, 12);
-        b.vy = s.get(F32, 16);
-        b.vz = s.get(F32, 20);
-        b.flags = s.get(I32, 52);
-        b.contacts = s.get(I32, 56);
+        b.x = s.get(F64, 0);
+        b.y = s.get(F64, 8);
+        b.z = s.get(F64, 16);
+        b.vx = s.get(F32, 24);
+        b.vy = s.get(F32, 28);
+        b.vz = s.get(F32, 32);
+        b.flags = s.get(I32, 64);
+        b.contacts = s.get(I32, 68);
     }
 
     private void writeIntegrator(PhysicsIntegrator p) {
@@ -583,32 +654,28 @@ public final class PhysicsWorld implements AutoCloseable {
         s.set(I32, 28, 0);
     }
 
+    // cp_fluid_sample (32 bytes): double surface_y; float submersion, flow xyz; int32 samples, reserved.
     private void readSample(FluidSample out) {
-        out.submersion = sample.get(F32, 0);
-        out.surfaceY = sample.get(F32, 4);
-        out.flowX = sample.get(F32, 8);
-        out.flowY = sample.get(F32, 12);
-        out.flowZ = sample.get(F32, 16);
-        out.flowSamples = sample.get(I32, 20);
+        out.surfaceY = sample.get(F64, 0);
+        out.submersion = sample.get(F32, 8);
+        out.flowX = sample.get(F32, 12);
+        out.flowY = sample.get(F32, 16);
+        out.flowZ = sample.get(F32, 20);
+        out.flowSamples = sample.get(I32, 24);
     }
 
     // ---- rays and sweeps -----------------------------------------------------------------------------
 
     /**
-     * First collider in {@code mask} or fluid cell in {@code fluidMask} along the ray within
-     * {@code maxDistance} (world units; the direction need not be normalised). Fills {@code out};
-     * returns whether something was hit.
+     * First collider in {@code mask} or fluid cell in {@code fluidMask} along the ray (frame origin)
+     * within {@code maxDistance} (world units; the direction need not be normalised). Fills {@code out}
+     * (absolute cell, frame hit point); returns whether something was hit.
      */
-    public boolean raycast(float ox, float oy, float oz, float dx, float dy, float dz, float maxDistance,
+    public boolean raycast(double ox, double oy, double oz, double dx, double dy, double dz, double maxDistance,
                            int mask, int fluidMask, RayHit out) {
-        vec.set(F32, 0, ox);
-        vec.set(F32, 4, oy);
-        vec.set(F32, 8, oz);
-        vec.set(F32, 12, dx);
-        vec.set(F32, 16, dy);
-        vec.set(F32, 20, dz);
+        put6(ox, oy, oz, dx, dy, dz);
         try {
-            int r = (int) CendaPhysics.RAYCAST.invokeExact(w(), vec, vec.asSlice(12), maxDistance, mask, fluidMask, hit);
+            int r = (int) CendaPhysics.RAYCAST.invokeExact(w(), vec, vec.asSlice(24), maxDistance, mask, fluidMask, hit);
             readHit(out);
             return r == 1;
         } catch (Throwable t) {
@@ -620,16 +687,11 @@ public final class PhysicsWorld implements AutoCloseable {
      * Sweeps a box of half extents {@code (hx, hy, hz)} centred at {@code from} to {@code to}; the first
      * collider in {@code mask} it would touch. {@code out.distance} is the fraction travelled (0..1).
      */
-    public boolean sweep(float fromX, float fromY, float fromZ, float toX, float toY, float toZ,
+    public boolean sweep(double fromX, double fromY, double fromZ, double toX, double toY, double toZ,
                          float hx, float hy, float hz, int mask, RayHit out) {
-        vec.set(F32, 0, fromX);
-        vec.set(F32, 4, fromY);
-        vec.set(F32, 8, fromZ);
-        vec.set(F32, 12, toX);
-        vec.set(F32, 16, toY);
-        vec.set(F32, 20, toZ);
+        put6(fromX, fromY, fromZ, toX, toY, toZ);
         try {
-            int r = (int) CendaPhysics.SWEEP.invokeExact(w(), vec, vec.asSlice(12), hx, hy, hz, mask, hit);
+            int r = (int) CendaPhysics.SWEEP.invokeExact(w(), vec, vec.asSlice(24), hx, hy, hz, mask, hit);
             readHit(out);
             return r == 1;
         } catch (Throwable t) {
@@ -637,49 +699,55 @@ public final class PhysicsWorld implements AutoCloseable {
         }
     }
 
+    private void put6(double a, double b, double c, double d, double e, double f) {
+        vec.set(F64, 0, a);
+        vec.set(F64, 8, b);
+        vec.set(F64, 16, c);
+        vec.set(F64, 24, d);
+        vec.set(F64, 32, e);
+        vec.set(F64, 40, f);
+    }
+
+    // cp_hit (80 bytes): int32 kind, face; int64 x, y, z; int32 id, reserved; double distance, px, py,
+    // pz; uint64 user.
     private void readHit(RayHit out) {
         out.kind = hit.get(I32, 0);
         out.face = hit.get(I32, 4);
-        out.x = hit.get(I32, 8);
-        out.y = hit.get(I32, 12);
-        out.z = hit.get(I32, 16);
-        out.id = hit.get(I32, 20);
-        out.distance = hit.get(F32, 24);
-        out.px = hit.get(F32, 28);
-        out.py = hit.get(F32, 32);
-        out.pz = hit.get(F32, 36);
-        out.user = hit.get(I64, 40);
+        out.x = hit.get(I64, 8);
+        out.y = hit.get(I64, 16);
+        out.z = hit.get(I64, 24);
+        out.id = hit.get(I32, 32);
+        out.distance = hit.get(F64, 40);
+        out.px = hit.get(F64, 48);
+        out.py = hit.get(F64, 56);
+        out.pz = hit.get(F64, 64);
+        out.user = hit.get(I64, 72);
     }
 
     /**
      * Ray {@code origin + t * direction} (t in units of the direction's length) against {@code count}
-     * boxes (6 floats each, world space) grown by {@code margin}. Returns the index of the box with the
-     * smallest entry t &lt;= {@code maxT}, or -1; {@code outT} (may be null, else at least {@code count}
-     * long) receives each entry t (+inf when missed, 0 when inside). Owner thread (uses this world's
-     * scratch), reads no cells.
+     * boxes (6 doubles each, in the same frame as the ray — the host's) grown by {@code margin}.
+     * Returns the index of the box with the smallest entry t &lt;= {@code maxT}, or -1; {@code outT}
+     * (may be null, else at least {@code count} long) receives each entry t (+inf when missed, 0 when
+     * inside). Owner thread (uses this world's scratch), reads no cells.
      */
-    public int rayBoxes(float ox, float oy, float oz, float dx, float dy, float dz, float maxT,
-                        float[] boxesXyz, int count, float margin, float[] outT) {
+    public int rayBoxes(double ox, double oy, double oz, double dx, double dy, double dz, double maxT,
+                        double[] boxesXyz, int count, double margin, double[] outT) {
         if (count <= 0) return -1;
-        long need = BOX_BYTES * count;
+        long need = AABB_BYTES * count;
         if (boxes.byteSize() < need) {
             boxes = arena.allocate(Math.max(need, boxes.byteSize() * 2), 8);
         }
-        if (floats.byteSize() < 4L * count) {
-            floats = arena.allocate(F32, Math.max(count, floats.byteSize() / 2));
+        if (doubles.byteSize() < 8L * count) {
+            doubles = arena.allocate(F64, Math.max(count, doubles.byteSize() / 4));
         }
-        MemorySegment.copy(boxesXyz, 0, boxes, F32, 0, count * 6);
-        vec.set(F32, 0, ox);
-        vec.set(F32, 4, oy);
-        vec.set(F32, 8, oz);
-        vec.set(F32, 12, dx);
-        vec.set(F32, 16, dy);
-        vec.set(F32, 20, dz);
+        MemorySegment.copy(boxesXyz, 0, boxes, F64, 0, count * 6);
+        put6(ox, oy, oz, dx, dy, dz);
         try {
-            MemorySegment tOut = outT == null ? MemorySegment.NULL : floats;
-            int best = (int) CendaPhysics.RAY_BOXES.invokeExact(vec, vec.asSlice(12), maxT, boxes, count, margin, tOut);
+            MemorySegment tOut = outT == null ? MemorySegment.NULL : doubles;
+            int best = (int) CendaPhysics.RAY_BOXES.invokeExact(vec, vec.asSlice(24), maxT, boxes, count, margin, tOut);
             if (outT != null) {
-                MemorySegment.copy(floats, F32, 0, outT, 0, count);
+                MemorySegment.copy(doubles, F64, 0, outT, 0, count);
             }
             return best;
         } catch (Throwable t) {

@@ -10,86 +10,54 @@
 
 namespace cenda::nav {
 
-// ---- LongIntMap -------------------------------------------------------------------------------
+// ---- CellIntMap -------------------------------------------------------------------------------
 
-namespace {
-inline size_t mix(int64_t key) {
-    uint64_t h = static_cast<uint64_t>(key);
-    h ^= h >> 33;
-    h *= 0xff51afd7ed558ccdull;
-    h ^= h >> 33;
-    h *= 0xc4ceb9fe1a85ec53ull;
-    h ^= h >> 33;
-    return static_cast<size_t>(h);
-}
-} // namespace
-
-LongIntMap::LongIntMap(size_t capacity) {
+CellIntMap::CellIntMap(size_t capacity) {
     size_t cap = 16;
     while (cap < capacity * 2) cap <<= 1;
-    keys_.assign(cap, 0);
-    values_.assign(cap, 0);
-    stamps_.assign(cap, 0);
+    slots_.assign(cap, Slot{Node{}, 0, 0u});
     mask_ = cap - 1;
 }
 
-int32_t LongIntMap::get(int64_t key, int32_t missing) const {
-    size_t i = mix(key) & mask_;
-    while (stamps_[i] == stamp_) {
-        if (keys_[i] == key) return values_[i];
-        i = (i + 1) & mask_;
-    }
-    return missing;
-}
-
-void LongIntMap::put(int64_t key, int32_t value) {
-    if (static_cast<size_t>(size_ + 1) * 2 > keys_.size()) grow();
-    size_t i = mix(key) & mask_;
-    while (stamps_[i] == stamp_) {
-        if (keys_[i] == key) {
-            values_[i] = value;
+void CellIntMap::put(const Node& key, int32_t value) {
+    if (static_cast<size_t>(size_ + 1) * 2 > slots_.size()) grow();
+    size_t i = slot_hash(key) & mask_;
+    while (slots_[i].stamp == stamp_) {
+        if (slots_[i].key == key) {
+            slots_[i].value = value;
             return;
         }
         i = (i + 1) & mask_;
     }
-    stamps_[i] = stamp_;
-    keys_[i] = key;
-    values_[i] = value;
+    slots_[i] = Slot{key, value, stamp_};
     ++size_;
 }
 
-void LongIntMap::clear() {
+void CellIntMap::clear() {
     size_ = 0;
     if (++stamp_ == 0) { // wrapped: stale stamps could read as live
-        std::fill(stamps_.begin(), stamps_.end(), 0u);
+        for (Slot& s : slots_) s.stamp = 0u;
         stamp_ = 1;
     }
 }
 
-void LongIntMap::grow() {
-    std::vector<int64_t> keys;
-    std::vector<int32_t> values;
-    keys.reserve(static_cast<size_t>(size_));
-    values.reserve(static_cast<size_t>(size_));
-    for (size_t i = 0; i < keys_.size(); ++i) {
-        if (stamps_[i] == stamp_) {
-            keys.push_back(keys_[i]);
-            values.push_back(values_[i]);
-        }
+void CellIntMap::grow() {
+    std::vector<Slot> live;
+    live.reserve(static_cast<size_t>(size_));
+    for (const Slot& s : slots_) {
+        if (s.stamp == stamp_) live.push_back(s);
     }
-    size_t cap = keys_.size() << 1;
-    keys_.assign(cap, 0);
-    values_.assign(cap, 0);
-    stamps_.assign(cap, 0);
+    size_t cap = slots_.size() << 1;
+    slots_.assign(cap, Slot{Node{}, 0, 0u});
     stamp_ = 1;
     mask_ = cap - 1;
     size_ = 0;
-    for (size_t i = 0; i < keys.size(); ++i) put(keys[i], values[i]);
+    for (const Slot& s : live) put(s.key, s.value);
 }
 
 // ---- cells ------------------------------------------------------------------------------------
 
-uint32_t classify(const CellRules& rules, physics_detail::CellView& view, int32_t x, int32_t y, int32_t z,
+uint32_t classify(const CellRules& rules, physics_detail::CellView& view, int64_t x, int64_t y, int64_t z,
                   float* top) {
     *top = 0.0f;
     if (y < rules.min_y || y >= rules.max_y) return CN_CELL_UNKNOWN;
@@ -118,9 +86,9 @@ void CellCache::reset(const CellRules* rules, physics_detail::CellView* view) {
     cells_.clear();
 }
 
-int32_t CellCache::sample(int32_t x, int32_t y, int32_t z) {
+int32_t CellCache::sample(int64_t x, int64_t y, int64_t z) {
     if (!in_range(x, y, z)) return static_cast<int32_t>(CN_CELL_UNKNOWN);
-    int64_t key = pack(x, y, z);
+    const Node key{x, y, z};
     int32_t packed = cells_.get(key, -1);
     if (packed == -1) {
         float top = 0.0f;
@@ -135,9 +103,10 @@ int32_t CellCache::sample(int32_t x, int32_t y, int32_t z) {
     return packed;
 }
 
-bool air_cell_in_range(const cn_air_profile& profile, int32_t bx, int32_t by, int32_t bz) {
-    int32_t size = profile.cell_size;
-    return in_range(floor_div(bx, size), floor_div(by, size), floor_div(bz, size));
+bool air_cell_in_range(const cn_air_profile& profile, int64_t bx, int64_t by, int64_t bz) {
+    // Every block is in some cube; the block itself must be in range (cube * size cannot overflow).
+    (void) profile;
+    return in_range(bx, by, bz);
 }
 
 namespace {
@@ -161,20 +130,23 @@ constexpr int32_t kGroundDz[8] = {0, 0, 1, -1, 1, -1, 1, -1};
 
 class GroundDomain {
 public:
-    GroundDomain(CellCache& cells, const cn_ground_profile& profile, int32_t gx, int32_t gy, int32_t gz, float radius)
-        : cells_(cells), p_(profile), gx_(gx), gy_(gy), gz_(gz), radius_sq_(radius * radius) {}
+    // anchor: the absolute cell the float math is relative to (surfaces are y - anchor.y + top).
+    GroundDomain(CellCache& cells, const CellRules& rules, const cn_ground_profile& profile, const Node& goal,
+                 float radius, const Node& anchor)
+        : cells_(cells), rules_(rules), p_(profile), gx_(goal.x), gy_(goal.y), gz_(goal.z),
+          radius_sq_(radius * radius), ay_(anchor.y) {}
 
     static constexpr int32_t max_successors() { return 8; }
 
-    int32_t successors(int64_t node, int64_t* out_nodes, float* out_costs) {
-        int32_t x = node_x(node), y = node_y(node), z = node_z(node);
+    int32_t successors(const Node& node, Node* out_nodes, float* out_costs) {
+        const int64_t x = node.x, y = node.y, z = node.z;
         float from_surface = stand_surface(x, y, z);
         if (std::isnan(from_surface)) return 0;
         bool from_liquid = liquid(x, y, z);
         int32_t count = 0;
         for (int dir = 0; dir < 8; ++dir) {
-            int32_t dx = kGroundDx[dir], dz = kGroundDz[dir];
-            int32_t nx = x + dx, nz = z + dz;
+            int64_t dx = kGroundDx[dir], dz = kGroundDz[dir];
+            int64_t nx = x + dx, nz = z + dz;
             if (!in_range(nx, y, nz)) continue;
             bool diagonal = dx != 0 && dz != 0;
             if (diagonal && !(columns_clear(nx, z, from_surface, 0) && columns_clear(x, nz, from_surface, 0))) {
@@ -182,65 +154,70 @@ public:
             }
             if (!resolve_landing(nx, nz, y, from_surface, from_liquid)) continue;
             float multiplier = landing_submerged_ ? p_.swim_cost : landing_wading_ ? p_.wade_cost : 1.0f;
-            out_nodes[count] = pack(nx, landing_y_, nz);
+            out_nodes[count] = Node{nx, landing_y_, nz};
             out_costs[count] = (diagonal ? kDiagonalCost : 1.0f) * multiplier + landing_surcharge_;
             ++count;
         }
         return count;
     }
 
-    float heuristic(int64_t node) const {
-        int32_t dx = std::abs(node_x(node) - gx_);
-        int32_t dz = std::abs(node_z(node) - gz_);
-        int32_t diagonal = std::min(dx, dz);
+    float heuristic(const Node& node) const {
+        int64_t dx = node.x > gx_ ? node.x - gx_ : gx_ - node.x;
+        int64_t dz = node.z > gz_ ? node.z - gz_ : gz_ - node.z;
+        int64_t diagonal = std::min(dx, dz);
         return static_cast<float>(dx + dz - 2 * diagonal) + kDiagonalCost * static_cast<float>(diagonal);
     }
 
-    bool is_goal(int64_t node) const {
-        float dx = static_cast<float>(node_x(node) - gx_);
-        float dy = static_cast<float>(node_y(node) - gy_);
-        float dz = static_cast<float>(node_z(node) - gz_);
+    bool is_goal(const Node& node) const {
+        float dx = static_cast<float>(node.x - gx_);
+        float dy = static_cast<float>(node.y - gy_);
+        float dz = static_cast<float>(node.z - gz_);
         return dx * dx + dy * dy + dz * dz <= radius_sq_;
     }
 
-    float surface_of(int64_t node) { return stand_surface(node_x(node), node_y(node), node_z(node)); }
+    // The standing surface, relative to the anchor's y.
+    float surface_of(const Node& node) { return stand_surface(node.x, node.y, node.z); }
 
-    int64_t snap_to_surface(int32_t x, int32_t y, int32_t z, int32_t down, int32_t up) {
-        if (in_range(x, y, z) && !std::isnan(stand_surface(x, y, z))) return pack(x, y, z);
+    Node snap_to_surface(int64_t x, int64_t y, int64_t z, int32_t down, int32_t up) {
+        if (in_range(x, y, z) && !std::isnan(stand_surface(x, y, z))) return Node{x, y, z};
         for (int32_t offset = 1; offset <= std::max(down, up); ++offset) {
             if (offset <= down) {
-                int32_t cy = y - offset;
-                if (in_range(x, cy, z) && !std::isnan(stand_surface(x, cy, z))) return pack(x, cy, z);
+                int64_t cy = y - offset;
+                if (in_range(x, cy, z) && !std::isnan(stand_surface(x, cy, z))) return Node{x, cy, z};
             }
             if (offset <= up) {
-                int32_t cy = y + offset;
-                if (in_range(x, cy, z) && !std::isnan(stand_surface(x, cy, z))) return pack(x, cy, z);
+                int64_t cy = y + offset;
+                if (in_range(x, cy, z) && !std::isnan(stand_surface(x, cy, z))) return Node{x, cy, z};
             }
         }
         return kNoNode;
     }
 
 private:
-    bool resolve_landing(int32_t nx, int32_t nz, int32_t from_y, float from_surface, bool from_liquid) {
+    // y relative to the anchor, as the float the Java did its surface math in.
+    float rel(int64_t y) const { return static_cast<float>(y - ay_); }
+
+    bool resolve_landing(int64_t nx, int64_t nz, int64_t from_y, float from_surface, bool from_liquid) {
         float surface = stand_surface(nx, from_y, nz);
         if (!std::isnan(surface) && accept_landing(nx, from_y, nz, surface, from_surface, from_liquid)) {
             return true;
         }
         float reach = from_liquid ? std::max(p_.max_climb, p_.water_escape_climb) : p_.max_climb;
-        for (int32_t cy = from_y + 1; static_cast<float>(cy) - from_surface <= reach + kEpsilon; ++cy) {
-            if (cy > kMaxY) break;
+        // Cells outside [min_y, max_y) are UNKNOWN (never standable): the scans stop at the bounds.
+        for (int64_t cy = from_y + 1; rel(cy) - from_surface <= reach + kEpsilon; ++cy) {
+            if (cy >= rules_.max_y || !in_range(nx, cy, nz)) break;
             surface = stand_surface(nx, cy, nz);
             if (!std::isnan(surface)) return accept_landing(nx, cy, nz, surface, from_surface, from_liquid);
         }
-        for (int32_t cy = from_y - 1; from_surface - static_cast<float>(cy + 1) <= p_.max_fall + kEpsilon; --cy) {
-            if (cy < 0) break;
+        for (int64_t cy = from_y - 1; from_surface - rel(cy + 1) <= p_.max_fall + kEpsilon; --cy) {
+            if (cy < rules_.min_y || !in_range(nx, cy, nz)) break;
             surface = stand_surface(nx, cy, nz);
             if (!std::isnan(surface)) return accept_landing(nx, cy, nz, surface, from_surface, from_liquid);
         }
         return false;
     }
 
-    bool accept_landing(int32_t x, int32_t y, int32_t z, float surface, float from_surface, bool from_liquid) {
+    bool accept_landing(int64_t x, int64_t y, int64_t z, float surface, float from_surface, bool from_liquid) {
         float delta = surface - from_surface;
         float climb_limit = from_liquid ? std::max(p_.max_climb, p_.water_escape_climb) : p_.max_climb;
         if (delta > climb_limit + kEpsilon) return false;
@@ -258,14 +235,14 @@ private:
         return true;
     }
 
-    float stand_surface(int32_t x, int32_t y, int32_t z) {
+    float stand_surface(int64_t x, int64_t y, int64_t z) {
         uint32_t flags = cells_.flags(x, y, z);
         if (is_unknown(flags) || is_hazard(flags)) return std::numeric_limits<float>::quiet_NaN();
         float surface;
         if (is_solid(flags)) {
             float top = cells_.top(x, y, z);
             if (top >= 1.0f - kEpsilon) return std::numeric_limits<float>::quiet_NaN();
-            surface = static_cast<float>(y) + top;
+            surface = rel(y) + top;
         } else if (is_liquid(flags)) {
             if (liquid(x, y + 1, z)) return std::numeric_limits<float>::quiet_NaN();
             bool over_deep = liquid(x, y - 1, z);
@@ -273,25 +250,25 @@ private:
             if (!over_deep && p_.can_swim == 0 && !full_support_below(x, y, z)) {
                 return std::numeric_limits<float>::quiet_NaN();
             }
-            surface = static_cast<float>(y) + std::min(1.0f, cells_.top(x, y, z));
+            surface = rel(y) + std::min(1.0f, cells_.top(x, y, z));
         } else {
             if (!full_support_below(x, y, z)) return std::numeric_limits<float>::quiet_NaN();
-            surface = static_cast<float>(y);
+            surface = rel(y);
         }
         return columns_clear(x, z, surface, p_.column_radius) ? surface : std::numeric_limits<float>::quiet_NaN();
     }
 
-    bool full_support_below(int32_t x, int32_t y, int32_t z) {
+    bool full_support_below(int64_t x, int64_t y, int64_t z) {
         uint32_t below = cells_.flags(x, y - 1, z);
         return is_solid(below) && cells_.top(x, y - 1, z) >= 1.0f - kEpsilon;
     }
 
-    bool columns_clear(int32_t x, int32_t z, float surface, int32_t radius) {
-        int32_t lowest = static_cast<int32_t>(std::floor(surface + kEpsilon));
-        int32_t highest = static_cast<int32_t>(std::floor(surface + p_.height - kEpsilon));
-        for (int32_t cx = x - radius; cx <= x + radius; ++cx) {
-            for (int32_t cz = z - radius; cz <= z + radius; ++cz) {
-                for (int32_t cy = lowest; cy <= highest; ++cy) {
+    bool columns_clear(int64_t x, int64_t z, float surface, int32_t radius) {
+        int64_t lowest = static_cast<int64_t>(std::floor(surface + kEpsilon)) + ay_;
+        int64_t highest = static_cast<int64_t>(std::floor(surface + p_.height - kEpsilon)) + ay_;
+        for (int64_t cx = x - radius; cx <= x + radius; ++cx) {
+            for (int64_t cz = z - radius; cz <= z + radius; ++cz) {
+                for (int64_t cy = lowest; cy <= highest; ++cy) {
                     if (blocks_body(cx, cy, cz, surface)) return false;
                 }
             }
@@ -299,20 +276,22 @@ private:
         return true;
     }
 
-    bool blocks_body(int32_t x, int32_t y, int32_t z, float surface) {
+    bool blocks_body(int64_t x, int64_t y, int64_t z, float surface) {
         uint32_t flags = cells_.flags(x, y, z);
         if (is_unknown(flags) || is_hazard(flags)) return true;
         if (!is_solid(flags)) return false;
-        return static_cast<float>(y) + cells_.top(x, y, z) > surface + kEpsilon;
+        return rel(y) + cells_.top(x, y, z) > surface + kEpsilon;
     }
 
-    bool liquid(int32_t x, int32_t y, int32_t z) { return is_liquid(cells_.flags(x, y, z)); }
+    bool liquid(int64_t x, int64_t y, int64_t z) { return is_liquid(cells_.flags(x, y, z)); }
 
     CellCache& cells_;
+    const CellRules& rules_;
     const cn_ground_profile& p_;
-    int32_t gx_, gy_, gz_;
+    int64_t gx_, gy_, gz_;
     float radius_sq_;
-    int32_t landing_y_ = 0;
+    int64_t ay_;
+    int64_t landing_y_ = 0;
     float landing_surcharge_ = 0.0f;
     bool landing_wading_ = false;
     bool landing_submerged_ = false;
@@ -349,24 +328,27 @@ const AirDirections kAir;
 
 class AirDomain {
 public:
-    AirDomain(CellCache& cells, LongIntMap& classified, const cn_air_profile& profile, int64_t goal_cell,
-              float goal_radius)
+    // anchor: absolute cube cell the float math is relative to; cruise_cells: cruise_y in cube cells
+    // relative to anchor.y.
+    AirDomain(CellCache& cells, CellIntMap& classified, const cn_air_profile& profile, const Node& goal_cell,
+              float goal_radius, const Node& anchor, float cruise_cells)
         : cells_(cells), classified_(classified), p_(profile), goal_(goal_cell),
           goal_radius_cells_(std::max(0.0f, goal_radius) / static_cast<float>(profile.cell_size)),
-          cruise_cell_y_(profile.cruise_y / static_cast<float>(profile.cell_size)) {}
+          cruise_cell_y_(cruise_cells), anchor_(anchor) {}
 
-    static int64_t cell_of(const cn_air_profile& p, int32_t bx, int32_t by, int32_t bz) {
-        return pack(floor_div(bx, p.cell_size), floor_div(by, p.cell_size), floor_div(bz, p.cell_size));
+    static Node cell_of(const cn_air_profile& p, int64_t bx, int64_t by, int64_t bz) {
+        const int64_t size = p.cell_size;
+        return Node{cenda::floor_div64(bx, size), cenda::floor_div64(by, size), cenda::floor_div64(bz, size)};
     }
 
     static constexpr int32_t max_successors() { return 26; }
 
-    int32_t successors(int64_t node, int64_t* out_nodes, float* out_costs) {
-        int32_t x = node_x(node), y = node_y(node), z = node_z(node);
+    int32_t successors(const Node& node, Node* out_nodes, float* out_costs) {
+        const int64_t x = node.x, y = node.y, z = node.z;
         int32_t count = 0;
         for (int dir = 0; dir < 26; ++dir) {
-            int32_t dx = kAir.dx[dir], dy = kAir.dy[dir], dz = kAir.dz[dir];
-            int32_t nx = x + dx, ny = y + dy, nz = z + dz;
+            int64_t dx = kAir.dx[dir], dy = kAir.dy[dir], dz = kAir.dz[dir];
+            int64_t nx = x + dx, ny = y + dy, nz = z + dz;
             if (!in_range(nx, ny, nz)) continue;
             int32_t neighbour = classify_cell(nx, ny, nz);
             if (!passable(neighbour)) continue;
@@ -377,51 +359,51 @@ public:
             } else if (dy < 0) {
                 cost += p_.descend_cost;
             }
-            cost += p_.altitude_cost * std::fabs(static_cast<float>(ny) + 0.5f - cruise_cell_y_);
+            cost += p_.altitude_cost * std::fabs(static_cast<float>(ny - anchor_.y) + 0.5f - cruise_cell_y_);
             if (neighbour == kAirUnknown) cost += p_.unknown_cost;
-            out_nodes[count] = pack(nx, ny, nz);
+            out_nodes[count] = Node{nx, ny, nz};
             out_costs[count] = cost;
             ++count;
         }
         return count;
     }
 
-    float heuristic(int64_t node) const {
-        float dx = static_cast<float>(node_x(node) - node_x(goal_));
-        float dy = static_cast<float>(node_y(node) - node_y(goal_));
-        float dz = static_cast<float>(node_z(node) - node_z(goal_));
+    float heuristic(const Node& node) const {
+        float dx = static_cast<float>(node.x - goal_.x);
+        float dy = static_cast<float>(node.y - goal_.y);
+        float dz = static_cast<float>(node.z - goal_.z);
         return static_cast<float>(std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz)));
     }
 
-    bool is_goal(int64_t node) const {
+    bool is_goal(const Node& node) const {
         if (node == goal_) return true;
-        float dx = static_cast<float>(node_x(node) - node_x(goal_));
-        float dy = static_cast<float>(node_y(node) - node_y(goal_));
-        float dz = static_cast<float>(node_z(node) - node_z(goal_));
+        float dx = static_cast<float>(node.x - goal_.x);
+        float dy = static_cast<float>(node.y - goal_.y);
+        float dz = static_cast<float>(node.z - goal_.z);
         return dx * dx + dy * dy + dz * dz <= goal_radius_cells_ * goal_radius_cells_;
     }
 
-    bool is_flyable(int64_t node) { return passable(classify_cell(node_x(node), node_y(node), node_z(node))); }
+    bool is_flyable(const Node& node) { return passable(classify_cell(node.x, node.y, node.z)); }
 
-    int64_t snap_to_flyable(int32_t bx, int32_t by, int32_t bz, int32_t radius_cells) {
+    Node snap_to_flyable(int64_t bx, int64_t by, int64_t bz, int32_t radius_cells) {
         if (!air_cell_in_range(p_, bx, by, bz)) return kNoNode;
-        int64_t origin = cell_of(p_, bx, by, bz);
+        Node origin = cell_of(p_, bx, by, bz);
         if (is_flyable(origin)) return origin;
-        int32_t ox = node_x(origin), oy = node_y(origin), oz = node_z(origin);
+        const int64_t ox = origin.x, oy = origin.y, oz = origin.z;
         for (int32_t ring = 1; ring <= radius_cells; ++ring) {
-            int64_t best = kNoNode;
+            Node best = kNoNode;
             float best_distance = std::numeric_limits<float>::max();
             for (int32_t dx = -ring; dx <= ring; ++dx) {
                 for (int32_t dy = -ring; dy <= ring; ++dy) {
                     for (int32_t dz = -ring; dz <= ring; ++dz) {
                         if (std::abs(dx) != ring && std::abs(dy) != ring && std::abs(dz) != ring) continue;
-                        int32_t cx = ox + dx, cy = oy + dy, cz = oz + dz;
+                        int64_t cx = ox + dx, cy = oy + dy, cz = oz + dz;
                         if (!in_range(cx, cy, cz) || !passable(classify_cell(cx, cy, cz))) continue;
                         float distance = static_cast<float>(dx * dx + dz * dz)
                             + 4.0f * static_cast<float>(dy) * static_cast<float>(dy);
                         if (distance < best_distance) {
                             best_distance = distance;
-                            best = pack(cx, cy, cz);
+                            best = Node{cx, cy, cz};
                         }
                     }
                 }
@@ -431,9 +413,9 @@ public:
         return kNoNode;
     }
 
-    std::vector<int64_t> string_pull(const std::vector<int64_t>& nodes) {
+    std::vector<Node> string_pull(const std::vector<Node>& nodes) {
         if (nodes.size() < 3) return nodes;
-        std::vector<int64_t> kept;
+        std::vector<Node> kept;
         kept.reserve(nodes.size());
         kept.push_back(nodes[0]);
         size_t anchor = 0;
@@ -452,20 +434,21 @@ public:
     }
 
 private:
-    bool line_flyable(int64_t from, int64_t to) {
-        float x0 = static_cast<float>(node_x(from));
-        float y0 = static_cast<float>(node_y(from));
-        float z0 = static_cast<float>(node_z(from));
-        float dx = static_cast<float>(node_x(to)) - x0;
-        float dy = static_cast<float>(node_y(to)) - y0;
-        float dz = static_cast<float>(node_z(to)) - z0;
+    bool line_flyable(const Node& from, const Node& to) {
+        // Cube indices relative to the anchor, as the float the Java did this in.
+        float x0 = static_cast<float>(from.x - anchor_.x);
+        float y0 = static_cast<float>(from.y - anchor_.y);
+        float z0 = static_cast<float>(from.z - anchor_.z);
+        float dx = static_cast<float>(to.x - anchor_.x) - x0;
+        float dy = static_cast<float>(to.y - anchor_.y) - y0;
+        float dz = static_cast<float>(to.z - anchor_.z) - z0;
         float length = static_cast<float>(std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz)));
         int32_t steps = std::max(1, static_cast<int32_t>(std::ceil(static_cast<double>(length / kLineSampleStep))));
         for (int32_t step = 0; step <= steps; ++step) {
             float t = static_cast<float>(step) / static_cast<float>(steps);
-            int32_t cx = java_round(x0 + dx * t);
-            int32_t cy = java_round(y0 + dy * t);
-            int32_t cz = java_round(z0 + dz * t);
+            int64_t cx = java_round(x0 + dx * t) + anchor_.x;
+            int64_t cy = java_round(y0 + dy * t) + anchor_.y;
+            int64_t cz = java_round(z0 + dz * t) + anchor_.z;
             if (!in_range(cx, cy, cz) || classify_cell(cx, cy, cz) != kFlyable) return false;
         }
         return true;
@@ -473,7 +456,7 @@ private:
 
     bool passable(int32_t c) const { return c == kFlyable || (c == kAirUnknown && p_.allow_unknown != 0); }
 
-    bool corner_clear(int32_t x, int32_t y, int32_t z, int32_t dx, int32_t dy, int32_t dz) {
+    bool corner_clear(int64_t x, int64_t y, int64_t z, int64_t dx, int64_t dy, int64_t dz) {
         int components = (dx != 0 ? 1 : 0) + (dy != 0 ? 1 : 0) + (dz != 0 ? 1 : 0);
         if (components < 2) return true;
         if (dx != 0 && !passable(classify_cell(x + dx, y, z))) return false;
@@ -481,8 +464,8 @@ private:
         return dz == 0 || passable(classify_cell(x, y, z + dz));
     }
 
-    int32_t classify_cell(int32_t cx, int32_t cy, int32_t cz) {
-        int64_t key = pack(cx, cy, cz);
+    int32_t classify_cell(int64_t cx, int64_t cy, int64_t cz) {
+        const Node key{cx, cy, cz};
         int32_t cached = classified_.get(key, kUnclassified);
         if (cached != kUnclassified) return cached;
         int32_t c = probe(cx, cy, cz);
@@ -490,16 +473,21 @@ private:
         return c;
     }
 
-    int32_t probe(int32_t cx, int32_t cy, int32_t cz) {
-        int32_t size = p_.cell_size;
-        int32_t base_y = cy * size;
+    int32_t probe(int64_t cx, int64_t cy, int64_t cz) {
+        const int64_t size = p_.cell_size;
+        // A cube cell beyond the range a block coordinate can hold is out of the world.
+        if (cy <= -kCoordLimit / size || cy >= kCoordLimit / size || cx <= -kCoordLimit / size
+            || cx >= kCoordLimit / size || cz <= -kCoordLimit / size || cz >= kCoordLimit / size) {
+            return kBlocked;
+        }
+        int64_t base_y = cy * size;
         if (base_y < p_.min_y || base_y + size - 1 > p_.max_y) return kBlocked;
-        int32_t base_x = cx * size;
-        int32_t base_z = cz * size;
+        int64_t base_x = cx * size;
+        int64_t base_z = cz * size;
         bool saw_unknown = false;
-        for (int32_t y = base_y; y < base_y + size; ++y) {
-            for (int32_t x = base_x; x < base_x + size; ++x) {
-                for (int32_t z = base_z; z < base_z + size; ++z) {
+        for (int64_t y = base_y; y < base_y + size; ++y) {
+            for (int64_t x = base_x; x < base_x + size; ++x) {
+                for (int64_t z = base_z; z < base_z + size; ++z) {
                     uint32_t flags = cells_.flags(x, y, z);
                     if (is_solid(flags) || is_hazard(flags) || is_liquid(flags)) return kBlocked;
                     if (is_unknown(flags)) saw_unknown = true;
@@ -510,27 +498,28 @@ private:
     }
 
     CellCache& cells_;
-    LongIntMap& classified_;
+    CellIntMap& classified_;
     const cn_air_profile& p_;
-    int64_t goal_;
+    Node goal_;
     float goal_radius_cells_;
     float cruise_cell_y_;
+    Node anchor_;
 };
 
 // ---- PathSmoother -------------------------------------------------------------------------------
 
-std::vector<int64_t> collapse_collinear(const std::vector<int64_t>& nodes) {
+std::vector<Node> collapse_collinear(const std::vector<Node>& nodes) {
     if (nodes.size() < 3) return nodes;
-    std::vector<int64_t> kept;
+    std::vector<Node> kept;
     kept.reserve(nodes.size());
     kept.push_back(nodes[0]);
-    int32_t pdx = node_x(nodes[1]) - node_x(nodes[0]);
-    int32_t pdy = node_y(nodes[1]) - node_y(nodes[0]);
-    int32_t pdz = node_z(nodes[1]) - node_z(nodes[0]);
+    int64_t pdx = nodes[1].x - nodes[0].x;
+    int64_t pdy = nodes[1].y - nodes[0].y;
+    int64_t pdz = nodes[1].z - nodes[0].z;
     for (size_t i = 1; i < nodes.size() - 1; ++i) {
-        int32_t dx = node_x(nodes[i + 1]) - node_x(nodes[i]);
-        int32_t dy = node_y(nodes[i + 1]) - node_y(nodes[i]);
-        int32_t dz = node_z(nodes[i + 1]) - node_z(nodes[i]);
+        int64_t dx = nodes[i + 1].x - nodes[i].x;
+        int64_t dy = nodes[i + 1].y - nodes[i].y;
+        int64_t dz = nodes[i + 1].z - nodes[i].z;
         if (dx != pdx || dy != pdy || dz != pdz) {
             kept.push_back(nodes[i]);
             pdx = dx;
@@ -547,17 +536,17 @@ std::vector<int64_t> collapse_collinear(const std::vector<int64_t>& nodes) {
 // ---- AStar --------------------------------------------------------------------------------------
 
 struct Searcher::Impl {
-    std::vector<int64_t> key;
+    std::vector<Node> key;
     std::vector<float> g, h, f;
     std::vector<int32_t> parent, heap_pos, heap;
     int32_t node_count = 0;
     int32_t heap_size = 0;
-    LongIntMap index{1024};
-    int64_t succ_nodes[26];
+    CellIntMap index{1024};
+    Node succ_nodes[26];
     float succ_costs[26];
 
     CellCache cells;
-    LongIntMap classified{2048};
+    CellIntMap classified{2048};
 
     Impl() {
         key.resize(1024);
@@ -575,7 +564,7 @@ struct Searcher::Impl {
         index.clear();
     }
 
-    int32_t add_node(int64_t k, float gv, float hv, int32_t par, float weight) {
+    int32_t add_node(const Node& k, float gv, float hv, int32_t par, float weight) {
         int32_t id = node_count++;
         if (static_cast<size_t>(id) == key.size()) {
             size_t cap = key.size() << 1;
@@ -662,10 +651,10 @@ struct Searcher::Impl {
         return h[c] == h[i] && g[c] < g[i];
     }
 
-    void reconstruct(int32_t end, std::vector<int64_t>& out) const {
+    void reconstruct(int32_t end, std::vector<Node>& out) const {
         int32_t length = 0;
         for (int32_t id = end; id != kNoParent; id = parent[static_cast<size_t>(id)]) ++length;
-        out.assign(static_cast<size_t>(length), 0);
+        out.assign(static_cast<size_t>(length), Node{});
         int32_t i = length - 1;
         for (int32_t id = end; id != kNoParent; id = parent[static_cast<size_t>(id)], --i) {
             out[static_cast<size_t>(i)] = key[static_cast<size_t>(id)];
@@ -674,7 +663,7 @@ struct Searcher::Impl {
 
     // Returns the status; fills chain, cost, expansions.
     template <typename Domain>
-    int32_t search(Domain& domain, int64_t start, const cn_limits& limits, std::vector<int64_t>& chain, float& cost,
+    int32_t search(Domain& domain, const Node& start, const cn_limits& limits, std::vector<Node>& chain, float& cost,
                    int32_t& expansions_out) {
         reset();
         const float weight = limits.heuristic_weight;
@@ -690,7 +679,7 @@ struct Searcher::Impl {
                 return partial(CN_SEARCH_PARTIAL_BUDGET, start_id, best, chain, cost);
             }
             int32_t current = pop();
-            int64_t current_key = key[static_cast<size_t>(current)];
+            const Node current_key = key[static_cast<size_t>(current)];
             if (domain.is_goal(current_key)) {
                 expansions_out = expansions;
                 reconstruct(current, chain);
@@ -702,7 +691,7 @@ struct Searcher::Impl {
             for (int32_t i = 0; i < count; ++i) {
                 float tentative = g[static_cast<size_t>(current)] + succ_costs[i];
                 if (tentative > limits.max_cost) continue;
-                int64_t sk = succ_nodes[i];
+                const Node sk = succ_nodes[i];
                 int32_t successor = index.get(sk, kUnknownNode);
                 if (successor == kUnknownNode) {
                     successor = add_node(sk, tentative, domain.heuristic(sk), current, weight);
@@ -727,7 +716,7 @@ struct Searcher::Impl {
         return partial(CN_SEARCH_PARTIAL_UNREACHABLE, start_id, best, chain, cost);
     }
 
-    int32_t partial(int32_t status, int32_t start_id, int32_t best, std::vector<int64_t>& chain, float& cost) {
+    int32_t partial(int32_t status, int32_t start_id, int32_t best, std::vector<Node>& chain, float& cost) {
         if (best == start_id) {
             chain.clear();
             cost = 0.0f;
@@ -744,49 +733,52 @@ Searcher::~Searcher() { delete impl_; }
 
 Route Searcher::ground(const CellRules& rules, physics_detail::CellView& view, const GroundJob& job) {
     Route route;
+    route.anchor = job.anchor;
     Impl& s = *impl_;
     s.cells.reset(&rules, &view);
     // The goal is wherever the walker was told to go — often mid-air or inside a block; snapping it
     // onto a real surface lets the search finish FOUND instead of grinding out a partial.
-    GroundDomain snapper(s.cells, job.profile, job.goal[0], job.goal[1], job.goal[2], job.goal_radius);
-    int64_t start = snapper.snap_to_surface(job.start[0], job.start[1], job.start[2], job.snap_down, job.snap_up);
+    GroundDomain snapper(s.cells, rules, job.profile, job.goal, job.goal_radius, job.anchor);
+    Node start = snapper.snap_to_surface(job.start.x, job.start.y, job.start.z, job.snap_down, job.snap_up);
     if (start == kNoNode) {
         route.status = CN_SEARCH_NO_PATH;
         return route;
     }
-    int64_t snapped = snapper.snap_to_surface(job.goal[0], job.goal[1], job.goal[2], job.snap_down, job.snap_up);
-    GroundDomain snapped_domain(s.cells, job.profile,
-                                snapped == kNoNode ? job.goal[0] : node_x(snapped),
-                                snapped == kNoNode ? job.goal[1] : node_y(snapped),
-                                snapped == kNoNode ? job.goal[2] : node_z(snapped), job.goal_radius);
+    Node snapped = snapper.snap_to_surface(job.goal.x, job.goal.y, job.goal.z, job.snap_down, job.snap_up);
+    GroundDomain snapped_domain(s.cells, rules, job.profile, snapped == kNoNode ? job.goal : snapped,
+                                job.goal_radius, job.anchor);
     GroundDomain& domain = snapped == kNoNode ? snapper : snapped_domain;
 
-    std::vector<int64_t> chain;
+    std::vector<Node> chain;
     route.status = s.search(domain, start, job.limits, chain, route.cost, route.expansions);
     route.complete = route.status == CN_SEARCH_FOUND;
     if (chain.empty()) return route;
-    std::vector<int64_t> corners = collapse_collinear(chain);
+    std::vector<Node> corners = collapse_collinear(chain);
     route.points.resize(corners.size() * 3);
     for (size_t i = 0; i < corners.size(); ++i) {
-        int64_t node = corners[i];
+        const Node& node = corners[i];
         float surface = domain.surface_of(node);
-        route.points[i * 3] = static_cast<float>(node_x(node)) + 0.5f;
-        route.points[i * 3 + 1] = std::isnan(surface) ? static_cast<float>(node_y(node)) : surface;
-        route.points[i * 3 + 2] = static_cast<float>(node_z(node)) + 0.5f;
+        // Relative to the anchor: x + 0.5 is exact in double; the surface is the search's own float.
+        route.points[i * 3] = static_cast<double>(node.x - job.anchor.x) + 0.5;
+        route.points[i * 3 + 1] = std::isnan(surface) ? static_cast<double>(node.y - job.anchor.y)
+                                                      : static_cast<double>(surface);
+        route.points[i * 3 + 2] = static_cast<double>(node.z - job.anchor.z) + 0.5;
     }
     return route;
 }
 
-int32_t Searcher::reach(const CellRules& rules, physics_detail::CellView& view, const int32_t start_cell[3],
-                        int32_t snap_down, int32_t snap_up, int32_t radius, int32_t max_cells, float max_cost,
-                        const cn_ground_profile& profile, cn_reach_cell* out, int32_t cap) {
+int32_t Searcher::reach(const CellRules& rules, physics_detail::CellView& view, const Node& start_cell,
+                        const Node& anchor, int64_t frame_y, int32_t snap_down, int32_t snap_up, int32_t radius,
+                        int32_t max_cells, float max_cost, const cn_ground_profile& profile, cn_reach_cell* out,
+                        int32_t cap) {
     Impl& s = *impl_;
     s.cells.reset(&rules, &view);
     // The goal is irrelevant (heuristic 0, never a goal): a uniform-cost flood over the ground moves.
-    GroundDomain domain(s.cells, profile, start_cell[0], start_cell[1], start_cell[2], -1.0f);
-    int64_t start = domain.snap_to_surface(start_cell[0], start_cell[1], start_cell[2], snap_down, snap_up);
+    GroundDomain domain(s.cells, rules, profile, start_cell, -1.0f, anchor);
+    Node start = domain.snap_to_surface(start_cell.x, start_cell.y, start_cell.z, snap_down, snap_up);
     if (start == kNoNode) return 0;
-    const int32_t sx = node_x(start), sz = node_z(start);
+    const int64_t sx = start.x, sz = start.z;
+    const double surface_base = static_cast<double>(anchor.y - frame_y);
 
     s.reset();
     std::vector<int32_t> out_index; // node id -> settled index
@@ -799,23 +791,26 @@ int32_t Searcher::reach(const CellRules& rules, physics_detail::CellView& view, 
         if (out_index.size() <= uc) out_index.resize(uc + 1, -1);
         if (out_index[uc] >= 0) continue; // settled already (a cheaper route reopened it)
         out_index[uc] = settled;
-        const int64_t key = s.key[uc];
+        const Node key = s.key[uc];
         if (out != nullptr && settled < cap) {
             cn_reach_cell& c = out[settled];
-            c.x = node_x(key);
-            c.y = node_y(key);
-            c.z = node_z(key);
+            c.x = key.x;
+            c.y = key.y;
+            c.z = key.z;
             const int32_t par = s.parent[uc];
             c.parent = par == kNoParent ? -1 : out_index[static_cast<size_t>(par)];
             const float surface = domain.surface_of(key);
-            c.surface = std::isnan(surface) ? static_cast<float>(c.y) : surface;
+            c.surface = surface_base
+                + (std::isnan(surface) ? static_cast<double>(key.y - anchor.y) : static_cast<double>(surface));
             c.cost = s.g[uc];
         }
         ++settled;
         const int32_t count = domain.successors(key, s.succ_nodes, s.succ_costs);
         for (int32_t i = 0; i < count; ++i) {
-            const int64_t sk = s.succ_nodes[i];
-            if (std::abs(node_x(sk) - sx) > radius || std::abs(node_z(sk) - sz) > radius) continue;
+            const Node sk = s.succ_nodes[i];
+            const int64_t ddx = sk.x > sx ? sk.x - sx : sx - sk.x;
+            const int64_t ddz = sk.z > sz ? sk.z - sz : sz - sk.z;
+            if (ddx > radius || ddz > radius) continue;
             const float tentative = s.g[uc] + s.succ_costs[i];
             if (tentative > max_cost) continue;
             int32_t successor = s.index.get(sk, kUnknownNode);
@@ -844,28 +839,32 @@ Route Searcher::air(const CellRules& rules, physics_detail::CellView& view, cons
     Impl& s = *impl_;
     s.cells.reset(&rules, &view);
     s.classified.clear();
-    int64_t raw_goal = AirDomain::cell_of(job.profile, job.goal[0], job.goal[1], job.goal[2]);
-    AirDomain snapper(s.cells, s.classified, job.profile, raw_goal, job.goal_radius);
-    int64_t snapped = snapper.snap_to_flyable(job.goal[0], job.goal[1], job.goal[2], job.goal_snap_cells);
+    Node raw_goal = AirDomain::cell_of(job.profile, job.goal.x, job.goal.y, job.goal.z);
+    AirDomain snapper(s.cells, s.classified, job.profile, raw_goal, job.goal_radius, job.anchor, job.cruise_cells);
+    Node snapped = snapper.snap_to_flyable(job.goal.x, job.goal.y, job.goal.z, job.goal_snap_cells);
     bool keep = snapped == kNoNode || snapped == raw_goal;
     // Classification is a pure function of the cells, so the second domain may share the memo.
-    AirDomain snapped_domain(s.cells, s.classified, job.profile, keep ? raw_goal : snapped, job.goal_radius);
+    AirDomain snapped_domain(s.cells, s.classified, job.profile, keep ? raw_goal : snapped, job.goal_radius,
+                             job.anchor, job.cruise_cells);
     AirDomain& domain = keep ? snapper : snapped_domain;
 
-    int64_t start = AirDomain::cell_of(job.profile, job.start[0], job.start[1], job.start[2]);
-    std::vector<int64_t> chain;
+    Node start = AirDomain::cell_of(job.profile, job.start.x, job.start.y, job.start.z);
+    std::vector<Node> chain;
     route.status = s.search(domain, start, job.limits, chain, route.cost, route.expansions);
     route.complete = route.status == CN_SEARCH_FOUND;
+    // Waypoints relative to the anchor cube's corner (in blocks).
+    const int64_t size64 = job.profile.cell_size;
+    route.anchor = Node{job.anchor.x * size64, job.anchor.y * size64, job.anchor.z * size64};
     if (chain.empty()) return route;
-    std::vector<int64_t> corners = domain.string_pull(chain);
+    std::vector<Node> corners = domain.string_pull(chain);
     float size = static_cast<float>(job.profile.cell_size);
     float half = size * 0.5f;
     route.points.resize(corners.size() * 3);
     for (size_t i = 0; i < corners.size(); ++i) {
-        int64_t node = corners[i];
-        route.points[i * 3] = static_cast<float>(node_x(node)) * size + half;
-        route.points[i * 3 + 1] = static_cast<float>(node_y(node)) * size + half;
-        route.points[i * 3 + 2] = static_cast<float>(node_z(node)) * size + half;
+        const Node& node = corners[i];
+        route.points[i * 3] = static_cast<double>(static_cast<float>(node.x - job.anchor.x) * size + half);
+        route.points[i * 3 + 1] = static_cast<double>(static_cast<float>(node.y - job.anchor.y) * size + half);
+        route.points[i * 3 + 2] = static_cast<double>(static_cast<float>(node.z - job.anchor.z) * size + half);
     }
     return route;
 }

@@ -28,9 +28,13 @@
  * on a world belongs to the thread that owns it (the one that commits); the commits
  * are the only point where other threads' spawns become visible.
  *
- * Float rules (parity with the Java code this replaced): distances are
- * dx*dx + (dy*dy + dz*dz) with no FMA contraction, nearest compares sqrt'd distances,
- * ties go to the entity that entered the world first.
+ * Distance rules: dx*dx + (dy*dy + dz*dz) with no FMA contraction (in double since ABI 2),
+ * nearest compares sqrt'd distances, ties go to the entity that entered the world first.
+ *
+ * Coordinates (ABI 2, OpenMason #142): positions are doubles RELATIVE to the world's frame
+ * origin (ce_set_origin, default 0; absolute = origin + local). The spatial index is a 3D grid of
+ * cell_size-block cells keyed by ABSOLUTE int64 cell triples (no packed keys), so it is exact at any
+ * distance; moving the origin shifts the stored bodies into the new frame.
  */
 #pragma once
 
@@ -40,7 +44,7 @@
 extern "C" {
 #endif
 
-#define CE_ABI_VERSION 1
+#define CE_ABI_VERSION 2
 
 typedef struct ce_world ce_world;
 typedef uint64_t ce_handle;
@@ -77,14 +81,14 @@ typedef struct ce_type_desc {
     uint32_t flags;
 } ce_type_desc;
 
-/* One entity's body as the host pushes it (48 bytes). */
+/* One entity's body as the host pushes it (64 bytes). */
 typedef struct ce_body {
     ce_handle handle;
-    float x, y, z;
+    double x, y, z;    /* in the world's frame (ABI 2: double) */
     float yaw;
     float width, height, length, leg_height;
     uint32_t flags;    /* host-defined; queries filter on them */
-    uint32_t reserved; /* 0 */
+    uint32_t reserved[2]; /* 0 */
 } ce_body;
 
 /* Which entities a query accepts (24 bytes). */
@@ -108,9 +112,15 @@ int32_t ce_abi_version(void);
 /* The calling thread's last error message ("" when none). */
 const char* ce_last_error(void);
 
-/* cell_size: the spatial grid's cell edge in world units (<= 0 picks 8). */
-ce_world* ce_world_create(float cell_size);
+/* cell_size: the spatial grid's cell edge in blocks (<= 0 picks 8). The grid is 3D (ABI 2). */
+ce_world* ce_world_create(int32_t cell_size);
 void ce_world_destroy(ce_world* world);
+
+/* Moves the frame origin (absolute cells). Stored bodies (pending ones too) are shifted by
+ * old - new so they keep their absolute place; positions passed or returned afterwards are relative
+ * to the new origin. Owner thread. (ABI 2) */
+int32_t ce_set_origin(ce_world* world, int64_t ox, int64_t oy, int64_t oz);
+int32_t ce_get_origin(const ce_world* world, int64_t* out);
 
 /* ---- types --------------------------------------------------------------------------------- */
 /* Defines or redefines a type. model_id may be NULL (the type has no model). */
@@ -123,7 +133,7 @@ const char* ce_type_model_id(const ce_world* world, int32_t type_id);
 /* ---- lifecycle ----------------------------------------------------------------------------- */
 /* Queues an entity of a defined type (any thread). Its body starts at the position with the
  * type's size and the given flags. Returns its handle, or 0 (bad world/type). */
-ce_handle ce_spawn(ce_world* world, int32_t type_id, uint32_t flags, float x, float y, float z, float yaw);
+ce_handle ce_spawn(ce_world* world, int32_t type_id, uint32_t flags, double x, double y, double z, float yaw);
 /* Queues the entity's removal (any thread). 1 when it was PENDING (cancelled) or LIVE (now
  * REMOVING), 0 when it was already REMOVING/RETIRED or the handle is stale. */
 int32_t ce_despawn(ce_world* world, ce_handle handle);
@@ -159,20 +169,20 @@ int32_t ce_body_get(const ce_world* world, ce_handle handle, ce_body* out);
  * cap handles and returns the total number of matches. filter may be NULL (accept all). */
 
 /* Entities whose position lies within r of (x, y, z): dist^2 <= r^2. r may be +inf. */
-int32_t ce_query_radius(const ce_world* world, float x, float y, float z, float r,
+int32_t ce_query_radius(const ce_world* world, double x, double y, double z, double r,
                         const ce_filter* filter, ce_handle* out, int32_t cap);
 /* The entity whose position is nearest (x, y, z) and within max_r (+inf = unbounded), or 0.
  * *out_distance (may be NULL) receives its distance. */
-ce_handle ce_query_nearest(const ce_world* world, float x, float y, float z, float max_r,
-                           const ce_filter* filter, float* out_distance);
-/* Entities whose position p satisfies min <= p < max on every axis (half-open box: chunk
+ce_handle ce_query_nearest(const ce_world* world, double x, double y, double z, double max_r,
+                           const ce_filter* filter, double* out_distance);
+/* Entities whose position p satisfies min <= p < max on every axis (half-open box: cubes and
  * columns tile without double counting). box = {minX, minY, minZ, maxX, maxY, maxZ}. An axis
  * whose min is -inf and max is +inf is not tested at all (NaN/inf coordinates pass it). */
-int32_t ce_query_box(const ce_world* world, const float box[6], const ce_filter* filter,
+int32_t ce_query_box(const ce_world* world, const double box[6], const ce_filter* filter,
                      ce_handle* out, int32_t cap);
 /* Entities whose body box overlaps box (strict: touching faces do not overlap). The body box is
  * [x - w/2, x + w/2] x [y - leg, y + height] x [z - l/2, z + l/2]. */
-int32_t ce_query_aabb(const ce_world* world, const float box[6], const ce_filter* filter,
+int32_t ce_query_aabb(const ce_world* world, const double box[6], const ce_filter* filter,
                       ce_handle* out, int32_t cap);
 /* Entities matching the filter, wherever they are. */
 int32_t ce_query_all(const ce_world* world, const ce_filter* filter, ce_handle* out, int32_t cap);

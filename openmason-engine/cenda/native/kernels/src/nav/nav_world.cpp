@@ -18,13 +18,29 @@ std::atomic<uint64_t> g_world_serial{1};
 // A finished result nobody collected (its agent was dropped) is forgotten after this many steps.
 constexpr uint64_t kResultExpirySteps = 1200;
 
-bool finite3(const float* v) {
+bool finite3(const double* v) {
     return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]);
 }
 
-// Java's (int) Math.floor(v) for finite v in int range.
-int32_t ifloor(float v) {
-    return static_cast<int32_t>(std::floor(static_cast<double>(v)));
+// Positions beyond this are refused outright (their cells could not be formed without overflow).
+constexpr double kPositionLimit = 4.0e18;
+
+bool sane3(const double* v) {
+    return finite3(v) && std::fabs(v[0]) < kPositionLimit && std::fabs(v[1]) < kPositionLimit
+        && std::fabs(v[2]) < kPositionLimit;
+}
+
+// floor(v) as an int64 (finite v within kPositionLimit).
+int64_t lfloor(double v) {
+    return static_cast<int64_t>(std::floor(v));
+}
+
+
+// Saturating int64 add (frame + local cell): out-of-range results clamp, and in_range rejects them.
+int64_t add_sat(int64_t a, int64_t b) {
+    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
+    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;
 }
 
 bool valid_limits(const cn_limits& l) {
@@ -56,8 +72,8 @@ int32_t fail(int32_t code, const char* message) {
     return code;
 }
 
-int64_t submit_ground(cn_world* w, const float feet[3], const float goal[3], float goal_radius, int32_t snap_down,
-                      int32_t snap_up, const cn_ground_profile& profile, const cn_limits& limits) {
+int64_t submit_ground(cn_world* w, const double feet[3], const double goal[3], const Node& frame, float goal_radius,
+                      int32_t snap_down, int32_t snap_up, const cn_ground_profile& profile, const cn_limits& limits) {
     if (static_cast<int32_t>(w->queue.size()) >= w->max_in_flight) {
         w->rejected.fetch_add(1, std::memory_order_relaxed);
         return 0;
@@ -66,26 +82,29 @@ int64_t submit_ground(cn_world* w, const float feet[3], const float goal[3], flo
     r.goal[0] = goal[0];
     r.goal[1] = goal[1];
     r.goal[2] = goal[2];
+    r.goal_frame = frame;
     GroundJob& j = r.ground;
-    j.start[0] = ifloor(feet[0]);
-    j.start[1] = ifloor(feet[1] + 0.001f); // nudge off an exact block boundary
-    j.start[2] = ifloor(feet[2]);
-    j.goal[0] = ifloor(goal[0]);
-    j.goal[1] = ifloor(goal[1] + 0.001f);
-    j.goal[2] = ifloor(goal[2]);
+    j.start = Node{add_sat(frame.x, lfloor(feet[0])), add_sat(frame.y, floor_add(feet[1], 0.001f)), // nudge off an exact block boundary
+                   add_sat(frame.z, lfloor(feet[2]))};
+    j.goal = Node{add_sat(frame.x, lfloor(goal[0])), add_sat(frame.y, floor_add(goal[1], 0.001f)),
+                  add_sat(frame.z, lfloor(goal[2]))};
+    j.anchor = Node{add_sat(frame.x, anchor_of(feet[0])), add_sat(frame.y, anchor_of(feet[1])),
+                    add_sat(frame.z, anchor_of(feet[2]))};
     j.goal_radius = goal_radius;
     j.snap_down = snap_down;
     j.snap_up = snap_up;
     j.profile = profile;
     j.limits = limits;
-    if (!in_range(j.start[0], j.start[1], j.start[2]) || !in_range(j.goal[0], j.goal[1], j.goal[2])) {
+    r.route.anchor = j.anchor;
+    if (!in_range(j.start.x, j.start.y, j.start.z) || !in_range(j.goal.x, j.goal.y, j.goal.z)
+        || !in_range(j.anchor.x, j.anchor.y, j.anchor.z)) {
         return resolve_now(w, std::move(r), CN_SEARCH_OUT_OF_RANGE);
     }
     return enqueue(w, std::move(r));
 }
 
-int64_t submit_air(cn_world* w, const float from[3], const float goal[3], float goal_radius, int32_t goal_snap_cells,
-                   const cn_air_profile& profile, const cn_limits& limits) {
+int64_t submit_air(cn_world* w, const double from[3], const double goal[3], const Node& frame, float goal_radius,
+                   int32_t goal_snap_cells, const cn_air_profile& profile, const cn_limits& limits) {
     if (static_cast<int32_t>(w->queue.size()) >= w->max_in_flight) {
         w->rejected.fetch_add(1, std::memory_order_relaxed);
         return 0;
@@ -95,21 +114,31 @@ int64_t submit_air(cn_world* w, const float from[3], const float goal[3], float 
     r.goal[0] = goal[0];
     r.goal[1] = goal[1];
     r.goal[2] = goal[2];
+    r.goal_frame = frame;
     AirJob& j = r.air_job;
-    j.start[0] = ifloor(from[0]);
-    j.start[1] = ifloor(from[1]);
-    j.start[2] = ifloor(from[2]);
-    j.goal[0] = ifloor(goal[0]);
-    j.goal[1] = ifloor(goal[1]);
-    j.goal[2] = ifloor(goal[2]);
+    j.start = Node{add_sat(frame.x, lfloor(from[0])), add_sat(frame.y, lfloor(from[1])), add_sat(frame.z, lfloor(from[2]))};
+    j.goal = Node{add_sat(frame.x, lfloor(goal[0])), add_sat(frame.y, lfloor(goal[1])), add_sat(frame.z, lfloor(goal[2]))};
+    const Node anchor_blocks{add_sat(frame.x, anchor_of(from[0])), add_sat(frame.y, anchor_of(from[1])),
+                             add_sat(frame.z, anchor_of(from[2]))};
     j.goal_radius = goal_radius;
     j.goal_snap_cells = goal_snap_cells;
     j.profile = profile;
     j.limits = limits;
-    if (!air_cell_in_range(profile, j.start[0], j.start[1], j.start[2])
-        || !air_cell_in_range(profile, j.goal[0], j.goal[1], j.goal[2])) {
+    if (!air_cell_in_range(profile, j.start.x, j.start.y, j.start.z)
+        || !air_cell_in_range(profile, j.goal.x, j.goal.y, j.goal.z)
+        || !in_range(anchor_blocks.x, anchor_blocks.y, anchor_blocks.z) || !std::isfinite(profile.cruise_y)
+        || std::fabs(profile.cruise_y) >= kPositionLimit) {
+        j.anchor = Node{};
+        j.cruise_cells = 0.0f;
         return resolve_now(w, std::move(r), CN_SEARCH_OUT_OF_RANGE);
     }
+    const int64_t size = profile.cell_size;
+    j.anchor = Node{cenda::floor_div64(anchor_blocks.x, size), cenda::floor_div64(anchor_blocks.y, size),
+                    cenda::floor_div64(anchor_blocks.z, size)};
+    // Cruise in cube cells relative to the anchor: the Java's cruiseY / cellSize (float) near the origin.
+    const float cruise_blocks = static_cast<float>(static_cast<double>(frame.y - j.anchor.y * size) + profile.cruise_y);
+    j.cruise_cells = cruise_blocks / static_cast<float>(profile.cell_size);
+    r.route.anchor = Node{j.anchor.x * size, j.anchor.y * size, j.anchor.z * size};
     return enqueue(w, std::move(r));
 }
 
@@ -131,6 +160,7 @@ void release(cn_world* w, int64_t id) {
 }
 
 bool blocks(physics_detail::CellView& view, int64_t x, int64_t y, int64_t z, uint32_t mask) {
+    // x, y, z are absolute.
     uint16_t shape = 0, fluid = 0;
     view.read(x, y, z, shape, fluid);
     return physics_detail::shape_top(view.world(), shape, mask) >= 1.0f - 1e-3f;
@@ -181,6 +211,7 @@ cn_world* cn_world_create(const cn_world_desc* desc) {
         fail(CN_ERR_ARG, "max_y must be above min_y");
         return nullptr;
     }
+    // A bound beyond the node range is the same as none (and keeps cy +- 1 from overflowing).
     auto* w = new (std::nothrow) cn_world();
     if (w == nullptr) {
         fail(CN_ERR_ARG, "out of memory");
@@ -191,8 +222,8 @@ cn_world* cn_world_create(const cn_world_desc* desc) {
     w->rules.solid_mask = desc->solid_mask;
     w->rules.hazard_mask = desc->hazard_mask;
     w->rules.fluid_mask = desc->fluid_mask;
-    w->rules.min_y = desc->min_y;
-    w->rules.max_y = desc->max_y;
+    w->rules.min_y = std::max<int64_t>(desc->min_y, -kCoordLimit);
+    w->rules.max_y = std::min<int64_t>(desc->max_y, kCoordLimit);
     w->max_in_flight = desc->max_in_flight <= 0 ? 64 : desc->max_in_flight;
     return w;
 }
@@ -201,7 +232,21 @@ void cn_world_destroy(cn_world* world) {
     delete world;
 }
 
-uint32_t cn_cell(cn_world* world, int32_t x, int32_t y, int32_t z, float* out_top) {
+int32_t cn_world_set_origin(cn_world* world, int64_t ox, int64_t oy, int64_t oz) {
+    if (world == nullptr) return fail(CN_ERR_ARG, "null world");
+    world->origin = Node{ox, oy, oz};
+    return CN_OK;
+}
+
+int32_t cn_world_get_origin(const cn_world* world, int64_t* out) {
+    if (world == nullptr || out == nullptr) return fail(CN_ERR_ARG, "null world or output");
+    out[0] = world->origin.x;
+    out[1] = world->origin.y;
+    out[2] = world->origin.z;
+    return CN_OK;
+}
+
+uint32_t cn_cell(cn_world* world, int64_t x, int64_t y, int64_t z, float* out_top) {
     if (out_top) *out_top = 0.0f;
     if (world == nullptr) return CN_CELL_UNKNOWN;
     cenda::physics_detail::begin(world->rules.physics);
@@ -278,20 +323,21 @@ void cn_stats_get(const cn_world* w, cn_stats* out) {
 }
 
 int64_t cn_search_ground(cn_world* w, const cn_ground_query* q) {
-    if (w == nullptr || q == nullptr || !finite3(q->feet) || !finite3(q->goal) || !valid_limits(q->limits)) {
+    if (w == nullptr || q == nullptr || !sane3(q->feet) || !sane3(q->goal) || !valid_limits(q->limits)) {
         fail(CN_ERR_ARG, "bad ground query");
         return 0;
     }
-    return submit_ground(w, q->feet, q->goal, q->goal_radius, q->snap_down, q->snap_up, q->profile, q->limits);
+    return submit_ground(w, q->feet, q->goal, w->origin, q->goal_radius, q->snap_down, q->snap_up, q->profile,
+                         q->limits);
 }
 
 int64_t cn_search_air(cn_world* w, const cn_air_query* q) {
-    if (w == nullptr || q == nullptr || !finite3(q->from) || !finite3(q->goal) || !valid_limits(q->limits)
+    if (w == nullptr || q == nullptr || !sane3(q->from) || !sane3(q->goal) || !valid_limits(q->limits)
         || q->profile.cell_size <= 0) {
         fail(CN_ERR_ARG, "bad air query");
         return 0;
     }
-    return submit_air(w, q->from, q->goal, q->goal_radius, q->goal_snap_cells, q->profile, q->limits);
+    return submit_air(w, q->from, q->goal, w->origin, q->goal_radius, q->goal_snap_cells, q->profile, q->limits);
 }
 
 int32_t cn_search_poll(cn_world* w, int64_t id, cn_search_info* info) {
@@ -311,14 +357,17 @@ int32_t cn_search_poll(cn_world* w, int64_t id, cn_search_info* info) {
     return 1;
 }
 
-int32_t cn_search_points(cn_world* w, int64_t id, float* xyz, int32_t cap) {
+int32_t cn_search_points(cn_world* w, int64_t id, double* xyz, int32_t cap) {
     if (w == nullptr) return fail(CN_ERR_ARG, "null world");
     Request* r = finished(w, id);
     if (r == nullptr) return 0;
     int32_t n = static_cast<int32_t>(r->route.points.size() / 3);
     if (xyz != nullptr) {
         int32_t copy = std::min(n, std::max(cap, 0));
-        std::copy_n(r->route.points.data(), static_cast<size_t>(copy) * 3, xyz);
+        const double base[3] = {static_cast<double>(r->route.anchor.x - w->origin.x),
+                                static_cast<double>(r->route.anchor.y - w->origin.y),
+                                static_cast<double>(r->route.anchor.z - w->origin.z)};
+        for (size_t i = 0; i < static_cast<size_t>(copy) * 3; ++i) xyz[i] = base[i % 3] + r->route.points[i];
     }
     return n;
 }
@@ -342,51 +391,58 @@ float cn_steer_yaw_error(float yaw, float target_yaw) {
     return std::fabs(delta);
 }
 
-float cn_probe_ground_level(cp_world* physics, float x, float z, float start_y, int32_t scan_up, int32_t scan_down,
-                            uint32_t mask) {
+double cn_probe_ground_level(cp_world* physics, double x, double z, double start_y, int32_t scan_up,
+                             int32_t scan_down, uint32_t mask) {
     if (physics == nullptr || !std::isfinite(x) || !std::isfinite(z) || !std::isfinite(start_y)) {
-        return -std::numeric_limits<float>::infinity();
+        return -std::numeric_limits<double>::infinity();
     }
     cenda::physics_detail::begin(physics);
     cenda::physics_detail::CellView view(physics);
-    int32_t bx = ifloor(x), bz = ifloor(z), from = ifloor(start_y);
-    for (int32_t y = from + scan_up; y >= from - scan_down; --y) {
-        if (blocks(view, bx, y, bz, mask) && !blocks(view, bx, static_cast<int64_t>(y) + 1, bz, mask)) {
-            return static_cast<float>(y) + 1.0f;
+    int64_t o[3];
+    cenda::physics_detail::origin(physics, o);
+    int64_t bx = lfloor(x) + o[0], bz = lfloor(z) + o[2], from = lfloor(start_y);
+    for (int64_t y = from + scan_up; y >= from - scan_down; --y) {
+        if (blocks(view, bx, y + o[1], bz, mask) && !blocks(view, bx, y + o[1] + 1, bz, mask)) {
+            return static_cast<double>(y) + 1.0;
         }
     }
-    return -std::numeric_limits<float>::infinity();
+    return -std::numeric_limits<double>::infinity();
 }
 
-float cn_probe_fluid_top(cp_world* physics, float x, float y, float z, int32_t scan_up, int32_t scan_down,
-                         uint32_t fluid_mask) {
+double cn_probe_fluid_top(cp_world* physics, double x, double y, double z, int32_t scan_up, int32_t scan_down,
+                          uint32_t fluid_mask) {
     if (physics == nullptr || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
-        return -std::numeric_limits<float>::infinity();
+        return -std::numeric_limits<double>::infinity();
     }
     cenda::physics_detail::begin(physics);
     cenda::physics_detail::CellView view(physics);
-    int32_t bx = ifloor(x), bz = ifloor(z), from = ifloor(y);
-    for (int32_t cy = from + scan_up; cy >= from - scan_down; --cy) {
+    int64_t o[3];
+    cenda::physics_detail::origin(physics, o);
+    int64_t bx = lfloor(x) + o[0], bz = lfloor(z) + o[2], from = lfloor(y);
+    for (int64_t cy = from + scan_up; cy >= from - scan_down; --cy) {
         uint16_t shape = 0, fluid = 0;
-        view.read(bx, cy, bz, shape, fluid);
+        view.read(bx, cy + o[1], bz, shape, fluid);
         if (cenda::physics_detail::fluid_surface(physics, fluid, fluid_mask) >= 0.0f) {
-            return static_cast<float>(cy) + 1.0f;
+            return static_cast<double>(cy) + 1.0;
         }
     }
-    return -std::numeric_limits<float>::infinity();
+    return -std::numeric_limits<double>::infinity();
 }
 
-int32_t cn_probe_clear(cp_world* physics, float x, float y, float z, float radius, uint32_t mask) {
+int32_t cn_probe_clear(cp_world* physics, double x, double y, double z, float radius, uint32_t mask) {
     if (physics == nullptr) return 1;
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(radius)) return 1;
     cenda::physics_detail::begin(physics);
     cenda::physics_detail::CellView view(physics);
-    int32_t x0 = ifloor(x - radius), x1 = ifloor(x + radius);
-    int32_t y0 = ifloor(y - radius), y1 = ifloor(y + radius);
-    int32_t z0 = ifloor(z - radius), z1 = ifloor(z + radius);
-    for (int32_t bx = x0; bx <= x1; ++bx) {
-        for (int32_t by = y0; by <= y1; ++by) {
-            for (int32_t bz = z0; bz <= z1; ++bz) {
+    int64_t o[3];
+    cenda::physics_detail::origin(physics, o);
+    const double r = static_cast<double>(radius);
+    int64_t x0 = lfloor(x - r) + o[0], x1 = lfloor(x + r) + o[0];
+    int64_t y0 = lfloor(y - r) + o[1], y1 = lfloor(y + r) + o[1];
+    int64_t z0 = lfloor(z - r) + o[2], z1 = lfloor(z + r) + o[2];
+    for (int64_t bx = x0; bx <= x1; ++bx) {
+        for (int64_t by = y0; by <= y1; ++by) {
+            for (int64_t bz = z0; bz <= z1; ++bz) {
                 if (blocks(view, bx, by, bz, mask)) return 0;
             }
         }
@@ -394,42 +450,49 @@ int32_t cn_probe_clear(cp_world* physics, float x, float y, float z, float radiu
     return 1;
 }
 
-float cn_probe_column_peak(cp_world* physics, float x, float z, float from_y, int32_t range, uint32_t mask) {
+double cn_probe_column_peak(cp_world* physics, double x, double z, double from_y, int32_t range, uint32_t mask) {
     if (physics == nullptr || !std::isfinite(x) || !std::isfinite(z) || !std::isfinite(from_y)) {
-        return -std::numeric_limits<float>::infinity();
+        return -std::numeric_limits<double>::infinity();
     }
     cenda::physics_detail::begin(physics);
     cenda::physics_detail::CellView view(physics);
-    int32_t bx = ifloor(x), bz = ifloor(z), centre = ifloor(from_y);
-    for (int32_t y = centre + range; y >= centre - range; --y) {
-        if (blocks(view, bx, y, bz, mask)) return static_cast<float>(y) + 1.0f;
+    int64_t o[3];
+    cenda::physics_detail::origin(physics, o);
+    int64_t bx = lfloor(x) + o[0], bz = lfloor(z) + o[2], centre = lfloor(from_y);
+    for (int64_t y = centre + range; y >= centre - range; --y) {
+        if (blocks(view, bx, y + o[1], bz, mask)) return static_cast<double>(y) + 1.0;
     }
-    return -std::numeric_limits<float>::infinity();
+    return -std::numeric_limits<double>::infinity();
 }
 
 int32_t cn_reach_ground(cn_world* w, const cn_reach_query* q, cn_reach_cell* out, int32_t cap) {
-    if (w == nullptr || q == nullptr || !finite3(q->feet) || q->max_cells <= 0 || q->radius < 0
+    if (w == nullptr || q == nullptr || !sane3(q->feet) || q->max_cells <= 0 || q->radius < 0
         || !(q->max_cost > 0.0f) || !(q->profile.height > 0.0f)) {
         return fail(CN_ERR_ARG, "bad reach query");
     }
-    const int32_t start[3] = {ifloor(q->feet[0]), ifloor(q->feet[1] + 0.001f), ifloor(q->feet[2])};
-    if (!in_range(start[0], start[1], start[2])) return 0;
+    const Node& f = w->origin;
+    const Node start{add_sat(f.x, lfloor(q->feet[0])), add_sat(f.y, floor_add(q->feet[1], 0.001f)),
+                     add_sat(f.z, lfloor(q->feet[2]))};
+    const Node anchor{add_sat(f.x, anchor_of(q->feet[0])), add_sat(f.y, anchor_of(q->feet[1])),
+                      add_sat(f.z, anchor_of(q->feet[2]))};
+    if (!in_range(start.x, start.y, start.z) || !in_range(anchor.x, anchor.y, anchor.z)) return 0;
     cenda::physics_detail::begin(w->rules.physics);
     cenda::physics_detail::CellView view(w->rules.physics);
-    return w->searcher.reach(w->rules, view, start, q->snap_down, q->snap_up, q->radius, q->max_cells, q->max_cost,
-                             q->profile, out, cap);
+    return w->searcher.reach(w->rules, view, start, anchor, f.y, q->snap_down, q->snap_up, q->radius, q->max_cells,
+                             q->max_cost, q->profile, out, cap);
 }
 
-int32_t cn_flood(cp_world* physics, const cn_flood_query* q, int32_t* out, int32_t cap) {
-    if (physics == nullptr || q == nullptr || q->max_cells <= 0 || q->max_steps < 0 || q->max_steps >= (1 << 20)
-        || q->max_y <= q->min_y) {
+int32_t cn_flood(cp_world* physics, const cn_flood_query* q, cn_flood_cell* out, int32_t cap) {
+    if (physics == nullptr || q == nullptr || q->max_cells <= 0 || q->max_steps < 0 || q->max_y <= q->min_y
+        || !in_range(q->x, q->y, q->z)) {
         return fail(CN_ERR_ARG, "bad flood query");
     }
     struct Open {
-        int32_t x, y, z, depth;
+        int64_t x, y, z;
+        int32_t depth;
     };
     thread_local std::vector<Open> open;
-    thread_local LongIntMap seen(4096);
+    thread_local CellIntMap seen(4096);
     open.clear();
     seen.clear();
     cenda::physics_detail::begin(physics);
@@ -438,15 +501,9 @@ int32_t cn_flood(cp_world* physics, const cn_flood_query* q, int32_t* out, int32
     static constexpr int32_t kDy[6] = {0, 0, 1, -1, 0, 0};
     static constexpr int32_t kDz[6] = {0, 0, 0, 0, 1, -1};
 
-    // Offsets from the start, 21 bits per axis: a flood never travels farther than max_steps.
-    const int32_t sx = q->x, sy = q->y, sz = q->z;
-    auto key = [sx, sy, sz](int32_t x, int32_t y, int32_t z) {
-        constexpr int64_t bias = int64_t{1} << 20;
-        return ((static_cast<int64_t>(x) - sx + bias) << 42) | ((static_cast<int64_t>(y) - sy + bias) << 21)
-            | (static_cast<int64_t>(z) - sz + bias);
-    };
+    // Full int64 cells as keys: a flood may travel any distance (max_steps) without aliasing.
     open.push_back(Open{q->x, q->y, q->z, 0});
-    seen.put(key(q->x, q->y, q->z), 1);
+    seen.put(Node{q->x, q->y, q->z}, 1);
     size_t head = 0;
     int32_t expanded = 0;
     while (head < open.size() && expanded < q->max_cells) {
@@ -454,18 +511,19 @@ int32_t cn_flood(cp_world* physics, const cn_flood_query* q, int32_t* out, int32
         uint16_t shape = 0, fluid = 0;
         view.read(cell.x, cell.y, cell.z, shape, fluid);
         if (out != nullptr && expanded < cap) {
-            int32_t* o = out + static_cast<size_t>(expanded) * 4;
-            o[0] = cell.x;
-            o[1] = cell.y;
-            o[2] = cell.z;
-            o[3] = static_cast<int32_t>(cenda::physics_detail::shape_category(physics, shape));
+            cn_flood_cell& o = out[expanded];
+            o.x = cell.x;
+            o.y = cell.y;
+            o.z = cell.z;
+            o.category = cenda::physics_detail::shape_category(physics, shape);
+            o.reserved = 0;
         }
         ++expanded;
         if (cell.depth >= q->max_steps) continue;
         for (int d = 0; d < 6; ++d) {
-            int32_t nx = cell.x + kDx[d], ny = cell.y + kDy[d], nz = cell.z + kDz[d];
-            if (ny < q->min_y || ny >= q->max_y) continue;
-            int64_t k = key(nx, ny, nz);
+            int64_t nx = cell.x + kDx[d], ny = cell.y + kDy[d], nz = cell.z + kDz[d];
+            if (ny < q->min_y || ny >= q->max_y || !in_range(nx, ny, nz)) continue;
+            const Node k{nx, ny, nz};
             if (seen.get(k, 0) != 0) continue;
             uint16_t ns = 0, nf = 0;
             view.read(nx, ny, nz, ns, nf);

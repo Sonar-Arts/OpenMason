@@ -32,3 +32,107 @@ if(CENDA_BUILD_KERNELS)
     # Each test finishes in well under a second; a hang should fail fast, not stall CI.
     set_tests_properties(omformat_smoke ${_kernel_tests} PROPERTIES TIMEOUT 120)
 endif()
+
+# Region store (cv_store_*, #120): links the store's object files directly (not the shared lib) so the
+# test reaches its internal tuning / fault-injection seams; it stubs cv_set_error itself.
+if(CENDA_BUILD_KERNELS)
+    find_package(Threads REQUIRED)
+    add_executable(voxel_store voxel_store_test.cpp $<TARGET_OBJECTS:cenda_voxel_store>)
+    target_include_directories(voxel_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../native/kernels/include)
+    target_link_libraries(voxel_store PRIVATE libzstd_static Threads::Threads cenda_warnings)
+    add_test(NAME voxel_store COMMAND voxel_store)
+    set_tests_properties(voxel_store PROPERTIES TIMEOUT 300)
+endif()
+
+# Voxel world core (cv_*, #141/#144): links the shared lib and reaches the engine-internal API
+# (src/voxel_world/cv_internal.hpp) the mesher and streamer use.
+if(CENDA_BUILD_KERNELS)
+    find_package(Threads REQUIRED)
+    add_executable(voxel_world voxel_world_test.cpp)
+    target_include_directories(voxel_world PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../native/kernels/src/voxel_world)
+    target_link_libraries(voxel_world PRIVATE cenda_kernels Threads::Threads cenda_warnings)
+    if(MSVC)
+        target_compile_options(voxel_world PRIVATE /fp:precise)
+    else()
+        target_compile_options(voxel_world PRIVATE -ffp-contract=off)
+    endif()
+    if(WIN32)
+        set_tests_properties(voxel_world PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
+    endif()
+    add_test(NAME voxel_world COMMAND voxel_world)
+    set_tests_properties(voxel_world PROPERTIES TIMEOUT 300)
+endif()
+
+# Native cube mesher + visibility (#143/#123, Phase 1b): shared lib + the mesher's internal headers.
+if(CENDA_BUILD_KERNELS)
+    find_package(Threads REQUIRED)
+    add_executable(voxel_mesh voxel_mesh_test.cpp)
+    target_include_directories(voxel_mesh PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../native/kernels/src/voxel_world)
+    target_link_libraries(voxel_mesh PRIVATE cenda_kernels Threads::Threads cenda_warnings)
+    if(MSVC)
+        target_compile_options(voxel_mesh PRIVATE /fp:precise)
+    else()
+        target_compile_options(voxel_mesh PRIVATE -ffp-contract=off)
+    endif()
+    if(WIN32)
+        set_tests_properties(voxel_mesh PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
+    endif()
+    add_test(NAME voxel_mesh COMMAND voxel_mesh)
+    set_tests_properties(voxel_mesh PROPERTIES TIMEOUT 600)
+
+    # Differential test: the mesher against a test-only copy of its pre-rewrite code (byte-identical output).
+    add_executable(voxel_mesh_diff voxel_mesh_diff_test.cpp voxel_mesh_ref.cpp)
+    target_include_directories(voxel_mesh_diff PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../native/kernels/src/voxel_world)
+    target_link_libraries(voxel_mesh_diff PRIVATE cenda_kernels Threads::Threads cenda_warnings)
+    if(MSVC)
+        target_compile_options(voxel_mesh_diff PRIVATE /fp:precise)
+    else()
+        target_compile_options(voxel_mesh_diff PRIVATE -ffp-contract=off)
+    endif()
+    add_test(NAME voxel_mesh_diff COMMAND voxel_mesh_diff)
+    set_tests_properties(voxel_mesh_diff PROPERTIES TIMEOUT 900)
+    if(WIN32)
+        set_tests_properties(voxel_mesh_diff PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
+    endif()
+endif()
+
+# Streamer (cv_stream_*, #121): links the shared lib, uses the engine-internal API and the toy generator.
+if(CENDA_BUILD_KERNELS)
+    find_package(Threads REQUIRED)
+    add_executable(voxel_stream voxel_stream_test.cpp)
+    target_include_directories(voxel_stream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../native/kernels/src/voxel_world)
+    target_link_libraries(voxel_stream PRIVATE cenda_kernels Threads::Threads cenda_warnings)
+    if(MSVC)
+        target_compile_options(voxel_stream PRIVATE /fp:precise)
+    else()
+        target_compile_options(voxel_stream PRIVATE -ffp-contract=off)
+    endif()
+    if(WIN32)
+        set_tests_properties(voxel_stream PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
+    endif()
+    add_test(NAME voxel_stream COMMAND voxel_stream)
+    set_tests_properties(voxel_stream PROPERTIES TIMEOUT 600)
+endif()
+
+# Octree LOD (cv_lod_*, #122 / Phase 5): shared lib + the LOD's internal header (downsampling / record tests).
+if(CENDA_BUILD_KERNELS)
+    find_package(Threads REQUIRED)
+    add_executable(voxel_lod voxel_lod_test.cpp)
+    target_include_directories(voxel_lod PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../native/kernels/src/voxel_world)
+    target_link_libraries(voxel_lod PRIVATE cenda_kernels Threads::Threads cenda_warnings)
+    if(MSVC)
+        target_compile_options(voxel_lod PRIVATE /fp:precise)
+    else()
+        target_compile_options(voxel_lod PRIVATE -ffp-contract=off)
+    endif()
+    if(WIN32)
+        set_tests_properties(voxel_lod PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
+    endif()
+    add_test(NAME voxel_lod COMMAND voxel_lod)
+    set_tests_properties(voxel_lod PROPERTIES TIMEOUT 1500)   # ~6 min under ASan
+endif()

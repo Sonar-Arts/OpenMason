@@ -8,6 +8,7 @@ import java.nio.ByteOrder;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -66,6 +67,53 @@ class MmsQuadCodecTest {
         assertTrue(b.isFull());
         assertTrue(!b.addQuad(0, 0, 0, 0, 1, 1, 0, false, false, 0, 1, 1, 1, 1));
         assertEquals(MmsQuadCodec.MAX_QUADS_PER_DRAW * 4, b.build().getVertexCount());
+    }
+
+    /** The pre-2026-11-17 word1 (4-bit w/h), kept to prove the widened layout is identical for w, h <= 16. */
+    private static int oldWord1(int w, int h, int orientation, boolean alpha, boolean translucent, int layer) {
+        return (h - 1) | (orientation << 4) | ((alpha ? 1 : 0) << 7) | ((translucent ? 1 : 0) << 8)
+            | (layer << 9) | ((w - 1) << 25);
+    }
+
+    @Test
+    void widenedExtentsRoundTripAndKeepTheFourBitLayoutUpTo16() {
+        for (int w = 1; w <= MmsQuadCodec.MAX_EXTENT; w++) {
+            for (int h = 1; h <= MmsQuadCodec.MAX_EXTENT; h++) {
+                int o = (w + h) & 7;
+                int layer = (w * 1000 + h) & 0xFFFF;
+                int w1 = MmsQuadCodec.word1(w, h, o, (w & 1) != 0, (h & 1) != 0, layer);
+                assertEquals(w, MmsQuadCodec.width(w1));
+                assertEquals(h, MmsQuadCodec.height(w1));
+                assertEquals(o, MmsQuadCodec.orientation(w1));
+                assertEquals(layer, MmsQuadCodec.layer(w1));
+                assertEquals((w & 1) != 0, MmsQuadCodec.alpha(w1));
+                assertEquals((h & 1) != 0, MmsQuadCodec.translucent(w1));
+                assertEquals(0, w1 >>> 31, "bit 31 stays spare");
+                if (w <= 16 && h <= 16) {
+                    assertEquals(oldWord1(w, h, o, (w & 1) != 0, (h & 1) != 0, layer), w1, "w=" + w + " h=" + h);
+                }
+            }
+        }
+        // Golden vectors shared with the native packer (cenda tests/voxel_mesh_test.cpp, test_packing).
+        assertEquals(31 << 25, MmsQuadCodec.word1(32, 1, 0, false, false, 0));
+        assertEquals(15 | (1 << 30), MmsQuadCodec.word1(1, 32, 0, false, false, 0));
+        assertEquals((7 << 4) | (1 << 7) | (1 << 8) | (65535 << 9) | (16 << 25) | (1 << 30),
+            MmsQuadCodec.word1(17, 17, 7, true, true, 65535));
+        assertEquals(5 | (200 << 8) | (17 << 18) | (3 << 26), MmsQuadCodec.word0(5, 200, 17, 3));
+        assertEquals(0xFF804000, MmsQuadCodec.word2(0f, 64f / 255f, 128f / 255f, 1f));
+        assertThrows(IllegalArgumentException.class, () -> MmsQuadCodec.word1(33, 1, 0, false, false, 0));
+        assertThrows(IllegalArgumentException.class, () -> MmsQuadCodec.word1(1, 0, 0, false, false, 0));
+    }
+
+    @Test
+    void aWholeCubeFaceIsOneRecord() {
+        for (int face = 0; face < 6; face++) {
+            MmsQuadMeshBuilder b = new MmsQuadMeshBuilder(1).setOrigin(256f, 0f, -256f);
+            b.addQuad(32, 64, 96, face, 32, 32, 0, false, false, 1, 1f, 1f, 1f, 1f);
+            MmsMeshData mesh = b.build();
+            float[] expected = cuboids.generateScaledFaceVertices(face, 256f + 32, 64f, -256f + 96, 32, 32);
+            assertArrayEquals(expected, mesh.getVertexPositions(), 0f, "face " + face + " corners");
+        }
     }
 
     @Test

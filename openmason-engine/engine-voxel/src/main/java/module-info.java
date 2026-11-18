@@ -1,7 +1,8 @@
 /**
  * Open Mason engine voxel stack (#387): the voxel abstractions, CCO chunk data, the MMS mesher and region
  * renderer, voxel lighting, the SBO stamp renderer and voxel replication
- * on the wire ({@code net.replication}, {@code voxel.net}: VoxelChunkCodec, ChunkBlockPayload).
+ * on the wire ({@code net.replication}, {@code voxel.net}: VoxelChunkCodec, ChunkBlockPayload) and the native
+ * cubic voxel world binding ({@code voxel.world}: CubeWorld, CubeStore, CubeMesh over Cenda {@code cv_*}).
  * Builds on {@code openmason.engine.core} only.
  */
 module openmason.engine.voxel {
@@ -30,4 +31,5 @@ module openmason.engine.voxel {
     exports com.openmason.engine.voxel.net;
     exports com.openmason.engine.voxel.stamp;
     exports com.openmason.engine.voxel.stamp.render;
+    exports com.openmason.engine.voxel.world;
 }

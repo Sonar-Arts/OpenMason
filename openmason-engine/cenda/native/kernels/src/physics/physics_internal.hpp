@@ -17,7 +17,7 @@ namespace cenda::physics_detail {
 // Applies queued invalidations and evicts over-capacity bricks (cp_* calls do this on entry).
 void begin(cp_world* world);
 
-// One reader with a one-brick memo, the way cp_* queries read cells.
+// One reader with a one-brick memo, the way cp_* queries read cells. Cells are ABSOLUTE (int64).
 class CellView {
 public:
     explicit CellView(cp_world* world) : world_(world) {}
@@ -29,11 +29,22 @@ public:
     cp_world* world() const { return world_; }
 
 private:
+    // A small direct-mapped memo of bricks looked up this call (a 4 x 2 x 4 brick neighbourhood maps
+    // to distinct entries): searches hop between neighbouring bricks constantly, and the brick map is
+    // a hash lookup. Brick pointers stay valid until the next begin() (no eviction mid-call), and an
+    // unloaded brick is remembered as null for the rest of the call, as before.
+    static constexpr int kMemo = 32;
+    struct Memo {
+        int64_t bx, by, bz;
+        void* brick;
+        bool valid;
+    };
     cp_world* world_;
-    uint64_t key_ = ~0ull;
-    void* brick_ = nullptr;
-    bool known_ = false;
+    Memo memo_[kMemo]{};
 };
+
+// The world's frame origin (absolute cell of local 0,0,0).
+void origin(const cp_world* world, int64_t out[3]);
 
 // Height of the tallest box of a shape over the whole cell, when its category is in mask; 0 when the
 // shape is empty or not in mask (the footprint-free cp_cell_top).

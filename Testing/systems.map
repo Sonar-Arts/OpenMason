@@ -23,6 +23,7 @@ cco	openmason-engine/engine-voxel	com/openmason/engine/voxel/cco/**/*Test
 mms	openmason-engine/engine-voxel	com/openmason/engine/voxel/mms/**/*Test
 stamp	openmason-engine/engine-voxel	com/openmason/engine/voxel/stamp/**/*Test
 lighting	openmason-engine/engine-voxel	com/openmason/engine/voxel/lighting/**/*Test
+voxel-world	openmason-engine/engine-voxel	com/openmason/engine/voxel/world/**/*Test
 engine-util	openmason-engine/engine-core	com/openmason/engine/util/**/*Test,com/openmason/engine/rendering/gl/**/*Test,com/openmason/engine/rendering/sprite/**/*Test
 cearl	openmason-engine/engine-core	com/openmason/engine/cearl/**/*Test,com/openmason/engine/vram/**/*Test
 wayfind	openmason-engine/engine-core	com/openmason/engine/nav/**/*Test

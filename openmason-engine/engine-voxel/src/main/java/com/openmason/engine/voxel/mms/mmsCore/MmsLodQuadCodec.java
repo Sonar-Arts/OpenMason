@@ -32,6 +32,9 @@ import java.nio.ByteBuffer;
  * <p>Corners, winding and normals share {@link MmsCuboidGenerator}'s tables with
  * {@link MmsQuadCodec}; the GLSL mirror is {@code pullLodQuad} in
  * {@code world.vert} (selected by {@code aOrigin.w < -1.5}).
+ *
+ * <p>A second layout, NODE MODE ({@link #nodeWord0} / {@link #nodeWord1}), carries the native octree LOD's
+ * meshes ({@code cv_lod_*}): node-local cell coordinates with a biased Y, so any world height works.
  */
 public final class MmsLodQuadCodec {
 
@@ -249,5 +252,102 @@ public final class MmsLodQuadCodec {
 
     public static float layer(ByteBuffer quads, int q) {
         return layer(quads.getInt(q * QUAD_BYTES + 4));
+    }
+
+    // ─── Node mode (octree LOD from cubes: cv_lod, OpenMason #122) ─────────
+
+    /*
+     * NODE MODE: the native octree LOD ({@code cv_lod_*}, voxel_world.h "MESHES") emits LODQUAD16 records whose
+     * coordinates are in CELLS of their node (a level-k node holds 32^3 cells of 2^k blocks), relative to the
+     * node's int64 block origin (cv_lod_mesh.origin) - so the world's height never limits Y:
+     *
+     *   word0: x:9 (x + 8) | z:9 (z + 8) | y:11 (y + 1024) | face:3   the rectangle's min corner ON ITS PLANE
+     *   word1: w:6 | h:11 | layer:12 | alpha:1 | smooth:1 (0) | lit:1 w/h in whole cells along the face's u/v axes
+     *   word2, word3: 0
+     *
+     * A renderer turns a corner into blocks as origin + cell * cellSize (cellSize = 1 << level), camera-relative
+     * in double; UVs stay block-tiled ({@link #nodeTexCoord}).
+     */
+
+    /** Node-mode bias on x / z (cells). */
+    public static final int NODE_XZ_BIAS = 8;
+    /** Node-mode bias on y (cells): node-local y spans -1024..1023 cells. */
+    public static final int NODE_Y_BIAS = 1024;
+
+    /** Node-mode word0: the min corner on the face plane in node cells (x, z: -8..503; y: -1024..1023). */
+    public static int nodeWord0(int x, int y, int z, int face) {
+        check(x + NODE_XZ_BIAS, 0, 511, "node x");
+        check(z + NODE_XZ_BIAS, 0, 511, "node z");
+        check(y + NODE_Y_BIAS, 0, 2047, "node y");
+        check(face, 0, 5, "face");
+        return (x + NODE_XZ_BIAS) | ((z + NODE_XZ_BIAS) << 9) | ((y + NODE_Y_BIAS) << 18) | (face << 29);
+    }
+
+    /** Node-mode word1: w (1..63) and h (1..2047) in whole cells; smooth is always 0 in node mode. */
+    public static int nodeWord1(int w, int h, int layer, boolean alpha, boolean lit) {
+        check(w, 1, 63, "node w");
+        check(h, 1, 2047, "node h");
+        check(layer, 0, 4095, "layer");
+        return w | (h << 6) | (layer << 17) | ((alpha ? 1 : 0) << 29) | ((lit ? 1 : 0) << 31);
+    }
+
+    public static int nodeX(int w0) {
+        return (w0 & 0x1FF) - NODE_XZ_BIAS;
+    }
+
+    public static int nodeZ(int w0) {
+        return ((w0 >>> 9) & 0x1FF) - NODE_XZ_BIAS;
+    }
+
+    public static int nodeY(int w0) {
+        return ((w0 >>> 18) & 0x7FF) - NODE_Y_BIAS;
+    }
+
+    /** Extent along the face's u axis, whole cells. */
+    public static int nodeWidth(int w1) {
+        return w1 & 0x3F;
+    }
+
+    /** Extent along the face's v axis, whole cells. */
+    public static int nodeHeight(int w1) {
+        return (w1 >>> 6) & 0x7FF;
+    }
+
+    /**
+     * Node-mode corner position along {@code axis}, in node CELLS relative to the node origin (multiply by the
+     * node's cell size and add its block origin for world blocks).
+     */
+    public static int nodeCellPosition(ByteBuffer quads, int q, int corner, int axis) {
+        int w0 = quads.getInt(q * QUAD_BYTES);
+        int w1 = quads.getInt(q * QUAD_BYTES + 4);
+        int face = face(w0);
+        int off = 0;
+        if (axis == MmsCuboidGenerator.uAxis(face)) {
+            off = Math.round(MmsCuboidGenerator.cornerOffset(face, corner, axis)) * nodeWidth(w1);
+        } else if (axis == MmsCuboidGenerator.vAxis(face)) {
+            off = Math.round(MmsCuboidGenerator.cornerOffset(face, corner, axis)) * nodeHeight(w1);
+        }
+        return switch (axis) {
+            case 0 -> nodeX(w0) + off;
+            case 1 -> nodeY(w0) + off;
+            default -> nodeZ(w0) + off;
+        };
+    }
+
+    /** Node-mode corner position in world blocks: {@code origin + cells * cellSize} (exact for any int64 origin). */
+    public static long nodeBlockPosition(ByteBuffer quads, int q, int corner, int axis, long origin, int cellSize) {
+        return origin + (long) nodeCellPosition(quads, q, corner, axis) * cellSize;
+    }
+
+    /**
+     * Block-tiled UV of a node-mode corner (once per block, as {@link #texCoord}), from its position in blocks
+     * relative to the node origin (block-aligned, so the tiling stays on the world block grid).
+     */
+    public static float nodeTexCoord(ByteBuffer quads, int q, int corner, int c, int cellSize) {
+        int face = face(quads.getInt(q * QUAD_BYTES));
+        return tiledTexCoord(face,
+            (float) nodeCellPosition(quads, q, corner, 0) * cellSize,
+            (float) nodeCellPosition(quads, q, corner, 1) * cellSize,
+            (float) nodeCellPosition(quads, q, corner, 2) * cellSize, c);
     }
 }

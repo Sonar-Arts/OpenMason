@@ -7,6 +7,7 @@ package com.openmason.engine.physics;
  * anchor point (feet for a player, body bottom with legs below for a mob, centre for a drop).
  */
 public final class PhysicsBody {
+    // Positions are doubles relative to the PhysicsWorld's frame origin (OpenMason #142).
 
     /** In: was standing. Out: is standing. */
     public static final int ON_GROUND = 1;
@@ -32,7 +33,8 @@ public final class PhysicsBody {
     /** Any horizontal contact. */
     public static final int CONTACT_HORIZONTAL = CONTACT_NEG_X | CONTACT_POS_X | CONTACT_NEG_Z | CONTACT_POS_Z;
 
-    public float x, y, z;
+    /** The anchor, in the world's frame (relative to {@link PhysicsWorld#setOrigin}). */
+    public double x, y, z;
     public float vx, vy, vz;
     public float halfX, halfZ;
     public float below, above;
@@ -64,7 +66,7 @@ public final class PhysicsBody {
         return this;
     }
 
-    public PhysicsBody position(float x, float y, float z) {
+    public PhysicsBody position(double x, double y, double z) {
         this.x = x;
         this.y = y;
         this.z = z;

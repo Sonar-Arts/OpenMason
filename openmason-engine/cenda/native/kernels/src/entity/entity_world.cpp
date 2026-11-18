@@ -7,10 +7,14 @@
 //  - generation/state are atomics because ce_despawn (any thread) and handle validation race
 //    with the owner; everything else in a slot is written once at spawn (published through the
 //    world mutex and the owner's commit) and afterwards only by the owner thread.
-//  - The spatial index is a sorted (cell, live index) array over the XZ plane, rebuilt lazily
-//    before the next query whenever bodies or membership changed.
+//  - The spatial index is a sorted (cell, live index) array over a 3D grid of cell_size-block cells,
+//    keyed by ABSOLUTE int64 cell triples (frame origin + local), sorted by (x, z, y) so a column's
+//    cells are contiguous: a query with an unbounded Y range is still one binary search per column.
+//    Rebuilt lazily before the next query whenever bodies, membership or the origin changed.
+//  - Positions are doubles in the world's frame (relative to the origin); distances are double.
 
 #include "cenda/entity.h"
+#include "../int3_key.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -67,23 +71,50 @@ ce_handle make_handle(uint32_t slot, uint32_t generation) {
 
 bool finite(float v) { return std::isfinite(v); }
 
-// Grid cell of a coordinate; callers only pass finite values.
-int64_t cell_of(float v, float cell) {
-    return static_cast<int64_t>(std::floor(static_cast<double>(v) / static_cast<double>(cell)));
+// Local positions beyond this have no int64 cell (floor would overflow): they are "unplaced".
+constexpr double kPlaceLimit = 4.0e18;
+
+bool placeable(double v) { return std::isfinite(v) && std::fabs(v) < kPlaceLimit; }
+
+// Saturating int64 add (origin + local cell).
+int64_t add_sat(int64_t a, int64_t b) {
+    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
+    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;
 }
 
-uint64_t cell_key(int64_t cx, int64_t cz) {
-    return (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(cx))) << 32)
-           | static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(cz)));
+// The absolute grid cell of a placeable local coordinate.
+int64_t cell_of(double local, int64_t origin, int64_t cell) {
+    return cenda::floor_div64(add_sat(origin, static_cast<int64_t>(std::floor(local))), cell);
 }
 
-// Squared distance, written the way the Java code this replaces computes it (JOML
-// Vector3f.distanceSquared without Math.fma): dx*dx + (dy*dy + dz*dz). The library builds with
+// A grid cell, ordered (x, z, y): every cell of one column is contiguous.
+struct GridCell {
+    int64_t x, z, y;
+    friend bool operator<(const GridCell& a, const GridCell& b) {
+        if (a.x != b.x) return a.x < b.x;
+        if (a.z != b.z) return a.z < b.z;
+        return a.y < b.y;
+    }
+};
+
+struct GridEntry {
+    GridCell cell;
+    uint32_t live_index;
+    friend bool operator<(const GridEntry& a, const GridEntry& b) {
+        if (a.cell < b.cell) return true;
+        if (b.cell < a.cell) return false;
+        return a.live_index < b.live_index;
+    }
+};
+
+// Squared distance as the Java code this replaced wrote it (JOML Vector3f.distanceSquared without
+// Math.fma): dx*dx + (dy*dy + dz*dz), in double since ABI 2. The library builds with
 // -ffp-contract=off, so nothing here fuses into an FMA.
-float distance_squared(const ce_body& b, float x, float y, float z) {
-    float dx = b.x - x;
-    float dy = b.y - y;
-    float dz = b.z - z;
+double distance_squared(const ce_body& b, double x, double y, double z) {
+    double dx = b.x - x;
+    double dy = b.y - y;
+    double dz = b.z - z;
     return dx * dx + (dy * dy + dz * dz);
 }
 
@@ -106,7 +137,8 @@ bool accepts(const ce_filter* filter, const Slot& s) {
 } // namespace
 
 struct ce_world {
-    float cell_size;
+    int64_t cell_size;
+    int64_t origin[3] = {0, 0, 0};
 
     std::unique_ptr<std::atomic<Page*>[]> pages;
     std::atomic<uint32_t> next_slot{0};
@@ -124,12 +156,13 @@ struct ce_world {
 
     // Spatial index (owner thread; rebuilt lazily, hence mutable for the const queries).
     mutable bool index_dirty = true;
-    mutable std::vector<std::pair<uint64_t, uint32_t>> cells; // (cell key, live index), sorted
-    mutable std::vector<uint32_t> unplaced;                     // live indices with no finite x/z
+    mutable std::vector<GridEntry> cells;   // (cell, live index), sorted
+    mutable std::vector<uint32_t> unplaced; // live indices with no placeable x/y/z
     mutable float max_half_xz = 0.0f;
+    mutable float max_reach_y = 0.0f;       // the most a body box reaches above or below its position
     mutable std::vector<uint32_t> scratch;
 
-    explicit ce_world(float cell) : cell_size(cell), pages(new std::atomic<Page*>[kMaxPages]) {
+    explicit ce_world(int64_t cell) : cell_size(cell), pages(new std::atomic<Page*>[kMaxPages]) {
         for (uint32_t i = 0; i < kMaxPages; ++i) {
             pages[i].store(nullptr, std::memory_order_relaxed);
         }
@@ -197,6 +230,7 @@ struct ce_world {
         cells.clear();
         unplaced.clear();
         max_half_xz = 0.0f;
+        max_reach_y = 0.0f;
         for (size_t i = 0; i < order.size(); ++i) {
             const Slot* s = slot_at(order[i]);
             const ce_body& b = s->body;
@@ -204,9 +238,15 @@ struct ce_world {
             if (finite(half)) {
                 max_half_xz = std::max(max_half_xz, half);
             }
+            float reach = std::max(std::fabs(b.height), std::fabs(b.leg_height));
+            if (finite(reach)) {
+                max_reach_y = std::max(max_reach_y, reach);
+            }
             uint32_t live_index = static_cast<uint32_t>(i);
-            if (finite(b.x) && finite(b.z)) {
-                cells.emplace_back(cell_key(cell_of(b.x, cell_size), cell_of(b.z, cell_size)), live_index);
+            if (placeable(b.x) && placeable(b.y) && placeable(b.z)) {
+                cells.push_back(GridEntry{GridCell{cell_of(b.x, origin[0], cell_size), cell_of(b.z, origin[2], cell_size),
+                                                   cell_of(b.y, origin[1], cell_size)},
+                                          live_index});
             } else {
                 unplaced.push_back(live_index);
             }
@@ -215,33 +255,32 @@ struct ce_world {
         index_dirty = false;
     }
 
-    // Live indices of every entity whose position may lie in [x0,x1] x [z0,z1] (padded by one
-    // cell against rounding), plus every entity without a finite x/z, unsorted, into scratch.
-    // Returns false when the region spans more cells than there are entities (scan instead).
-    bool gather(double x0, double z0, double x1, double z1) const {
+    // Live indices of every entity whose position may lie in [x0,x1] x [y0,y1] x [z0,z1] (local,
+    // padded by one cell against rounding; y may be infinite), plus every unplaced entity,
+    // unsorted, into scratch. Returns false when the region spans more columns than there are
+    // entities, or is unbounded on x/z (scan instead).
+    bool gather(double x0, double y0, double z0, double x1, double y1, double z1) const {
         if (index_dirty) {
             rebuild_index();
         }
         scratch.clear();
-        if (!(std::isfinite(x0) && std::isfinite(z0) && std::isfinite(x1) && std::isfinite(z1))) {
+        if (!(placeable(x0) && placeable(z0) && placeable(x1) && placeable(z1)) || std::isnan(y0) || std::isnan(y1)) {
             return false;
         }
-        double cs = static_cast<double>(cell_size);
-        double cx0 = std::floor(x0 / cs) - 1.0;
-        double cz0 = std::floor(z0 / cs) - 1.0;
-        double cx1 = std::floor(x1 / cs) + 1.0;
-        double cz1 = std::floor(z1 / cs) + 1.0;
-        double span = (cx1 - cx0 + 1.0) * (cz1 - cz0 + 1.0);
-        if (span > static_cast<double>(order.size()) + 16.0 || cx0 < -2.0e9 || cx1 > 2.0e9
-            || cz0 < -2.0e9 || cz1 > 2.0e9) {
+        const int64_t cx0 = cell_of(x0, origin[0], cell_size) - 1, cx1 = cell_of(x1, origin[0], cell_size) + 1;
+        const int64_t cz0 = cell_of(z0, origin[2], cell_size) - 1, cz1 = cell_of(z1, origin[2], cell_size) + 1;
+        const int64_t cy0 = placeable(y0) ? cell_of(y0, origin[1], cell_size) - 1 : INT64_MIN;
+        const int64_t cy1 = placeable(y1) ? cell_of(y1, origin[1], cell_size) + 1 : INT64_MAX;
+        const double span = (static_cast<double>(cx1) - static_cast<double>(cx0) + 1.0)
+            * (static_cast<double>(cz1) - static_cast<double>(cz0) + 1.0);
+        if (span > static_cast<double>(order.size()) + 16.0) {
             return false;
         }
-        for (int64_t cx = static_cast<int64_t>(cx0); cx <= static_cast<int64_t>(cx1); ++cx) {
-            for (int64_t cz = static_cast<int64_t>(cz0); cz <= static_cast<int64_t>(cz1); ++cz) {
-                uint64_t key = cell_key(cx, cz);
-                auto it = std::lower_bound(cells.begin(), cells.end(), std::make_pair(key, 0u));
-                for (; it != cells.end() && it->first == key; ++it) {
-                    scratch.push_back(it->second);
+        for (int64_t cx = cx0; cx <= cx1; ++cx) {
+            for (int64_t cz = cz0; cz <= cz1; ++cz) {
+                auto it = std::lower_bound(cells.begin(), cells.end(), GridEntry{GridCell{cx, cz, cy0}, 0u});
+                for (; it != cells.end() && it->cell.x == cx && it->cell.z == cz && it->cell.y <= cy1; ++it) {
+                    scratch.push_back(it->live_index);
                 }
             }
         }
@@ -282,8 +321,8 @@ int32_t ce_abi_version(void) { return CE_ABI_VERSION; }
 
 const char* ce_last_error(void) { return t_error.c_str(); }
 
-ce_world* ce_world_create(float cell_size) {
-    float cell = (finite(cell_size) && cell_size > 0.0f) ? cell_size : 8.0f;
+ce_world* ce_world_create(int32_t cell_size) {
+    int64_t cell = cell_size > 0 ? cell_size : 8;
     try {
         return new ce_world(cell);
     } catch (...) {
@@ -293,6 +332,49 @@ ce_world* ce_world_create(float cell_size) {
 }
 
 void ce_world_destroy(ce_world* world) { delete world; }
+
+int32_t ce_set_origin(ce_world* world, int64_t ox, int64_t oy, int64_t oz) {
+    if (world == nullptr) {
+        return fail(CE_ERR_ARG, "ce_set_origin: null world");
+    }
+    if (world->origin[0] == ox && world->origin[1] == oy && world->origin[2] == oz) {
+        return CE_OK;
+    }
+    const double shift[3] = {static_cast<double>(world->origin[0] - ox), static_cast<double>(world->origin[1] - oy),
+                             static_cast<double>(world->origin[2] - oz)};
+    // Every body a query or ce_body_get can still see (pending ones too) keeps its absolute place.
+    std::lock_guard<std::mutex> lock(world->mutex);
+    const uint32_t n = world->next_slot.load(std::memory_order_acquire);
+    for (uint32_t i = 0; i < n; ++i) {
+        Slot* s = world->slot_at(i);
+        if (s == nullptr) {
+            continue;
+        }
+        uint8_t state = s->state.load(std::memory_order_relaxed);
+        if (state != CE_STATE_PENDING && state != CE_STATE_LIVE && state != CE_STATE_REMOVING
+            && state != CE_STATE_RETIRED) {
+            continue;
+        }
+        s->body.x += shift[0];
+        s->body.y += shift[1];
+        s->body.z += shift[2];
+    }
+    world->origin[0] = ox;
+    world->origin[1] = oy;
+    world->origin[2] = oz;
+    world->index_dirty = true;
+    return CE_OK;
+}
+
+int32_t ce_get_origin(const ce_world* world, int64_t* out) {
+    if (world == nullptr || out == nullptr) {
+        return fail(CE_ERR_ARG, "ce_get_origin: null world or output");
+    }
+    out[0] = world->origin[0];
+    out[1] = world->origin[1];
+    out[2] = world->origin[2];
+    return CE_OK;
+}
 
 // ---- types ------------------------------------------------------------------------------------
 
@@ -340,7 +422,7 @@ const char* ce_type_model_id(const ce_world* world, int32_t type_id) {
 
 // ---- lifecycle --------------------------------------------------------------------------------
 
-ce_handle ce_spawn(ce_world* world, int32_t type_id, uint32_t flags, float x, float y, float z, float yaw) {
+ce_handle ce_spawn(ce_world* world, int32_t type_id, uint32_t flags, double x, double y, double z, float yaw) {
     if (world == nullptr) {
         fail(CE_ERR_ARG, "ce_spawn: null world");
         return 0;
@@ -365,7 +447,7 @@ ce_handle ce_spawn(ce_world* world, int32_t type_id, uint32_t flags, float x, fl
     ce_handle handle = make_handle(index, generation);
     s->type = type_id;
     s->order = -1;
-    s->body = ce_body{handle, x, y, z, yaw, desc.width, desc.height, desc.length, desc.leg_height, flags, 0u};
+    s->body = ce_body{handle, x, y, z, yaw, desc.width, desc.height, desc.length, desc.leg_height, flags, {0u, 0u}};
     s->clip = ce_clip_state{-1, 0u, 0.0f, 0.0f};
     s->state.store(CE_STATE_PENDING, std::memory_order_relaxed);
     s->generation.store(generation, std::memory_order_release);
@@ -584,7 +666,8 @@ int32_t ce_sync_bodies(ce_world* world, const ce_body* bodies, int32_t count) {
             continue;
         }
         s->body = in;
-        s->body.reserved = 0u;
+        s->body.reserved[0] = 0u;
+        s->body.reserved[1] = 0u;
         ++applied;
     }
     world->index_dirty = true;
@@ -602,62 +685,62 @@ int32_t ce_body_get(const ce_world* world, ce_handle handle, ce_body* out) {
     return 1;
 }
 
-int32_t ce_query_radius(const ce_world* world, float x, float y, float z, float r,
+int32_t ce_query_radius(const ce_world* world, double x, double y, double z, double r,
                         const ce_filter* filter, ce_handle* out, int32_t cap) {
     if (world == nullptr || cap < 0 || std::isnan(r)) {
         return 0;
     }
-    float r2 = r * r;
-    double rd = static_cast<double>(r);
-    if (!world->gather(static_cast<double>(x) - rd, static_cast<double>(z) - rd,
-                       static_cast<double>(x) + rd, static_cast<double>(z) + rd)) {
+    double r2 = r * r;
+    if (!world->gather(x - r, y - r, z - r, x + r, y + r, z + r)) {
         world->gather_all();
     }
     return world->answer(filter, out, cap,
                          [&](const ce_body& b) { return distance_squared(b, x, y, z) <= r2; });
 }
 
-ce_handle ce_query_nearest(const ce_world* world, float x, float y, float z, float max_r,
-                           const ce_filter* filter, float* out_distance) {
+ce_handle ce_query_nearest(const ce_world* world, double x, double y, double z, double max_r,
+                           const ce_filter* filter, double* out_distance) {
     if (world == nullptr || std::isnan(max_r)) {
         return 0;
     }
     // A linear pass in live order: the first strictly nearer entity wins, so ties go to the
     // entity that entered the world first, exactly as the Java scan did.
-    float best = std::numeric_limits<float>::max();
+    double best = std::numeric_limits<double>::max();
     ce_handle best_handle = 0;
     for (uint32_t index : world->order) {
         const Slot& s = *world->slot_at(index);
         if (!accepts(filter, s)) {
             continue;
         }
-        float d = std::sqrt(distance_squared(s.body, x, y, z));
+        double d = std::sqrt(distance_squared(s.body, x, y, z));
         if (d < best && d <= max_r) {
             best = d;
             best_handle = s.body.handle;
         }
     }
     if (out_distance != nullptr) {
-        *out_distance = best_handle != 0 ? best : std::numeric_limits<float>::infinity();
+        *out_distance = best_handle != 0 ? best : std::numeric_limits<double>::infinity();
     }
     return best_handle;
 }
 
-int32_t ce_query_box(const ce_world* world, const float box[6], const ce_filter* filter,
+int32_t ce_query_box(const ce_world* world, const double box[6], const ce_filter* filter,
                      ce_handle* out, int32_t cap) {
     if (world == nullptr || box == nullptr || cap < 0) {
         return 0;
     }
     bool test[3];
     for (int axis = 0; axis < 3; ++axis) {
-        test[axis] = !(std::isinf(box[axis]) && box[axis] < 0.0f && std::isinf(box[axis + 3]) && box[axis + 3] > 0.0f);
+        test[axis] = !(std::isinf(box[axis]) && box[axis] < 0.0 && std::isinf(box[axis + 3]) && box[axis + 3] > 0.0);
     }
-    if (!world->gather(static_cast<double>(box[0]), static_cast<double>(box[2]),
-                       static_cast<double>(box[3]), static_cast<double>(box[5]))) {
+    // An untested y axis gathers whole columns (the grid answers an unbounded y range per column).
+    const double y0 = test[1] ? box[1] : -std::numeric_limits<double>::infinity();
+    const double y1 = test[1] ? box[4] : std::numeric_limits<double>::infinity();
+    if (!world->gather(box[0], y0, box[2], box[3], y1, box[5])) {
         world->gather_all();
     }
     return world->answer(filter, out, cap, [&](const ce_body& b) {
-        float p[3] = {b.x, b.y, b.z};
+        double p[3] = {b.x, b.y, b.z};
         for (int axis = 0; axis < 3; ++axis) {
             if (test[axis] && !(p[axis] >= box[axis] && p[axis] < box[axis + 3])) {
                 return false;
@@ -667,7 +750,7 @@ int32_t ce_query_box(const ce_world* world, const float box[6], const ce_filter*
     });
 }
 
-int32_t ce_query_aabb(const ce_world* world, const float box[6], const ce_filter* filter,
+int32_t ce_query_aabb(const ce_world* world, const double box[6], const ce_filter* filter,
                       ce_handle* out, int32_t cap) {
     if (world == nullptr || box == nullptr || cap < 0) {
         return 0;
@@ -675,19 +758,19 @@ int32_t ce_query_aabb(const ce_world* world, const float box[6], const ce_filter
     if (world->index_dirty) {
         world->rebuild_index();
     }
-    double pad = static_cast<double>(world->max_half_xz);
-    if (!world->gather(static_cast<double>(box[0]) - pad, static_cast<double>(box[2]) - pad,
-                       static_cast<double>(box[3]) + pad, static_cast<double>(box[5]) + pad)) {
+    const double pad = static_cast<double>(world->max_half_xz);
+    const double pad_y = static_cast<double>(world->max_reach_y);
+    if (!world->gather(box[0] - pad, box[1] - pad_y, box[2] - pad, box[3] + pad, box[4] + pad_y, box[5] + pad)) {
         world->gather_all();
     }
     return world->answer(filter, out, cap, [&](const ce_body& b) {
-        // Same expressions as the Java BoundingBox (half sizes as w / 2.0f).
-        float min_x = b.x - b.width / 2.0f;
-        float max_x = b.x + b.width / 2.0f;
-        float min_y = b.y - b.leg_height;
-        float max_y = b.y + b.height;
-        float min_z = b.z - b.length / 2.0f;
-        float max_z = b.z + b.length / 2.0f;
+        // As the Java BoundingBox (half sizes as w / 2), in double since ABI 2.
+        double min_x = b.x - static_cast<double>(b.width) / 2.0;
+        double max_x = b.x + static_cast<double>(b.width) / 2.0;
+        double min_y = b.y - static_cast<double>(b.leg_height);
+        double max_y = b.y + static_cast<double>(b.height);
+        double min_z = b.z - static_cast<double>(b.length) / 2.0;
+        double max_z = b.z + static_cast<double>(b.length) / 2.0;
         return min_x < box[3] && max_x > box[0] && min_y < box[4] && max_y > box[1]
                && min_z < box[5] && max_z > box[2];
     });

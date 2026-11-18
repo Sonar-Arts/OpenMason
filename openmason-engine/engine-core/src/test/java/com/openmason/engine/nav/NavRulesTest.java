@@ -84,7 +84,11 @@ class NavRulesTest {
         }
     }
 
-    private boolean fill(int x0, int y0, int z0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
+    private boolean fill(long ax0, long ay0, long az0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
+        if (ax0 < UNLOADED_BELOW_X) {
+            return false;
+        }
+        int x0 = Math.toIntExact(ax0), y0 = Math.toIntExact(ay0), z0 = Math.toIntExact(az0);
         if (x0 < UNLOADED_BELOW_X) {
             return false;
         }
@@ -484,9 +488,9 @@ class NavRulesTest {
     private static float[] points(NavPath p) {
         float[] out = new float[p.size() * 3];
         for (int i = 0; i < p.size(); i++) {
-            out[i * 3] = p.x(i);
-            out[i * 3 + 1] = p.y(i);
-            out[i * 3 + 2] = p.z(i);
+            out[i * 3] = (float) p.x(i);
+            out[i * 3 + 1] = (float) p.y(i);
+            out[i * 3 + 2] = (float) p.z(i);
         }
         return out;
     }
@@ -576,7 +580,7 @@ class NavRulesTest {
         }
         NavWorld.Outcome o = fly(flyer(32, false), 8, 32, 8, 56, 32, 8, 0);
         assertTrue(o.reachedGoal());
-        float highest = 0;
+        double highest = 0;
         for (int i = 0; i < o.path().size(); i++) {
             highest = Math.max(highest, o.path().y(i));
         }

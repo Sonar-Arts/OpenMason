@@ -31,6 +31,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * 1/1024 quantisation), water at two surface heights, hazards, overhangs and an unloaded region. The
  * ground queries are what a game's path service asks (feet/goal snapped onto standable cells 4 down
  * and 2 up); the air ones nudge the goal onto flyable air within 2 cells.
+ *
+ * <p>CN ABI 3 (OpenMason #142): every query also runs in the same worlds shifted to +-2^40 (Y negative),
+ * with the physics and nav frame origins moved there — local positions are identical, the searches'
+ * float math runs relative to an anchor near the frame, so the routes must match the goldens bit for
+ * bit there too. Waypoints come back as doubles; their float casts are the golden bits.
  */
 class NavGoldenRoutesTest {
 
@@ -47,9 +52,12 @@ class NavGoldenRoutesTest {
     private static final boolean[] SHAPE_HAZARD = {false, false, false, false, false, false, true};
     private static final float[] FLUID_SURFACE = {0f, 0.875f, 0.5f};
 
-    /** A sparse world: (shape, fluid) per cell, filled into physics like a game would. */
+    private static final long FAR = 1L << 40;
+
+    /** A sparse world: (shape, fluid) per cell, filled into physics like a game would, at an offset. */
     private static final class World {
         final Map<Long, int[]> cells = new HashMap<>();
+        long ox, oy, oz; // where the scene's (0, 0, 0) lies in absolute cells
 
         static long key(int x, int y, int z) {
             return ((long) (x & 0x1FFFFF) << 42) | ((long) (y & 0x1FFFFF) << 21) | (z & 0x1FFFFF);
@@ -63,7 +71,8 @@ class NavGoldenRoutesTest {
             return cells.get(key(x, y, z));
         }
 
-        boolean fill(int x0, int y0, int z0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
+        boolean fill(long ax0, long ay0, long az0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
+            int x0 = Math.toIntExact(ax0 - ox), y0 = Math.toIntExact(ay0 - oy), z0 = Math.toIntExact(az0 - oz);
             if (x0 < UNLOADED_BELOW_X) {
                 return false;
             }
@@ -142,6 +151,7 @@ class NavGoldenRoutesTest {
 
     private static PhysicsWorld physicsOf(World w) {
         PhysicsWorld physics = PhysicsWorld.create(w::fill, 4, 0, 0);
+        physics.setOrigin(w.ox, w.oy, w.oz);
         for (int id = 1; id < SHAPE_TOP.length; id++) {
             physics.defineShape(id, new float[] {0, 0, 0, 1, SHAPE_TOP[id], 1}, SHAPE_HAZARD[id] ? LAVA : SOLID, 0);
         }
@@ -177,9 +187,12 @@ class NavGoldenRoutesTest {
             .append(' ').append(o.path().size());
         NavPath p = o.path();
         for (int i = 0; i < p.size(); i++) {
-            b.append(' ').append(Integer.toHexString(Float.floatToRawIntBits(p.x(i))))
-                .append(' ').append(Integer.toHexString(Float.floatToRawIntBits(p.y(i))))
-                .append(' ').append(Integer.toHexString(Float.floatToRawIntBits(p.z(i))));
+            b.append(' ').append(Integer.toHexString(Float.floatToRawIntBits((float) p.x(i))))
+                .append(' ').append(Integer.toHexString(Float.floatToRawIntBits((float) p.y(i))))
+                .append(' ').append(Integer.toHexString(Float.floatToRawIntBits((float) p.z(i))));
+            // The double is exactly that float (waypoints are cell centres and quantised surfaces).
+            assertEquals((double) (float) p.x(i), p.x(i));
+            assertEquals((double) (float) p.y(i), p.y(i));
         }
         return b.toString();
     }
@@ -194,14 +207,46 @@ class NavGoldenRoutesTest {
 
     @Test
     void groundRoutesMatchTheRetiredJavaCore() {
+        groundRoutes(0, 0, 0);
+    }
+
+    @Test
+    void groundRoutesMatchFarFromTheOrigin() {
+        groundRoutes(FAR, -FAR - 4096 * 3, -FAR + 4096 * 7);
+    }
+
+    @Test
+    void airRoutesMatchTheRetiredJavaCore() {
+        airRoutes(0, 0, 0);
+    }
+
+    @Test
+    void airRoutesMatchFarFromTheOrigin() {
+        airRoutes(-FAR * 3, FAR, FAR * 5);
+    }
+
+    private static NavWorld navOf(PhysicsWorld physics, World w) {
+        NavWorld nav = NavWorld.create(physics, SOLID, LAVA, WATER, w.oy + MIN_Y, w.oy + MAX_Y, 1024);
+        nav.setOrigin(w.ox, w.oy, w.oz);
+        return nav;
+    }
+
+    private static World shifted(World w, long ox, long oy, long oz) {
+        w.ox = ox;
+        w.oy = oy;
+        w.oz = oz;
+        return w;
+    }
+
+    private void groundRoutes(long ox, long oy, long oz) {
         assumeTrue(CendaPhysics.isAvailable() && CendaNav.isAvailable(), "Cenda physics/navigation unavailable");
         GroundProfile[] profiles = {walker(1.0f, 0), swimmer(0.8f, 0), walker(1.9f, 1),
             new GroundProfile(1.4f, 0, 0.5f, 1.2f, 1.6f, 3.0f, true, 3.0f, 8.0f, 0.5f, 2.0f, 0.5f)};
         int checked = 0;
         for (long seed = 1; seed <= 6; seed++) {
-            World w = terrain(seed);
+            World w = shifted(terrain(seed), ox, oy, oz);
             try (PhysicsWorld physics = physicsOf(w);
-                 NavWorld nav = NavWorld.create(physics, SOLID, LAVA, WATER, MIN_Y, MAX_Y, 1024)) {
+                 NavWorld nav = navOf(physics, w)) {
                 Random r = new Random(seed * 977);
                 for (int q = 0; q < 60; q++) {
                     float[] feet = {r.nextInt(48) - 20 + r.nextFloat(), 60 + r.nextInt(12) + r.nextFloat(),
@@ -222,8 +267,7 @@ class NavGoldenRoutesTest {
         assertEquals(360, checked);
     }
 
-    @Test
-    void airRoutesMatchTheRetiredJavaCore() {
+    private void airRoutes(long ox, long oy, long oz) {
         assumeTrue(CendaPhysics.isAvailable() && CendaNav.isAvailable(), "Cenda physics/navigation unavailable");
         int checked = 0;
         for (long seed = 11; seed <= 14; seed++) {
@@ -238,13 +282,15 @@ class NavGoldenRoutesTest {
                 w.set(-10, y, -10, 1, 0);
                 w.set(16, y, 6, 1, 0);
             }
+            shifted(w, ox, oy, oz);
             try (PhysicsWorld physics = physicsOf(w);
-                 NavWorld nav = NavWorld.create(physics, SOLID, LAVA, WATER, MIN_Y, MAX_Y, 1024)) {
+                 NavWorld nav = navOf(physics, w)) {
                 Random r = new Random(seed * 131);
                 for (int q = 0; q < 30; q++) {
                     int cell = r.nextBoolean() ? 4 : 2;
                     float cruise = 70 + r.nextInt(20);
-                    AirProfile profile = new AirProfile(cell, cruise, 0.35f, 0.5f, 0.15f, r.nextBoolean(), 0.75f, 1, 254);
+                    AirProfile profile = new AirProfile(cell, cruise, 0.35f, 0.5f, 0.15f, r.nextBoolean(), 0.75f,
+                        oy + 1, oy + 254);
                     float[] from = {r.nextInt(40) - 30 + r.nextFloat(), 68 + r.nextInt(20) + r.nextFloat(),
                         r.nextInt(40) - 20 + r.nextFloat()};
                     float[] goal = {r.nextInt(40) - 2 + r.nextFloat(), 64 + r.nextInt(28) + r.nextFloat(),

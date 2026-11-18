@@ -469,6 +469,16 @@ public enum MmsVertexFormat {
      */
     public int createOriginBuffer(float originX, float originY, float originZ) {
         return RenderOrigin.createOriginBuffer(
-            originX, originY + originYShift(), originZ, positionScale);
+            (double) originX, (double) originY + originYShift(), (double) originZ, positionScale);
+    }
+
+    /**
+     * {@link #createOriginBuffer(float, float, float)} for an exact int64 block
+     * origin — a cubic region's corner. The {@link #COMPACT_Y_SHIFT} is integral,
+     * so the whole origin stays exact for any int64 input.
+     */
+    public int createOriginBuffer(long originX, long originY, long originZ) {
+        return RenderOrigin.createOriginBuffer(
+            originX, originY + (long) originYShift(), originZ, positionScale);
     }
 }

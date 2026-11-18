@@ -48,6 +48,29 @@ float pointShadowTap(vec3 d, vec3 normal, float planeDistance, float radius, int
     return texture(u_pointShadowMap, vec4(uv, float(slot * 6 + face), depth));
 }
 
+// The light-space direction of one filter tap, d + offset, with its along-plane slide bounded. A tap's
+// depth reference is where its ray meets the receiver plane; at grazing incidence a small angular offset
+// slides that point far along the plane (about |offset| / cos(incidence), unbounded as the ray turns
+// parallel to the plane), past concave corners into the neighbouring floor or wall, which then shadows the
+// tap. Taps sliding at most maxSlide are returned unchanged (bit-identical to the plain d + offset);
+// farther ones (or rays that never meet the plane in front of the light) are pulled back along the
+// plane to maxSlide from the receiver point, which keeps the reference on the receiver plane.
+vec3 pointShadowTapDirection(vec3 d, vec3 offset, vec3 normal, float planeDistance, float maxSlide) {
+    vec3 tap = d + offset;
+    float tapPlane = dot(normal, tap);
+    vec3 slide;
+    if (tapPlane * planeDistance > 1.0e-4 * planeDistance * planeDistance) {
+        slide = tap * (planeDistance / tapPlane) - d; // in the plane: dot(normal, slide) == 0
+    } else {
+        // Parallel to or turned away from the plane: it slides "to infinity" along the offset's
+        // in-plane direction.
+        slide = (offset - normal * dot(normal, offset)) * 1.0e4;
+    }
+    float slideLength = length(slide);
+    if (slideLength <= maxSlide) return tap;
+    return d + slide * (maxSlide / slideLength);
+}
+
 float pointShadowVisibility(vec3 worldPos, vec3 normal, vec3 lightPos, float radius, int slot) {
     if (u_pointShadowsEnabled == 0) return 1.0;
     vec3 d = worldPos + normal * 0.015 - lightPos;
@@ -63,9 +86,13 @@ float pointShadowVisibility(vec3 worldPos, vec3 normal, vec3 lightPos, float rad
     // Each tap resolves its own cube face so filtering crosses face seams correctly.
     // This is filtered point lighting, not a full area-light/PCSS simulation.
     float spread = min(0.14, 0.025 + distance * 0.012);
+    // Along-plane slide bound of the outer taps: a tap slides about spread / cos(incidence), so taps up to
+    // ~70 degrees of incidence keep their full offset and only grazing ones are pulled in.
+    float maxSlide = 3.0 * spread;
+    vec3 t = tangent * spread, b = bitangent * spread;
     return 0.4 * pointShadowTap(d, normal, planeDistance, radius, slot)
-         + 0.15 * (pointShadowTap(d + tangent * spread, normal, planeDistance, radius, slot)
-                 + pointShadowTap(d - tangent * spread, normal, planeDistance, radius, slot)
-                 + pointShadowTap(d + bitangent * spread, normal, planeDistance, radius, slot)
-                 + pointShadowTap(d - bitangent * spread, normal, planeDistance, radius, slot));
+         + 0.15 * (pointShadowTap(pointShadowTapDirection(d, t, normal, planeDistance, maxSlide), normal, planeDistance, radius, slot)
+                 + pointShadowTap(pointShadowTapDirection(d, -t, normal, planeDistance, maxSlide), normal, planeDistance, radius, slot)
+                 + pointShadowTap(pointShadowTapDirection(d, b, normal, planeDistance, maxSlide), normal, planeDistance, radius, slot)
+                 + pointShadowTap(pointShadowTapDirection(d, -b, normal, planeDistance, maxSlide), normal, planeDistance, radius, slot));
 }

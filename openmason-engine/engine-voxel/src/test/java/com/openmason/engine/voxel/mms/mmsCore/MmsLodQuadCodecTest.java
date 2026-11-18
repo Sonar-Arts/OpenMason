@@ -70,4 +70,51 @@ class MmsLodQuadCodecTest {
         }
         assertEquals(100f, dy, 1e-6f);
     }
+
+    /**
+     * Node mode (octree LOD, cv_lod): node-local cells with a biased Y; exact layout of the native packer
+     * (lod_internal.hpp node_word0/1) and block positions = origin + cells * cellSize for any int64 origin.
+     */
+    @Test
+    void nodeModeLayoutAndPositions() {
+        int w0 = MmsLodQuadCodec.nodeWord0(3, -40, 31, 4);
+        assertEquals((3 + 8) | ((31 + 8) << 9) | ((-40 + 1024) << 18) | (4 << 29), w0);
+        assertEquals(3, MmsLodQuadCodec.nodeX(w0));
+        assertEquals(-40, MmsLodQuadCodec.nodeY(w0));
+        assertEquals(31, MmsLodQuadCodec.nodeZ(w0));
+        assertEquals(4, MmsLodQuadCodec.face(w0));
+        int w1 = MmsLodQuadCodec.nodeWord1(32, 17, 4095, true, true);
+        assertEquals(32 | (17 << 6) | (4095 << 17) | (1 << 29) | (1 << 31), w1);
+        assertEquals(32, MmsLodQuadCodec.nodeWidth(w1));
+        assertEquals(17, MmsLodQuadCodec.nodeHeight(w1));
+        assertEquals(4095, MmsLodQuadCodec.layer(w1));
+        assertEquals(false, MmsLodQuadCodec.smooth(w1));
+        assertEquals(true, MmsLodQuadCodec.lit(w1));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+            () -> MmsLodQuadCodec.nodeWord1(64, 1, 0, false, true));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+            () -> MmsLodQuadCodec.nodeWord0(0, 1024, 0, 0));
+
+        // A top face of 32 x 32 cells at cell y 12 of a level-3 node (8 blocks per cell) deep below zero.
+        ByteBuffer b = ByteBuffer.allocate(MmsLodQuadCodec.QUAD_BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        b.putInt(0, MmsLodQuadCodec.nodeWord0(0, 12, 0, 0));
+        b.putInt(4, MmsLodQuadCodec.nodeWord1(32, 32, 9, false, true));
+        long ox = -(1L << 40), oy = -768, oz = 1L << 41;
+        java.util.Set<String> corners = new java.util.HashSet<>();
+        for (int corner = 0; corner < 4; corner++) {
+            long x = MmsLodQuadCodec.nodeBlockPosition(b, 0, corner, 0, ox, 8);
+            long y = MmsLodQuadCodec.nodeBlockPosition(b, 0, corner, 1, oy, 8);
+            long z = MmsLodQuadCodec.nodeBlockPosition(b, 0, corner, 2, oz, 8);
+            assertEquals(oy + 96, y);
+            corners.add((x - ox) + "," + (z - oz));
+        }
+        assertEquals(java.util.Set.of("0,0", "256,0", "0,256", "256,256"), corners);
+        // UVs tile once per BLOCK: a 32-cell face of 8-block cells spans 256 repetitions.
+        float du = 0f;
+        for (int corner = 1; corner < 4; corner++) {
+            du = Math.max(du, Math.abs(MmsLodQuadCodec.nodeTexCoord(b, 0, corner, 0, 8)
+                - MmsLodQuadCodec.nodeTexCoord(b, 0, 0, 0, 8)));
+        }
+        assertEquals(256f, du, 1e-6f);
+    }
 }

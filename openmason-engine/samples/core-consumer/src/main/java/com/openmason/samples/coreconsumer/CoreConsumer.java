@@ -56,7 +56,7 @@ public final class CoreConsumer {
                 // The wall at x = 4 is open only at z = 7, so a route that got past it reached that row
                 // (straight runs are collapsed, so the gap itself need not be a waypoint).
                 boolean throughGap = route.reachedGoal();
-                float farthestZ = 0f;
+                double farthestZ = 0.0;
                 for (int i = 0; i < route.path().size(); i++) {
                     farthestZ = Math.max(farthestZ, route.path().z(i));
                 }
@@ -106,14 +106,14 @@ public final class CoreConsumer {
         static final int SOLID = 1;
         static final short BLOCK = 1;
 
-        private static boolean solid(int x, int y, int z) {
+        private static boolean solid(long x, long y, long z) {
             if (x < 0 || z < 0 || x >= SIZE || z >= SIZE) {
                 return false;
             }
             return y == 0 || (x == 4 && z != SIZE - 1 && (y == 1 || y == 2));
         }
 
-        static boolean fill(int x0, int y0, int z0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
+        static boolean fill(long x0, long y0, long z0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
             for (int y = 0; y < sy; y++) {
                 for (int z = 0; z < sz; z++) {
                     for (int x = 0; x < sx; x++) {

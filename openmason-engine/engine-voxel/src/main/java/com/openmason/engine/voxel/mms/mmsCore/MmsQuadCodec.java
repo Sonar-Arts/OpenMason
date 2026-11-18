@@ -15,7 +15,10 @@ import java.nio.ByteBuffer;
  * word0: x:8 | y:10 | z:8 | face:3 | spare:3      positions relative to the mesh origin, whole blocks
  *        (the mesh origin's Y is 0, so y is absolute world Y: 10 bits covers
  *        WORLD_HEIGHT 1024)
- * word1: (h-1):4 | orient:3 | alpha:1 | translucent:1 | layer:16 | (w-1):4 | spare:3
+ * word1: (h-1)&15:4 | orient:3 | alpha:1 | translucent:1 | layer:16 | (w-1):5 | (h-1)>>4:1 | spare:1
+ *        (w/h widened to 5 bits on 2026-11-17 so a 32-wide cube face fits one record: w took the
+ *        spare bit above its nibble, h's fifth bit sits at bit 30. For w, h &lt;= 16 the word is
+ *        bit-identical to the old 4-bit layout.)
  * word2: light0:8 | light1:8 | light2:8 | light3:8 per-corner light (0..1 → 0..255)
  * word3: topLower:4 | sideHeight:4 | spare   partial-height cubes (snow layers):
  *        the top face sits topLower/8 below the cell top; side faces span
@@ -40,8 +43,8 @@ public final class MmsQuadCodec {
     public static final int MAX_LOCAL_XZ = 255;
     /** Largest y of a record (absolute world Y, the mesh origin's Y is 0): 10 bits. */
     public static final int MAX_Y = 1023;
-    /** Largest in-plane extent ({@code w}, {@code h}) of one record, blocks: 4 bits each. */
-    public static final int MAX_EXTENT = 16;
+    /** Largest in-plane extent ({@code w}, {@code h}) of one record, blocks: 5 bits each (a whole cube face). */
+    public static final int MAX_EXTENT = 32;
 
     /** Most quads one shared-EBO draw can address with u16 indices. */
     public static final int MAX_QUADS_PER_DRAW = 65536 / 4;
@@ -66,8 +69,8 @@ public final class MmsQuadCodec {
         check(h, 1, MAX_EXTENT, "h");
         check(orientation, 0, 7, "orientation");
         check(layer, 0, 65535, "layer");
-        return (h - 1) | (orientation << 4) | ((alpha ? 1 : 0) << 7) | ((translucent ? 1 : 0) << 8)
-            | (layer << 9) | ((w - 1) << 25);
+        return ((h - 1) & 0xF) | (orientation << 4) | ((alpha ? 1 : 0) << 7) | ((translucent ? 1 : 0) << 8)
+            | (layer << 9) | ((w - 1) << 25) | (((h - 1) >>> 4) << 30);
     }
 
     public static int word2(float l0, float l1, float l2, float l3) {
@@ -186,13 +189,14 @@ public final class MmsQuadCodec {
         return (w0 >>> 26) & 7;
     }
 
-    /** Width — lives in word1 (word0's top nibble went to the wider y field). */
+    /** Width — lives in word1 (word0's top nibble went to the wider y field): bits 25..29. */
     public static int width(int w1) {
-        return ((w1 >>> 25) & 0xF) + 1;
+        return ((w1 >>> 25) & 0x1F) + 1;
     }
 
+    /** Height: low nibble in bits 0..3, fifth bit at bit 30. */
     public static int height(int w1) {
-        return (w1 & 0xF) + 1;
+        return ((w1 & 0xF) | ((w1 >>> 26) & 0x10)) + 1;
     }
 
     public static int orientation(int w1) {

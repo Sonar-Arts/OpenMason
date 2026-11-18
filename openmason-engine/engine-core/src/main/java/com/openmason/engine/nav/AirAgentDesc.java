@@ -26,15 +26,16 @@ public record AirAgentDesc(
         float goalRadius,
         int goalSnapCells) {
 
+    // cn_air_agent_desc (104 bytes): profile (48), limits (16), 7 floats, goal_snap_cells, reserved[2].
     void write(java.lang.foreign.MemorySegment s) {
         CendaNav.writeAirProfile(s, 0, profile);
-        CendaNav.writeLimits(s, 40, limits);
+        CendaNav.writeLimits(s, 48, limits);
         float[] f = {planRange, replanTravel, replanInterval, noPathRetry, saturatedRetry, waypointRadius, goalRadius};
         for (int i = 0; i < f.length; i++) {
-            s.set(CendaNav.F32, 56 + 4L * i, f[i]);
+            s.set(CendaNav.F32, 64 + 4L * i, f[i]);
         }
-        s.set(CendaNav.I32, 84, goalSnapCells);
-        s.set(CendaNav.I32, 88, 0);
-        s.set(CendaNav.I32, 92, 0);
+        s.set(CendaNav.I32, 92, goalSnapCells);
+        s.set(CendaNav.I32, 96, 0);
+        s.set(CendaNav.I32, 100, 0);
     }
 }

@@ -78,6 +78,40 @@ public final class MmsMultiDrawBatch implements AutoCloseable {
         baseVertices.clear();
     }
 
+    /**
+     * Appends every draw command of a region mesh, honouring its enable bit
+     * (a disabled mesh adds nothing). Draw with {@code draw(region.indexType())}.
+     *
+     * @return commands appended (0 when disabled or closed)
+     */
+    public int add(MmsRegionMeshHandle handle) {
+        if (!handle.isEnabled() || handle.isClosed()) {
+            return 0;
+        }
+        long indexBytes = handle.indexBytes();
+        int n = handle.commandCount();
+        for (int k = 0; k < n; k++) {
+            add(handle.commandIndexCount(k), handle.commandFirstIndex(k) * indexBytes,
+                handle.commandBaseVertex(k));
+        }
+        return n;
+    }
+
+    /** Element count of command {@code i} (tests / diagnostics). */
+    public int countAt(int i) {
+        return counts.get(i);
+    }
+
+    /** Index-buffer byte offset of command {@code i} (tests / diagnostics). */
+    public long offsetAt(int i) {
+        return offsets.get(i);
+    }
+
+    /** Base vertex of command {@code i} (tests / diagnostics). */
+    public int baseVertexAt(int i) {
+        return baseVertices.get(i);
+    }
+
     private void grow() {
         int newCap = counts.capacity() * 2;
         counts = MemoryUtil.memRealloc(counts, newCap);

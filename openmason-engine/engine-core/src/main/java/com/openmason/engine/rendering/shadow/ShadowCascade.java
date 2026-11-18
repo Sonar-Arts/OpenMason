@@ -2,6 +2,7 @@ package com.openmason.engine.rendering.shadow;
 
 import com.openmason.engine.rendering.RenderOrigin;
 import org.joml.Matrix4f;
+import org.joml.Vector3d;
 import org.joml.Vector3f;
 
 /**
@@ -20,7 +21,12 @@ public final class ShadowCascade {
     /** Orthographic projection fitted (and texel-snapped) around the frustum slice. */
     public final Matrix4f lightProj = new Matrix4f();
 
-    /** {@code lightProj * lightView} — transform from world space to light clip space. */
+    /**
+     * {@code lightProj * lightView} as a transform from WORLD space to light clip space. After
+     * {@link CascadeCalculator#updateRelative} the fit lives in render space and this world form is only
+     * as precise as float world coordinates (fine near world zero); draw and sample with
+     * {@link #lightViewProjRender}.
+     */
     public final Matrix4f lightViewProj = new Matrix4f();
 
     /**
@@ -38,8 +44,27 @@ public final class ShadowCascade {
     /** View-space distance where this cascade ends (used for cascade selection). */
     public float splitFar;
 
-    /** World-space center of the cascade's bounding sphere. */
+    /** World-space center of the cascade's bounding sphere (float: imprecise far from world zero). */
     public final Vector3f centerWorld = new Vector3f();
+
+    /** World-space center of the cascade's bounding sphere in double (exact enough at any coordinate). */
+    public final Vector3d centerWorldExact = new Vector3d();
+
+    /**
+     * Render-space center of the cascade's bounding sphere against the origin of the last
+     * {@link #rebaseToRenderSpace} — the cull sphere for render-space casters.
+     */
+    public final Vector3f centerRender = new Vector3f();
+
+    /**
+     * How the matrices were fitted: false = world space ({@link CascadeCalculator#update}, deprecated),
+     * true = render space at {@code fitOrigin*} ({@link CascadeCalculator#updateRelative}): then
+     * {@link #lightView} is the light rotation and {@link #lightProj} the window in that fit's render space.
+     */
+    private boolean renderFitted;
+    private long fitOriginX;
+    private long fitOriginY;
+    private long fitOriginZ;
 
     /** Radius of the cascade's bounding sphere in world units. */
     public float radius;
@@ -55,8 +80,54 @@ public final class ShadowCascade {
      * it would keep drawing against the previous origin.
      */
     public void rebaseToRenderSpace() {
-        RenderOrigin.acceptRenderSpace(lightViewRender.set(lightView));
-        RenderOrigin.acceptRenderSpace(lightViewProjRender.set(lightViewProj));
+        rebaseToRenderSpace(RenderOrigin.blockX(), RenderOrigin.blockY(), RenderOrigin.blockZ());
+    }
+
+    /**
+     * {@link #rebaseToRenderSpace()} against an explicit origin. For a render-space fit the matrices are
+     * re-expressed exactly: {@code M * T(origin - fitOrigin)}, a small whole-block translation.
+     */
+    public void rebaseToRenderSpace(long originX, long originY, long originZ) {
+        if (renderFitted) {
+            lightViewRender.set(lightView).translate((float) (originX - fitOriginX),
+                (float) (originY - fitOriginY), (float) (originZ - fitOriginZ));
+            lightProj.mul(lightViewRender, lightViewProjRender);
+            centerRender.set((float) (centerWorldExact.x - originX), (float) (centerWorldExact.y - originY),
+                (float) (centerWorldExact.z - originZ));
+        } else {
+            lightViewRender.set(lightView).translate((float) originX, (float) originY, (float) originZ);
+            lightViewProjRender.set(lightViewProj).translate((float) originX, (float) originY, (float) originZ);
+            centerRender.set((float) (centerWorld.x - originX), (float) (centerWorld.y - originY),
+                (float) (centerWorld.z - originZ));
+        }
+    }
+
+    /** Whether the last fit was {@link CascadeCalculator#updateRelative} (render space). */
+    public boolean isRenderFitted() {
+        return renderFitted;
+    }
+
+    /** Called by the deprecated world-space fit. */
+    void markWorldFitted() {
+        renderFitted = false;
+        centerWorldExact.set(centerWorld);
+    }
+
+    /**
+     * Called by the render-space fit once {@link #lightView}, {@link #lightProj} and
+     * {@link #centerRender} are set for {@code origin}: derives the world forms and the render matrices.
+     */
+    void markRenderFitted(long originX, long originY, long originZ) {
+        renderFitted = true;
+        fitOriginX = originX;
+        fitOriginY = originY;
+        fitOriginZ = originZ;
+        centerWorldExact.set(centerRender.x + (double) originX, centerRender.y + (double) originY,
+            centerRender.z + (double) originZ);
+        centerWorld.set((float) centerWorldExact.x, (float) centerWorldExact.y, (float) centerWorldExact.z);
+        lightProj.mul(lightView, lightViewProj)
+            .translate((float) -originX, (float) -originY, (float) -originZ);
+        rebaseToRenderSpace(originX, originY, originZ);
     }
 
     /**

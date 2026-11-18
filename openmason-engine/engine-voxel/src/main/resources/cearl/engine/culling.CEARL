@@ -1,15 +1,21 @@
 ~ culling.CEARL — GPU frustum culling into indirect draw commands.
 ~
 ~ Owned by MmsGpuCuller (one responsibility per file: this is device code;
-~ resource policy lives in the game's plan file). One thread per mesh; the
-~ std430 layouts are a hard contract with MmsChunkRegion's GPU buffers:
+~ resource policy lives in the game's plan file). One thread per draw command;
+~ the std430 layouts are a hard contract with MmsChunkRegion's GPU buffers:
 ~ 48-byte MeshMeta records, 20-byte tightly packed DrawElementsIndirectCommand.
-~ Pinned headlessly by MmsGpuCullerKernelTest.
+~ Pinned headlessly by MmsGpuCullerKernelTest; MmsGpuCuller.aabbVisible is the
+~ CPU twin of the plane test (the GL 3.2 / macOS path).
+~
+~ Coordinates: AABBs are REGION-LOCAL (0..256 per axis on the cubic path),
+~ 'origin' is the region's origin relative to the camera's RenderOrigin, and
+~ the planes are render-space - no absolute world float anywhere, so the test
+~ is exact at any int64 world coordinate.
 
 form MeshMeta
-    minb: vec4     ~ xyz = AABB min
-    maxb: vec4     ~ xyz = AABB max
-    draw: uvec4    ~ x = indexCount, y = firstIndex, z = baseVertex
+    minb: vec4     ~ xyz = region-local AABB min
+    maxb: vec4     ~ xyz = region-local AABB max
+    draw: uvec4    ~ x = indexCount, y = firstIndex, z = baseVertex, w = flags (bit 0 = enabled)
 end
 
 form DrawCmd       ~ DrawElementsIndirectCommand: five tightly packed uints
@@ -25,9 +31,8 @@ end
 kernel cull_commands(64)
     take meshes: MeshMeta[] in
     take cmds: DrawCmd[] out
-    ~ planes 0..5: the frustum; 6..9: an optional keep box the pass draws inside
-    ~ (vertical planes; (0,0,0,1) when the pass has none -- always passes).
-    take planes: vec4[10]
+    take planes: vec4[6]       ~ render-space frustum planes, a.x + b.y + c.z + d >= 0 inside
+    take origin: vec4          ~ xyz = region origin - RenderOrigin (render space)
     take mesh_count: u32
 
     fix i = gid.x
@@ -35,20 +40,271 @@ kernel cull_commands(64)
         give
     end
     fix m = meshes[i]
-    flux visible = true
-    for p in 0..10
+    ~ The host's enable bit (far-LOD handover: cubes of columns that aren't
+    ~ READY stay resident but must not z-fight the LOD heightfield).
+    flux visible = bit_and(m.draw.w, 1) != 0
+    for p in 0..6
         fix pl = planes[p]
         ~ Positive vertex: the AABB corner farthest along the plane normal —
         ~ if even it is behind the plane, the whole box is out.
         fix v = vec3(pick(pl.x > 0.0, m.maxb.x, m.minb.x),
                      pick(pl.y > 0.0, m.maxb.y, m.minb.y),
-                     pick(pl.z > 0.0, m.maxb.z, m.minb.z))
+                     pick(pl.z > 0.0, m.maxb.z, m.minb.z)) + origin.xyz
         if dot(pl.xyz, v) + pl.w < 0.0
             visible = false
         end
     end
     cmds[i].index_count = m.draw.x
     cmds[i].instance_count = u32(visible)
+    cmds[i].first_index = m.draw.y
+    cmds[i].base_vertex = m.draw.z
+    cmds[i].base_instance = 0
+end
+
+~ ─── Hi-Z occlusion (GL 4.3 two-phase scheme, MmsGpuCuller.beginEarlyPass/beginLatePass) ───
+~
+~ Phase 1 (cull_early) draws, of every enabled in-frustum mesh, the ones the
+~ previous camera pass found visible (vis[i] != 0); a region without a valid
+~ history draws everything in the frustum. The host then reduces the depth that
+~ phase 1 produced into 'pyramid' (MmsHiZPyramid: level 0 by its seed pass, then
+~ the max-depth mip chain built by hiz_reduce) and phase 2 (cull_late) tests every enabled
+~ in-frustum mesh against it with the SAME frame's view-projection, records
+~ the verdict in vis[] for the next frame and draws the visible ones phase 1
+~ did not draw. The previous frame only ever decides what is drawn EARLY - it
+~ never culls anything - so camera movement cannot open holes: a mesh hidden
+~ last frame that is visible now is drawn by phase 2 in the same frame.
+~
+~ Pyramid layout (f32 elements, window space, row 0 = bottom like glReadPixels):
+~ level 0 at offset 0, half resolution ((W+1)/2 x (H+1)/2) - written straight
+~ from the depth texture by MmsHiZPyramid's seed pass (texelFetch, no pixel
+~ transfer) - then each next level halving again (ceil) down to 1 x 1.
+~ Texel x of level k covers pixels [x * 2^(k+1), (x+1) * 2^(k+1)), so a pixel
+~ maps to a level texel by a shift. Each texel holds the FARTHEST depth of the
+~ pixels it covers (GL default depth: [0,1], LESS, 1 = far / cleared).
+~ MmsHiZPyramid mirrors this math on the CPU (levelOffset/occluded).
+
+~ Element offset of pyramid level k for a W x H viewport.
+craft hiz_level_offset(w: u32, h: u32, k: u32) -> u32
+    flux off: u32 = 0
+    flux lw = w
+    flux lh = h
+    flux j: u32 = 0
+    while j < k
+        lw = (lw + 1) / 2
+        lh = (lh + 1) / 2
+        off = off + lw * lh
+        j = j + 1
+    end
+    give off
+end
+
+~ Width (or height) of pyramid level k for a viewport edge of n pixels.
+craft hiz_level_edge(n: u32, k: u32) -> u32
+    flux e = (n + 1) / 2
+    flux j: u32 = 0
+    while j < k
+        e = (e + 1) / 2
+        j = j + 1
+    end
+    give e
+end
+
+~ One pyramid level from the one below it (levels 1+; level 0 comes from the
+~ seed pass with the same rule): each texel takes the farthest of its 2x2
+~ sources, clamped at odd edges.
+kernel hiz_reduce(64)
+    take pyramid: f32[] inout
+    take src_offset: u32
+    take src_w: u32
+    take src_h: u32
+    take dst_offset: u32
+    take dst_w: u32
+    take dst_h: u32
+
+    fix i = gid.x
+    if i >= dst_w * dst_h
+        give
+    end
+    fix y = i / dst_w
+    fix x = i - y * dst_w
+    fix x0 = min(x * 2, src_w - 1)
+    fix x1 = min(x * 2 + 1, src_w - 1)
+    fix y0 = min(y * 2, src_h - 1)
+    fix y1 = min(y * 2 + 1, src_h - 1)
+    fix a = pyramid[src_offset + y0 * src_w + x0]
+    fix b = pyramid[src_offset + y0 * src_w + x1]
+    fix c = pyramid[src_offset + y1 * src_w + x0]
+    fix d = pyramid[src_offset + y1 * src_w + x1]
+    pyramid[dst_offset + i] = max(max(a, b), max(c, d))
+end
+
+~ Phase 1: frustum + enable bit + "visible in the previous camera pass".
+~ history = 0: the region has no usable history - draw everything in the frustum.
+~ stats[stats_base + 0] counts the commands drawn here.
+kernel cull_early(64)
+    take meshes: MeshMeta[] in
+    take cmds: DrawCmd[] out
+    take vis: u32[] in
+    take stats: u32[] inout
+    take planes: vec4[6]
+    take origin: vec4
+    take mesh_count: u32
+    take history: u32
+    take stats_base: u32
+
+    fix i = gid.x
+    if i >= mesh_count
+        give
+    end
+    fix m = meshes[i]
+    flux visible = bit_and(m.draw.w, 1) != 0
+    for p in 0..6
+        fix pl = planes[p]
+        fix v = vec3(pick(pl.x > 0.0, m.maxb.x, m.minb.x),
+                     pick(pl.y > 0.0, m.maxb.y, m.minb.y),
+                     pick(pl.z > 0.0, m.maxb.z, m.minb.z)) + origin.xyz
+        if dot(pl.xyz, v) + pl.w < 0.0
+            visible = false
+        end
+    end
+    if visible and history != 0
+        visible = vis[i] != 0
+    end
+    if visible
+        atomic_add(stats[stats_base], 1)
+    end
+    cmds[i].index_count = m.draw.x
+    cmds[i].instance_count = u32(visible)
+    cmds[i].first_index = m.draw.y
+    cmds[i].base_vertex = m.draw.z
+    cmds[i].base_instance = 0
+end
+
+~ Phase 2: occlusion test of every enabled in-frustum mesh against the pyramid
+~ built from phase 1's depth, with that same frame's render-space
+~ view-projection (columns in view_proj). Writes vis[i] for the next frame and
+~ draws what is visible and was NOT drawn by phase 1:
+~   early_rule 0 = phase 1 drew nothing of this region (or its list changed since)
+~   early_rule 1 = phase 1 drew every enabled in-frustum mesh (no history)
+~   early_rule 2 = phase 1 drew the enabled in-frustum meshes with vis[i] != 0
+~ use_pyramid = 0 (no depth this frame): nothing counts as occluded.
+~ Conservative: a box with a corner on or behind the camera plane is visible;
+~ the screen rect is widened to whole pixels; the level is chosen so the rect
+~ spans at most 2 x 2 texels; occluded only when the box's NEAREST depth is
+~ farther than the farthest depth under the whole rect.
+~ stats: [base + 1] tested, [base + 2] occluded, [base + 3] drawn here.
+kernel cull_late(64)
+    take meshes: MeshMeta[] in
+    take cmds: DrawCmd[] out
+    take vis: u32[] inout
+    take pyramid: f32[] in
+    take stats: u32[] inout
+    take planes: vec4[6]
+    take view_proj: vec4[4]
+    take origin: vec4
+    take mesh_count: u32
+    take early_rule: u32
+    take use_pyramid: u32
+    take screen_w: u32
+    take screen_h: u32
+    take levels: u32
+    take stats_base: u32
+
+    fix i = gid.x
+    if i >= mesh_count
+        give
+    end
+    fix m = meshes[i]
+    flux inside = bit_and(m.draw.w, 1) != 0
+    for p in 0..6
+        fix pl = planes[p]
+        fix v = vec3(pick(pl.x > 0.0, m.maxb.x, m.minb.x),
+                     pick(pl.y > 0.0, m.maxb.y, m.minb.y),
+                     pick(pl.z > 0.0, m.maxb.z, m.minb.z)) + origin.xyz
+        if dot(pl.xyz, v) + pl.w < 0.0
+            inside = false
+        end
+    end
+
+    flux early = false
+    if inside
+        early = early_rule == 1 or (early_rule == 2 and vis[i] != 0)
+    end
+
+    flux visible = inside
+    if inside and use_pyramid != 0
+        atomic_add(stats[stats_base + 1], 1)
+        ~ Screen rect + nearest depth of the box's eight corners.
+        flux behind = false
+        flux nx0 = 1000000000000000000000000000000.0
+        flux ny0 = 1000000000000000000000000000000.0
+        flux nx1 = -1000000000000000000000000000000.0
+        flux ny1 = -1000000000000000000000000000000.0
+        flux nz0 = 1000000000000000000000000000000.0
+        for c in 0..8
+            fix cu = u32(c)
+            fix px = pick(bit_and(cu, 1) != 0, m.maxb.x, m.minb.x) + origin.x
+            fix py = pick(bit_and(cu, 2) != 0, m.maxb.y, m.minb.y) + origin.y
+            fix pz = pick(bit_and(cu, 4) != 0, m.maxb.z, m.minb.z) + origin.z
+            fix clip = view_proj[0] * px + view_proj[1] * py + view_proj[2] * pz + view_proj[3]
+            if clip.w <= 0.00001
+                behind = true
+            else
+                fix inv = 1.0 / clip.w
+                nx0 = min(nx0, clip.x * inv)
+                ny0 = min(ny0, clip.y * inv)
+                nx1 = max(nx1, clip.x * inv)
+                ny1 = max(ny1, clip.y * inv)
+                nz0 = min(nz0, clip.z * inv)
+            end
+        end
+        if not behind
+            fix fw = f32(screen_w)
+            fix fh = f32(screen_h)
+            fix sx0 = clamp((nx0 * 0.5 + 0.5) * fw, 0.0, fw - 1.0)
+            fix sy0 = clamp((ny0 * 0.5 + 0.5) * fh, 0.0, fh - 1.0)
+            fix sx1 = clamp((nx1 * 0.5 + 0.5) * fw, 0.0, fw - 1.0)
+            fix sy1 = clamp((ny1 * 0.5 + 0.5) * fh, 0.0, fh - 1.0)
+            fix near_depth = nz0 * 0.5 + 0.5
+            ~ Smallest level whose texel (2^(k+1) pixels) spans the rect's longer side.
+            fix span = max(f32(u32(sx1) - u32(sx0)), f32(u32(sy1) - u32(sy0))) + 1.0
+            flux k: u32 = 0
+            flux texel = 2.0
+            while texel < span and k + 1 < levels
+                texel = texel * 2.0
+                k = k + 1
+            end
+            fix lw = hiz_level_edge(screen_w, k)
+            fix lh = hiz_level_edge(screen_h, k)
+            fix base = hiz_level_offset(screen_w, screen_h, k)
+            fix tx0 = min(shr(u32(sx0), k + 1), lw - 1)
+            fix tx1 = min(shr(u32(sx1), k + 1), lw - 1)
+            fix ty0 = min(shr(u32(sy0), k + 1), lh - 1)
+            fix ty1 = min(shr(u32(sy1), k + 1), lh - 1)
+            flux far_depth = 0.0
+            flux ty = ty0
+            while ty <= ty1
+                flux tx = tx0
+                while tx <= tx1
+                    far_depth = max(far_depth, pyramid[base + ty * lw + tx])
+                    tx = tx + 1
+                end
+                ty = ty + 1
+            end
+            if near_depth > far_depth
+                visible = false
+                atomic_add(stats[stats_base + 2], 1)
+            end
+        end
+    end
+
+    vis[i] = u32(visible)
+    fix draw_now = visible and not early
+    if draw_now
+        atomic_add(stats[stats_base + 3], 1)
+    end
+    cmds[i].index_count = m.draw.x
+    cmds[i].instance_count = u32(draw_now)
     cmds[i].first_index = m.draw.y
     cmds[i].base_vertex = m.draw.z
     cmds[i].base_instance = 0

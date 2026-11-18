@@ -1,6 +1,11 @@
 // Cenda navigation (cn_*) conformance: cells from the physics cache, ground and air searches, the
 // service (queue, budget, refusal, release), ground and air agents, probes and steering helpers.
 // Route-for-route parity with the retired Java Wayfind core is pinned in engine-core (NavGoldenRoutesTest).
+//
+// ABI 3 (OpenMason #142): every scenario runs at the origin and again in worlds shifted to +-2^40
+// (negative Y too) with every frame origin (physics, nav world, agents) moved there, so local
+// positions — and the float math, which runs relative to an anchor near the frame — are identical.
+// Then: signed unbounded Y, far positions without rebasing, and origin moves mid-search/mid-route.
 
 #include "cenda/nav.h"
 
@@ -11,6 +16,20 @@
 #include <map>
 #include <tuple>
 #include <vector>
+
+// The Java binding (engine-core nav.CendaNav) hard-codes these layouts.
+static_assert(sizeof(cn_world_desc) == 40, "cn_world_desc layout");
+static_assert(sizeof(cn_air_profile) == 48, "cn_air_profile layout");
+static_assert(sizeof(cn_ground_query) == 128, "cn_ground_query layout");
+static_assert(sizeof(cn_air_query) == 120, "cn_air_query layout");
+static_assert(sizeof(cn_body) == 64, "cn_body layout");
+static_assert(sizeof(cn_agent_view) == 48, "cn_agent_view layout");
+static_assert(sizeof(cn_ground_agent_desc) == 112, "cn_ground_agent_desc layout");
+static_assert(sizeof(cn_air_agent_desc) == 104, "cn_air_agent_desc layout");
+static_assert(sizeof(cn_reach_query) == 96, "cn_reach_query layout");
+static_assert(sizeof(cn_reach_cell) == 40, "cn_reach_cell layout");
+static_assert(sizeof(cn_flood_query) == 56, "cn_flood_query layout");
+static_assert(sizeof(cn_flood_cell) == 32, "cn_flood_cell layout");
 
 namespace {
 
@@ -24,23 +43,32 @@ int failures = 0;
         }                                                                        \
     } while (0)
 
-bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
+bool near(double a, double b, double eps = 1e-4) { return std::fabs(a - b) <= eps; }
+
+// The current scenario's world offset (absolute = offset + scenario coordinates); every frame origin
+// is set to it, so scenario code reads as if at 0.
+int64_t g_off[3] = {0, 0, 0};
+int64_t X(int64_t x) { return x + g_off[0]; }
+int64_t Y(int64_t y) { return y + g_off[1]; }
+int64_t Z(int64_t z) { return z + g_off[2]; }
 
 struct TestWorld {
-    std::map<std::tuple<int, int, int>, std::pair<uint16_t, uint16_t>> cells;
-    bool unload_negative_x = false;
-    void set(int x, int y, int z, uint16_t shape, uint16_t fluid = 0) { cells[{x, y, z}] = {shape, fluid}; }
-    void clear(int x, int y, int z) { cells.erase({x, y, z}); }
-    void floor(int y, int x0, int x1, int z0, int z1, uint16_t shape) {
-        for (int x = x0; x <= x1; ++x)
-            for (int z = z0; z <= z1; ++z) set(x, y, z, shape);
+    std::map<std::tuple<int64_t, int64_t, int64_t>, std::pair<uint16_t, uint16_t>> cells;
+    bool unload_negative_x = false; // scenario x < 0 reports "not loaded"
+    void set(int64_t x, int64_t y, int64_t z, uint16_t shape, uint16_t fluid = 0) {
+        cells[{X(x), Y(y), Z(z)}] = {shape, fluid};
+    }
+    void clear(int64_t x, int64_t y, int64_t z) { cells.erase({X(x), Y(y), Z(z)}); }
+    void floor(int64_t y, int64_t x0, int64_t x1, int64_t z0, int64_t z1, uint16_t shape) {
+        for (int64_t x = x0; x <= x1; ++x)
+            for (int64_t z = z0; z <= z1; ++z) set(x, y, z, shape);
     }
 };
 
-int32_t fill(void* user, int32_t x0, int32_t y0, int32_t z0, int32_t sx, int32_t sy, int32_t sz, uint16_t* shapes,
+int32_t fill(void* user, int64_t x0, int64_t y0, int64_t z0, int32_t sx, int32_t sy, int32_t sz, uint16_t* shapes,
              uint16_t* fluids) {
     auto* w = static_cast<TestWorld*>(user);
-    if (w->unload_negative_x && x0 < 0) return 0;
+    if (w->unload_negative_x && x0 - g_off[0] < 0) return 0;
     for (int y = 0; y < sy; ++y)
         for (int z = 0; z < sz; ++z)
             for (int x = 0; x < sx; ++x) {
@@ -81,11 +109,13 @@ struct Fixture {
         nd.solid_mask = SOLID;
         nd.hazard_mask = LAVA;
         nd.fluid_mask = WATER;
-        nd.min_y = 0;
-        nd.max_y = 256;
+        nd.min_y = Y(0);
+        nd.max_y = Y(256);
         nd.max_in_flight = 4;
         nav = cn_world_create(&nd);
         CHECK(nav != nullptr);
+        CHECK(cp_set_origin(physics, g_off[0], g_off[1], g_off[2]) == CP_OK);
+        CHECK(cn_world_set_origin(nav, g_off[0], g_off[1], g_off[2]) == CN_OK);
     }
     ~Fixture() {
         cn_world_destroy(nav);
@@ -100,7 +130,7 @@ cn_ground_profile walker() {
 
 cn_limits limits(int32_t expansions = 600) { return cn_limits{expansions, 3.4e38f, 1.0f, 0}; }
 
-cn_ground_query ground_query(float fx, float fy, float fz, float gx, float gy, float gz) {
+cn_ground_query ground_query(double fx, double fy, double fz, double gx, double gy, double gz) {
     cn_ground_query q{};
     q.feet[0] = fx; q.feet[1] = fy; q.feet[2] = fz;
     q.goal[0] = gx; q.goal[1] = gy; q.goal[2] = gz;
@@ -112,12 +142,12 @@ cn_ground_query ground_query(float fx, float fy, float fz, float gx, float gy, f
     return q;
 }
 
-std::vector<float> run(cn_world* nav, int64_t id, cn_search_info& info) {
+std::vector<double> run(cn_world* nav, int64_t id, cn_search_info& info) {
     CHECK(id > 0);
     CHECK(cn_search_poll(nav, id, &info) == 0 || info.status == CN_SEARCH_OUT_OF_RANGE);
     cn_world_step(nav, 1 << 30);
     CHECK(cn_search_poll(nav, id, &info) == 1);
-    std::vector<float> pts(static_cast<size_t>(info.points) * 3);
+    std::vector<double> pts(static_cast<size_t>(info.points) * 3);
     CHECK(cn_search_points(nav, id, pts.data(), info.points) == info.points);
     cn_search_release(nav, id);
     return pts;
@@ -131,21 +161,21 @@ void cells_come_from_the_physics_cache() {
     f.tw.set(3, 10, 0, HOT);
     f.tw.set(4, 10, 0, 0, 1);
     float top = -1.0f;
-    CHECK(cn_cell(f.nav, 0, 10, 0, &top) == CN_CELL_SOLID && top == 1.0f);
-    CHECK(cn_cell(f.nav, 1, 10, 0, &top) == CN_CELL_SOLID && top == 0.125f);
-    CHECK(cn_cell(f.nav, 2, 10, 0, &top) == 0u);  // pickable, not solid: open
-    CHECK(cn_cell(f.nav, 3, 10, 0, &top) == CN_CELL_HAZARD);
-    CHECK(cn_cell(f.nav, 4, 10, 0, &top) == CN_CELL_LIQUID && top == 0.875f);
-    CHECK(cn_cell(f.nav, 5, 10, 0, &top) == 0u);
-    CHECK(cn_cell(f.nav, 0, -1, 0, &top) == CN_CELL_UNKNOWN);
-    CHECK(cn_cell(f.nav, 0, 256, 0, &top) == CN_CELL_UNKNOWN);
+    CHECK(cn_cell(f.nav, X(0), Y(10), Z(0), &top) == CN_CELL_SOLID && top == 1.0f);
+    CHECK(cn_cell(f.nav, X(1), Y(10), Z(0), &top) == CN_CELL_SOLID && top == 0.125f);
+    CHECK(cn_cell(f.nav, X(2), Y(10), Z(0), &top) == 0u);  // pickable, not solid: open
+    CHECK(cn_cell(f.nav, X(3), Y(10), Z(0), &top) == CN_CELL_HAZARD);
+    CHECK(cn_cell(f.nav, X(4), Y(10), Z(0), &top) == CN_CELL_LIQUID && top == 0.875f);
+    CHECK(cn_cell(f.nav, X(5), Y(10), Z(0), &top) == 0u);
+    CHECK(cn_cell(f.nav, X(0), Y(-1), Z(0), &top) == CN_CELL_UNKNOWN);
+    CHECK(cn_cell(f.nav, X(0), Y(256), Z(0), &top) == CN_CELL_UNKNOWN);
     f.tw.unload_negative_x = true;
-    CHECK(cn_cell(f.nav, -5, 10, 0, &top) == CN_CELL_UNKNOWN);
+    CHECK(cn_cell(f.nav, X(-5), Y(10), Z(0), &top) == CN_CELL_UNKNOWN);
     // An edit reaches navigation through the physics invalidation, nothing else.
     f.tw.set(5, 10, 0, FULL);
-    CHECK(cn_cell(f.nav, 5, 10, 0, &top) == 0u);
-    cp_invalidate_cell(f.physics, 5, 10, 0);
-    CHECK(cn_cell(f.nav, 5, 10, 0, &top) == CN_CELL_SOLID);
+    CHECK(cn_cell(f.nav, X(5), Y(10), Z(0), &top) == 0u);
+    cp_invalidate_cell(f.physics, X(5), Y(10), Z(0));
+    CHECK(cn_cell(f.nav, X(5), Y(10), Z(0), &top) == CN_CELL_SOLID);
 }
 
 void ground_routes() {
@@ -246,8 +276,8 @@ void water_costs_and_swimmers() {
     CHECK(info.status != CN_SEARCH_FOUND); // deep water: out of its depth
 }
 
-cn_air_profile flyer(float cruise) {
-    return cn_air_profile{4, cruise, 0.35f, 0.5f, 0.15f, 1, 0.75f, 1, 254, 0};
+cn_air_profile flyer(double cruise) {
+    return cn_air_profile{4, 0.35f, 0.5f, 0.15f, 1, 0.75f, cruise, Y(1), Y(254)};
 }
 
 void air_routes() {
@@ -270,20 +300,21 @@ void air_routes() {
     // Every waypoint is a cube centre and the route goes round the wall through the gap.
     bool through_gap = false;
     for (int i = 0; i < info.points; ++i) {
-        float x = pts[static_cast<size_t>(i) * 3], z = pts[static_cast<size_t>(i) * 3 + 2];
-        CHECK(near(std::fmod(x, 4.0f), 2.0f));
+        double x = pts[static_cast<size_t>(i) * 3], z = pts[static_cast<size_t>(i) * 3 + 2];
+        CHECK(near(std::fmod(x, 4.0), 2.0));
         if (z > 8.0f) through_gap = true;
     }
     CHECK(through_gap);
 
-    // Out of range resolves at once.
+    // Out of range (beyond +-2^62 absolute) resolves at once.
     cn_air_query bad = q;
     bad.profile.cell_size = 1;
-    bad.from[1] = -10;
+    CHECK(cn_world_set_origin(f.nav, (int64_t{1} << 62) - 10, 0, 0) == CN_OK);
     int64_t id = cn_search_air(f.nav, &bad);
     CHECK(id > 0);
     CHECK(cn_search_poll(f.nav, id, &info) == 1 && info.status == CN_SEARCH_OUT_OF_RANGE && info.points == 0);
     cn_search_release(f.nav, id);
+    CHECK(cn_world_set_origin(f.nav, g_off[0], g_off[1], g_off[2]) == CN_OK);
 }
 
 void the_service_queues_refuses_and_releases() {
@@ -344,7 +375,7 @@ cn_steering_desc steering_desc(float hop_boost = 2.0f) {
     return d;
 }
 
-cn_body body_at(float x, float y, float z) {
+cn_body body_at(double x, double y, double z) {
     cn_body b{};
     b.x = x; b.y = y; b.z = z;
     b.yaw = 0.0f;
@@ -366,7 +397,7 @@ void ground_agent_walks_a_route() {
     cn_steering_desc sd = steering_desc();
     cn_steering* st = cn_steering_create(&sd);
     cn_body b = body_at(0.5f, 64.5f, 0.5f);
-    cn_ground_agent* a = cn_ground_agent_create(&d, b.x, b.y, b.z);
+    cn_ground_agent* a = cn_ground_agent_create(&d, g_off, b.x, b.y, b.z);
     CHECK(a != nullptr);
     cn_agent_view v{};
     cn_apply out{};
@@ -384,7 +415,7 @@ void ground_agent_walks_a_route() {
     CHECK(v.status == CN_AGENT_FOLLOWING && v.path_points >= 2);
     CHECK(near(out.vx, 2.0f) && near(out.vz, 0.0f));
     CHECK((out.apply & CN_APPLY_YAW) != 0u && near(out.yaw, -9.0f)); // 180 deg/s * 0.05, the short way to 270
-    float route[30];
+    double route[30];
     int32_t complete = 0;
     CHECK(cn_ground_agent_path(a, route, 10, &complete) == v.path_points && complete == 1);
 
@@ -422,7 +453,7 @@ void ground_agent_jumps_and_gets_unstuck() {
     cn_steering_desc sd = steering_desc(3.0f);
     cn_steering* st = cn_steering_create(&sd);
     cn_body b = body_at(1.5f, 64.5f, 0.5f);
-    cn_ground_agent* a = cn_ground_agent_create(&d, b.x, b.y, b.z);
+    cn_ground_agent* a = cn_ground_agent_create(&d, g_off, b.x, b.y, b.z);
     cn_agent_view v{};
     cn_apply out{};
     cn_ground_agent_move_to(a, 8.5f, 65.0f, 0.5f, 1.0f, 1.0f, &v);
@@ -473,7 +504,7 @@ void a_world_swap_drops_the_pending_search() {
     cn_steering_desc sd = steering_desc();
     cn_steering* st = cn_steering_create(&sd);
     cn_body b = body_at(0.5f, 64.5f, 0.5f);
-    cn_ground_agent* a = cn_ground_agent_create(&d, b.x, b.y, b.z);
+    cn_ground_agent* a = cn_ground_agent_create(&d, g_off, b.x, b.y, b.z);
     cn_agent_view v{};
     cn_apply out{};
     cn_ground_agent_move_to(a, 8.5f, 64.0f, 0.5f, 1.0f, 1.0f, &v);
@@ -502,11 +533,11 @@ void air_agent_flies_to_the_horizon() {
     d.waypoint_radius = 4.0f;
     d.goal_radius = 6.0f;
     d.goal_snap_cells = 2;
-    cn_air_agent* a = cn_air_agent_create(&d, 0.0f, 90.0f, 0.0f);
+    cn_air_agent* a = cn_air_agent_create(&d, g_off, 0.0, 90.0, 0.0);
     CHECK(a != nullptr);
     cn_agent_view v{};
     cn_air_agent_move_to(a, 500.0f, 90.0f, 0.0f, &v);
-    float target[3];
+    double target[3];
     // No route yet: the horizon along the bearing at cruise altitude.
     cn_air_agent_steer_target(a, 0.0f, 90.0f, 0.0f, target);
     CHECK(near(target[0], 112.0f) && near(target[1], 90.0f) && near(target[2], 0.0f));
@@ -516,7 +547,7 @@ void air_agent_flies_to_the_horizon() {
     cn_air_agent_tick(a, f.nav, 0.0f, 90.0f, 0.0f, 0.05f, &v);
     CHECK(v.status == CN_AGENT_FOLLOWING && v.path_points >= 1);
     cn_air_agent_steer_target(a, 0.0f, 90.0f, 0.0f, target);
-    CHECK(target[0] > 4.0f && near(std::fmod(target[0], 4.0f), 2.0f));
+    CHECK(target[0] > 4.0 && near(std::fmod(target[0], 4.0), 2.0));
     cn_air_agent_stop(a, f.nav, &v);
     CHECK(v.status == CN_AGENT_IDLE && v.has_goal == 0 && v.path_points == 0);
     cn_air_agent_destroy(a);
@@ -580,6 +611,7 @@ void flood_reaches_face_neighbours_breadth_first() {
     d.fill = fill;
     d.user = &tw;
     cp_world* physics = cp_world_create(&d);
+    cp_set_origin(physics, g_off[0], g_off[1], g_off[2]);
     constexpr uint32_t LEAF = 8u, LOG = 16u;
     constexpr uint16_t LEAF_SHAPE = 1, LOG_SHAPE = 2, STONE = 3;
     cp_box full{0, 0, 0, 1, 1, 1};
@@ -593,23 +625,23 @@ void flood_reaches_face_neighbours_breadth_first() {
     tw.set(2, 6, 1, LEAF_SHAPE);   // diagonal to (2,5,0): not connected
     tw.set(0, 6, 0, STONE);
     tw.set(0, 4, 0, LEAF_SHAPE);   // below min_y 5: never entered
-    cn_flood_query q{0, 5, 0, 3, 100, LEAF | LOG, 5, 256};
-    int32_t out[64 * 4];
+    cn_flood_query q{X(0), Y(5), Z(0), 3, 100, LEAF | LOG, 0, Y(5), Y(256)};
+    cn_flood_cell out[64];
     int32_t n = cn_flood(physics, &q, out, 64);
     CHECK(n == 4); // the log and the leaves at distance 1..3
-    CHECK(out[0] == 0 && out[3] == static_cast<int32_t>(SOLID | LOG));
+    CHECK(out[0].x == X(0) && out[0].category == (SOLID | LOG));
     for (int i = 1; i < 4; ++i) {
-        CHECK(out[i * 4] == i && out[i * 4 + 1] == 5 && out[i * 4 + 3] == static_cast<int32_t>(SOLID | LEAF));
+        CHECK(out[i].x == X(i) && out[i].y == Y(5) && out[i].z == Z(0) && out[i].category == (SOLID | LEAF));
     }
     // The start expands whatever it holds (an emptied trunk cell), and the cap bounds the work.
-    cn_flood_query empty_start{1, 6, 0, 6, 2, LEAF | LOG, 0, 256};
+    cn_flood_query empty_start{X(1), Y(6), Z(0), 6, 2, LEAF | LOG, 0, Y(0), Y(256)};
     CHECK(cn_flood(physics, &empty_start, out, 64) == 2);
-    CHECK(out[3] == 0 && out[4] == 1 && out[5] == 5);
+    CHECK(out[0].category == 0u && out[1].x == X(1) && out[1].y == Y(5));
     // Breadth-first: from the middle of the line, both neighbours come before anything farther.
-    cn_flood_query mid{2, 5, 0, 6, 100, LEAF | LOG, 0, 256};
+    cn_flood_query mid{X(2), Y(5), Z(0), 6, 100, LEAF | LOG, 0, Y(0), Y(256)};
     n = cn_flood(physics, &mid, out, 64);
     CHECK(n == 6);
-    CHECK(out[4] == 3 && out[8] == 1); // +x first, then -x
+    CHECK(out[1].x == X(3) && out[2].x == X(1)); // +x first, then -x
     CHECK(cn_flood(physics, nullptr, out, 64) == CN_ERR_ARG);
     cp_world_destroy(physics);
 }
@@ -639,7 +671,7 @@ void a_glider_holds_over_a_waypoint_below_it() {
     // Floating 4 blocks up, right over the route's first waypoint (its own column).
     cn_body b = body_at(0.5f, 68.5f, 0.5f);
     b.flags = CN_BODY_GLIDING;
-    cn_ground_agent* a = cn_ground_agent_create(&d, b.x, b.y, b.z);
+    cn_ground_agent* a = cn_ground_agent_create(&d, g_off, b.x, b.y, b.z);
     cn_agent_view v{};
     cn_apply out{};
     cn_ground_agent_move_to(a, 0.5f, 64.0f, 0.5f, 0.0f, 1.0f, &v);
@@ -667,7 +699,7 @@ void reach_floods_the_ground_moves_cheapest_first() {
         f.tw.set(4, 65, z, FULL);
     }
     cn_reach_query q{};
-    q.feet[0] = 0.5f; q.feet[1] = 64.0f; q.feet[2] = 0.5f;
+    q.feet[0] = 0.5; q.feet[1] = 64.0; q.feet[2] = 0.5;
     q.snap_down = 4;
     q.snap_up = 2;
     q.radius = 16;
@@ -678,12 +710,12 @@ void reach_floods_the_ground_moves_cheapest_first() {
     int32_t n = cn_reach_ground(f.nav, &q, cells.data(), 200);
     // 9x9 floor minus the 8 wall cells: 73 standable cells, all reachable through the gap.
     CHECK(n == 73);
-    CHECK(cells[0].x == 0 && cells[0].z == 0 && cells[0].parent == -1 && cells[0].cost == 0.0f);
+    CHECK(cells[0].x == X(0) && cells[0].z == Z(0) && cells[0].parent == -1 && cells[0].cost == 0.0f);
     bool far_side = false, ordered = true;
     for (int32_t i = 1; i < n; ++i) {
         CHECK(cells[static_cast<size_t>(i)].parent >= 0 && cells[static_cast<size_t>(i)].parent < i);
         if (cells[static_cast<size_t>(i)].cost < cells[static_cast<size_t>(i - 1)].cost - 1e-4f) ordered = false;
-        if (cells[static_cast<size_t>(i)].x == 8 && cells[static_cast<size_t>(i)].z == 0) {
+        if (cells[static_cast<size_t>(i)].x == X(8) && cells[static_cast<size_t>(i)].z == Z(0)) {
             far_side = true;
             CHECK(cells[static_cast<size_t>(i)].cost > 16.0f); // round through the gap
         }
@@ -694,7 +726,7 @@ void reach_floods_the_ground_moves_cheapest_first() {
     CHECK(cn_reach_ground(f.nav, &q, cells.data(), 200) == 9); // columns 0..2 x 0..2
     q.max_cells = 5;
     CHECK(cn_reach_ground(f.nav, &q, cells.data(), 200) == 5);
-    q.feet[1] = 40.0f; // buried: nowhere to stand
+    q.feet[1] = 40.0; // buried: nowhere to stand
     CHECK(cn_reach_ground(f.nav, &q, cells.data(), 200) == 0);
     q.max_cells = 0;
     CHECK(cn_reach_ground(f.nav, &q, cells.data(), 200) == CN_ERR_ARG);
@@ -707,14 +739,11 @@ void bad_input() {
     CHECK(cn_cell(nullptr, 0, 0, 0, nullptr) == CN_CELL_UNKNOWN);
     CHECK(cn_search_ground(nullptr, nullptr) == 0);
     cn_ground_agent_desc ad{};
-    CHECK(cn_ground_agent_create(&ad, 0, 0, 0) == nullptr);
+    CHECK(cn_ground_agent_create(&ad, nullptr, 0, 0, 0) == nullptr);
     CHECK(cn_world_step(nullptr, 10) == CN_ERR_ARG);
 }
 
-} // namespace
-
-int main() {
-    CHECK(cn_abi_version() == CN_ABI_VERSION);
+void run_scenarios() {
     cells_come_from_the_physics_cache();
     ground_routes();
     water_costs_and_swimmers();
@@ -731,6 +760,194 @@ int main() {
     a_glider_holds_over_a_waypoint_below_it();
     reach_floods_the_ground_moves_cheapest_first();
     bad_input();
+}
+
+// ---- 64-bit coordinates (ABI 3) ------------------------------------------------------------------
+
+constexpr int64_t kFar = int64_t{1} << 40;
+
+// Node Y was 12 unsigned bits (0..4095): routes far below 0 and far above 4095 were out of range.
+void y_is_signed_and_unbounded() {
+    for (int64_t base : {int64_t{-5000}, int64_t{-1}, int64_t{5000}, int64_t{1} << 33, -(int64_t{1} << 33)}) {
+        TestWorld tw;
+        cp_world_desc d{};
+        d.fill = fill;
+        d.user = &tw;
+        cp_world* physics = cp_world_create(&d);
+        cp_box full{0, 0, 0, 1, 1, 1};
+        cp_shape_define(physics, FULL, &full, 1, SOLID | PICK, 0);
+        cn_world_desc nd{};
+        nd.physics = physics;
+        nd.solid_mask = SOLID;
+        nd.min_y = CN_Y_UNBOUNDED_MIN;
+        nd.max_y = CN_Y_UNBOUNDED_MAX;
+        cn_world* nav = cn_world_create(&nd);
+        CHECK(nav != nullptr);
+        tw.floor(base, -2, 12, -2, 2, FULL);
+        tw.set(5, base + 1, 0, FULL); // a step on the way
+        cn_search_info info{};
+        cn_ground_query q = ground_query(0.5, static_cast<double>(base + 1), 0.5, 10.5,
+                                         static_cast<double>(base + 1), 0.5);
+        auto pts = run(nav, cn_search_ground(nav, &q), info);
+        CHECK(info.status == CN_SEARCH_FOUND);
+        CHECK(info.points >= 3 && near(pts[1], static_cast<double>(base + 1))
+              && near(pts[static_cast<size_t>(info.points - 1) * 3], 10.5));
+        float top = 0.0f;
+        CHECK(cn_cell(nav, 5, base + 1, 0, &top) == CN_CELL_SOLID && top == 1.0f);
+        // A flood along a column of the floor crosses any y.
+        cn_flood_query fq{0, base, 0, 4, 100, SOLID, 0, CN_Y_UNBOUNDED_MIN, CN_Y_UNBOUNDED_MAX};
+        cn_flood_cell out[64];
+        CHECK(cn_flood(physics, &fq, out, 64) > 1 && out[0].y == base);
+        cn_world_destroy(nav);
+        cp_world_destroy(physics);
+    }
+}
+
+// Far from 0 WITHOUT rebasing (origin 0, positions ~2^40 as doubles): the float math runs relative
+// to an anchor near the search, so routes, waypoints and agents work exactly as at 0.
+void far_routes_without_rebasing() {
+    TestWorld tw;
+    const int64_t fx = kFar + 3, fy = -kFar, fz = -kFar - 9;
+    for (int64_t x = -2; x <= 20; ++x)
+        for (int64_t z = -4; z <= 4; ++z) tw.cells[{fx + x, fy, fz + z}] = {FULL, 0};
+    for (int64_t z = -4; z <= 4; ++z) tw.cells[{fx + 5, fy + 1, fz + z}] = {SNOW1, 0}; // a layer at x 5
+    cp_world_desc d{};
+    d.fill = fill;
+    d.user = &tw;
+    cp_world* physics = cp_world_create(&d);
+    cp_box full{0, 0, 0, 1, 1, 1};
+    cp_box snow{0, 0, 0, 1, 0.125f, 1};
+    cp_shape_define(physics, FULL, &full, 1, SOLID | PICK, 0);
+    cp_shape_define(physics, SNOW1, &snow, 1, SOLID | PICK, CP_SHAPE_PARTIAL);
+    cn_world_desc nd{};
+    nd.physics = physics;
+    nd.solid_mask = SOLID;
+    nd.min_y = CN_Y_UNBOUNDED_MIN;
+    nd.max_y = CN_Y_UNBOUNDED_MAX;
+    cn_world* nav = cn_world_create(&nd);
+    const double bx = static_cast<double>(fx), by = static_cast<double>(fy) + 1.0, bz = static_cast<double>(fz);
+    cn_ground_query q = ground_query(bx + 0.5, by, bz + 0.5, bx + 5.5, by, bz + 0.5);
+    cn_search_info info{};
+    auto pts = run(nav, cn_search_ground(nav, &q), info);
+    CHECK(info.status == CN_SEARCH_FOUND);
+    // The waypoint on the layer: x + 0.5 and the layer's real height, to well under 1/1000.
+    const size_t last = static_cast<size_t>(info.points - 1) * 3;
+    CHECK(std::fabs(pts[last] - (bx + 5.5)) < 1e-3 && std::fabs(pts[last + 1] - (by + 0.125)) < 1e-3);
+    CHECK(std::fabs(pts[last + 2] - (bz + 0.5)) < 1e-3);
+
+    // An agent walks it.
+    cn_ground_agent_desc ad = agent_desc();
+    cn_steering_desc sd = steering_desc();
+    cn_steering* st = cn_steering_create(&sd);
+    cn_body b = body_at(bx + 0.5, by + 0.5, bz + 0.5);
+    cn_ground_agent* a = cn_ground_agent_create(&ad, nullptr, b.x, b.y, b.z);
+    cn_agent_view v{};
+    cn_apply out{};
+    cn_ground_agent_move_to(a, bx + 12.5, by, bz + 0.5, 1.0f, 1.0f, &v);
+    int arrived = -1;
+    for (int tick = 0; tick < 400 && arrived < 0; ++tick) {
+        b.yaw = out.yaw;
+        if (out.apply & CN_APPLY_VELOCITY) {
+            b.x += static_cast<double>(out.vx) * 0.05;
+            b.z += static_cast<double>(out.vz) * 0.05;
+        }
+        cn_world_step(nav, 1 << 30);
+        cn_ground_agent_tick(a, st, nav, physics, &b, 0.05f, &out, &v);
+        if (v.status == CN_AGENT_ARRIVED) arrived = tick;
+    }
+    CHECK(arrived > 0 && std::fabs(b.x - (bx + 11.5)) < 0.7);
+    cn_ground_agent_destroy(a);
+    cn_steering_destroy(st);
+    cn_world_destroy(nav);
+    cp_world_destroy(physics);
+}
+
+// A queued search and a finished route stay right when frame origins move under them.
+void origin_moves_keep_searches_and_routes() {
+    Fixture f;
+    f.tw.floor(63, -2, 20, -4, 4, FULL);
+    cn_ground_query q = ground_query(0.5, 64, 0.5, 10.5, 64, 0.5);
+    cn_search_info info{};
+    auto before = run(f.nav, cn_search_ground(f.nav, &q), info);
+    CHECK(info.status == CN_SEARCH_FOUND && info.points == 2);
+    // Queue, move the nav world's origin, step, read: same absolute route in the new frame.
+    int64_t id = cn_search_ground(f.nav, &q);
+    const int64_t d[3] = {4099, -70001, 12};
+    CHECK(cn_world_set_origin(f.nav, d[0], d[1], d[2]) == CN_OK);
+    int64_t o[3];
+    CHECK(cn_world_get_origin(f.nav, o) == CN_OK && o[0] == d[0] && o[1] == d[1] && o[2] == d[2]);
+    cn_world_step(f.nav, 1 << 30);
+    CHECK(cn_search_poll(f.nav, id, &info) == 1 && info.status == CN_SEARCH_FOUND && info.points == 2);
+    double after[6];
+    CHECK(cn_search_points(f.nav, id, after, 2) == 2);
+    for (int i = 0; i < 6; ++i) CHECK(after[i] == before[static_cast<size_t>(i)] - static_cast<double>(d[i % 3]));
+    cn_search_release(f.nav, id);
+    CHECK(cn_world_set_origin(f.nav, 0, 0, 0) == CN_OK);
+
+    // An agent following a route moves its frame mid-walk: route, goal and body all shift, it keeps
+    // walking and arrives at the same absolute place.
+    cn_ground_agent_desc ad = agent_desc();
+    cn_steering_desc sd = steering_desc();
+    cn_steering* st = cn_steering_create(&sd);
+    cn_body b = body_at(0.5, 64.5, 0.5);
+    cn_ground_agent* a = cn_ground_agent_create(&ad, nullptr, b.x, b.y, b.z);
+    cn_agent_view v{};
+    cn_apply out{};
+    cn_ground_agent_move_to(a, 8.5, 64.0, 0.5, 1.0f, 1.0f, &v);
+    int64_t frame[3] = {0, 0, 0};
+    int arrived = -1;
+    for (int tick = 0; tick < 300 && arrived < 0; ++tick) {
+        b.yaw = out.yaw;
+        if (out.apply & CN_APPLY_VELOCITY) {
+            b.x += static_cast<double>(out.vx) * 0.05;
+            b.z += static_cast<double>(out.vz) * 0.05;
+        }
+        if (tick == 20) {
+            CHECK(v.status == CN_AGENT_FOLLOWING);
+            const double gx = v.goal_x;
+            frame[0] = -kFar;
+            frame[1] = 12345;
+            frame[2] = 7;
+            CHECK(cn_ground_agent_set_origin(a, frame[0], frame[1], frame[2]) == CN_OK);
+            b.x -= static_cast<double>(frame[0]);
+            b.y -= static_cast<double>(frame[1]);
+            b.z -= static_cast<double>(frame[2]);
+            cn_ground_agent_move_to(a, 8.5 - static_cast<double>(frame[0]), 64.0 - static_cast<double>(frame[1]),
+                                    0.5 - static_cast<double>(frame[2]), 1.0f, 1.0f, &v);
+            CHECK(v.goal_x == gx - static_cast<double>(frame[0]));
+            double route[30];
+            int32_t complete = 0;
+            int32_t n = cn_ground_agent_path(a, route, 10, &complete);
+            CHECK(n >= 2 && near(route[static_cast<size_t>(n - 1) * 3] + static_cast<double>(frame[0]), 7.5));
+        }
+        cn_world_step(f.nav, 1 << 30);
+        cn_ground_agent_tick(a, st, f.nav, f.physics, &b, 0.05f, &out, &v);
+        if (v.status == CN_AGENT_ARRIVED) arrived = tick;
+    }
+    CHECK(arrived > 20 && std::fabs(b.x + static_cast<double>(frame[0]) - 7.5) < 0.7);
+    cn_ground_agent_destroy(a);
+    cn_steering_destroy(st);
+}
+
+} // namespace
+
+int main() {
+    CHECK(cn_abi_version() == CN_ABI_VERSION);
+    run_scenarios();
+    // Far from 0 on every axis (Y negative), every frame origin moved there. Offsets are multiples of
+    // 4096 so the air cubes (and the float math's anchor grid) line up with the world as at 0.
+    g_off[0] = kFar;
+    g_off[1] = -kFar - 4096 * 3;
+    g_off[2] = -kFar + 4096 * 7;
+    run_scenarios();
+    g_off[0] = -kFar * 5;
+    g_off[1] = kFar * 2;
+    g_off[2] = kFar * 3;
+    run_scenarios();
+    g_off[0] = g_off[1] = g_off[2] = 0;
+    y_is_signed_and_unbounded();
+    far_routes_without_rebasing();
+    origin_moves_keep_searches_and_routes();
     if (failures != 0) {
         std::fprintf(stderr, "nav_world: %d check(s) failed\n", failures);
         return 1;

@@ -5,6 +5,9 @@
        cmake/CendaFastNoise2.cmake              the ONE FastNoise2 pin (bit-identical noise)
        cmake/CendaDepsGuard.cmake               out-of-tree FetchContent guard
        native/kernels/include/cenda/noise_nodes.hpp   the engine's noise node graphs
+       native/kernels/include/cenda/voxel_world.h     the cubic voxel runtime C ABI (cv_generator /
+                                                      cv_gen_api for game worldgen libs; needs only
+                                                      <stdint.h>)
        cenda-sdk.properties                     version + ABI numbers this SDK matches -->
 <assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -29,6 +32,7 @@
             <outputDirectory>native/kernels/include/cenda</outputDirectory>
             <includes>
                 <include>noise_nodes.hpp</include>
+                <include>voxel_world.h</include>
             </includes>
             <lineEnding>keep</lineEnding>
         </fileSet>

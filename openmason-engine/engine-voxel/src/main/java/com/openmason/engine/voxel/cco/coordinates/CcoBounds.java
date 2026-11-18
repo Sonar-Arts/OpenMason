@@ -7,6 +7,12 @@ import com.openmason.engine.voxel.VoxelWorldConfig;
  * All methods are static, thread-safe, and allocation-free.
  *
  * Performance: < 20ns per check (simple comparisons).
+ *
+ * <p><b>Column path only.</b> Everything here describes a full-height column chunk
+ * ({@code worldHeight}, local Y from 0). The cubic runtime ({@code voxel.world},
+ * cubes of 32^3 with int64 coordinates and no world height) never consults it;
+ * this class and its {@link com.openmason.engine.voxel.VoxelWorldLimits} height
+ * rules are deleted once Stonebreak no longer uses the column world (Phase 3).
  */
 public final class CcoBounds {
 
@@ -25,6 +31,7 @@ public final class CcoBounds {
      *         ({@link com.openmason.engine.voxel.VoxelWorldLimits}, #385): fails loudly instead of
      *         corrupting meshes later
      */
+    @SuppressWarnings("deprecation") // the column path's own limits
     public static void configure(VoxelWorldConfig worldConfig) {
         config = com.openmason.engine.voxel.VoxelWorldLimits.requireSupported(worldConfig);
     }

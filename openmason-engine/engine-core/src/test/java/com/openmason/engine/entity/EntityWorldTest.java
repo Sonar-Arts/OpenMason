@@ -1,6 +1,5 @@
 package com.openmason.engine.entity;
 
-import org.joml.Vector3f;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,7 +39,7 @@ class EntityWorldTest {
     @BeforeEach
     void setUp() {
         assumeTrue(CendaEntities.isAvailable(), () -> "Cenda entities not built: " + CendaEntities.unavailableReason());
-        world = EntityWorld.create(8.0f);
+        world = EntityWorld.create(8);
         world.defineType(COW, new EntityTypeDesc(1.1f, 0.4f, 1.3f, 0.62f, 180.0f, LIVING, "game:cow"));
         world.defineType(ARROW, new EntityTypeDesc(0.05f, 0.1f, 0.5f, 0.0f, 0.0f, 0, null));
     }
@@ -121,78 +120,130 @@ class EntityWorldTest {
         assertEquals(500, out.size());
     }
 
-    private record Ref(long handle, int type, Vector3f pos, float w, float h, float l, float leg, int flags) {
+    private record Ref(long handle, int type, double x, double y, double z, float w, float h, float l, float leg,
+                       int flags) {
+        double distanceSquared(double cx, double cy, double cz) {
+            // The native rule: dx*dx + (dy*dy + dz*dz) in double.
+            double dx = x - cx, dy = y - cy, dz = z - cz;
+            return dx * dx + (dy * dy + dz * dz);
+        }
     }
 
     @Test
-    void queriesMatchTheJavaReference() {
+    void queriesMatchTheReference() {
+        queriesMatchTheReference(0, 0, 0, 0.0);
+    }
+
+    @Test
+    void queriesMatchTheReferenceInAFarFrame() {
+        queriesMatchTheReference(1L << 40, -(1L << 40) - 7, -(3L << 40), 0.0);
+    }
+
+    @Test
+    void queriesMatchTheReferenceAtFarPositionsWithoutRebasing() {
+        queriesMatchTheReference(0, 0, 0, (double) (1L << 40));
+    }
+
+    /** origin: the world's frame; shift: added to every position (x, z up and y down by it). */
+    private void queriesMatchTheReference(long ox, long oy, long oz, double shift) {
+        world.setOrigin(ox, oy, oz);
+        assertEquals(ox, world.originX());
         Random random = new Random(42);
         List<Ref> refs = new ArrayList<>();
         for (int i = 0; i < 300; i++) {
             int type = random.nextBoolean() ? COW : ARROW;
             long h = world.spawn(type, 0, 0, 0, 0, 0);
-            refs.add(new Ref(h, type,
-                new Vector3f(random.nextFloat() * 120 - 60, random.nextFloat() * 30 - 15, random.nextFloat() * 120 - 60),
+            refs.add(new Ref(h, type, shift + (random.nextFloat() * 120 - 60), -shift + (random.nextFloat() * 30 - 15),
+                shift + (random.nextFloat() * 120 - 60),
                 0.1f + random.nextFloat() * 2, 0.1f + random.nextFloat() * 2, 0.1f + random.nextFloat() * 2,
                 random.nextInt(3) == 0 ? random.nextFloat() : 0.0f, random.nextInt(4)));
         }
         world.commitSpawns(out);
         for (int i = 0; i < refs.size(); i++) {
             Ref r = refs.get(i);
-            world.body(i, r.handle, r.pos.x, r.pos.y, r.pos.z, 0, r.w, r.h, r.l, r.leg, r.flags);
+            world.body(i, r.handle, r.x, r.y, r.z, 0, r.w, r.h, r.l, r.leg, r.flags);
         }
         assertEquals(300, world.syncBodies(300));
 
         for (int trial = 0; trial < 100; trial++) {
-            Vector3f c = new Vector3f(random.nextFloat() * 120 - 60, random.nextFloat() * 30 - 15, random.nextFloat() * 120 - 60);
-            float radius = random.nextFloat() * 20;
+            double cx = shift + (random.nextFloat() * 120 - 60);
+            double cy = -shift + (random.nextFloat() * 30 - 15);
+            double cz = shift + (random.nextFloat() * 120 - 60);
+            double radius = random.nextFloat() * 20;
             EntityFilter f = new EntityFilter(trial % 3 == 0 ? -1 : (trial % 2 == 0 ? COW : ARROW),
                 trial % 4 == 0 ? ALIVE : 0, trial % 5 == 0 ? LIVING : 0, refs.get(trial).handle);
 
-            // getEntitiesInRange: position.distanceSquared(center) <= r*r
             List<Long> expected = new ArrayList<>();
             for (Ref r : refs) {
-                if (accepts(f, r) && r.pos.distanceSquared(c) <= radius * radius) expected.add(r.handle);
+                if (accepts(f, r) && r.distanceSquared(cx, cy, cz) <= radius * radius) expected.add(r.handle);
             }
-            world.queryRadius(c.x, c.y, c.z, radius, f, out);
+            world.queryRadius(cx, cy, cz, radius, f, out);
             assertEquals(expected, boxed(out), "radius trial " + trial);
 
-            // getNearestEntity: position.distance(p) < nearest, first wins
+            // nearest: sqrt'd distance < nearest, first wins
             long nearest = 0;
-            float best = Float.MAX_VALUE;
+            double best = Double.MAX_VALUE;
             for (Ref r : refs) {
-                float d = r.pos.distance(c);
+                double d = Math.sqrt(r.distanceSquared(cx, cy, cz));
                 if (accepts(f, r) && d < best) {
                     best = d;
                     nearest = r.handle;
                 }
             }
-            assertEquals(nearest, world.queryNearest(c.x, c.y, c.z, Float.POSITIVE_INFINITY, f), "nearest " + trial);
+            assertEquals(nearest, world.queryNearest(cx, cy, cz, Double.POSITIVE_INFINITY, f), "nearest " + trial);
 
-            // chunk column: x/z half-open, y untested
-            int cx = Math.floorDiv((int) Math.floor(c.x), 16) * 16;
-            int cz = Math.floorDiv((int) Math.floor(c.z), 16) * 16;
+            // a column: x/z half-open, y untested
+            double bx = Math.floor(cx / 16) * 16;
+            double bz = Math.floor(cz / 16) * 16;
             expected.clear();
             for (Ref r : refs) {
-                if (accepts(f, r) && r.pos.x >= cx && r.pos.x < cx + 16 && r.pos.z >= cz && r.pos.z < cz + 16) {
+                if (accepts(f, r) && r.x >= bx && r.x < bx + 16 && r.z >= bz && r.z < bz + 16) {
                     expected.add(r.handle);
                 }
             }
-            world.queryBox(cx, Float.NEGATIVE_INFINITY, cz, cx + 16, Float.POSITIVE_INFINITY, cz + 16, f, out);
+            world.queryBox(bx, Double.NEGATIVE_INFINITY, bz, bx + 16, Double.POSITIVE_INFINITY, bz + 16, f, out);
             assertEquals(expected, boxed(out), "box " + trial);
 
-            // body overlap, as Entity.BoundingBox.intersects
+            // a cube: all three axes half-open (the 3D grid)
+            double by = Math.floor(cy / 16) * 16;
             expected.clear();
-            float[] box = {c.x - 3, c.y - 3, c.z - 3, c.x + 3, c.y + 3, c.z + 3};
             for (Ref r : refs) {
-                boolean hit = r.pos.x - r.w / 2.0f < box[3] && r.pos.x + r.w / 2.0f > box[0]
-                    && r.pos.y - r.leg < box[4] && r.pos.y + r.h > box[1]
-                    && r.pos.z - r.l / 2.0f < box[5] && r.pos.z + r.l / 2.0f > box[2];
+                if (accepts(f, r) && r.x >= bx && r.x < bx + 16 && r.y >= by && r.y < by + 16 && r.z >= bz
+                    && r.z < bz + 16) {
+                    expected.add(r.handle);
+                }
+            }
+            world.queryBox(bx, by, bz, bx + 16, by + 16, bz + 16, f, out);
+            assertEquals(expected, boxed(out), "cube " + trial);
+
+            // body overlap, as Entity.BoundingBox.intersects (in double)
+            expected.clear();
+            double[] box = {cx - 3, cy - 3, cz - 3, cx + 3, cy + 3, cz + 3};
+            for (Ref r : refs) {
+                boolean hit = r.x - r.w / 2.0 < box[3] && r.x + r.w / 2.0 > box[0]
+                    && r.y - r.leg < box[4] && r.y + r.h > box[1]
+                    && r.z - r.l / 2.0 < box[5] && r.z + r.l / 2.0 > box[2];
                 if (accepts(f, r) && hit) expected.add(r.handle);
             }
             world.queryAabb(box[0], box[1], box[2], box[3], box[4], box[5], f, out);
             assertEquals(expected, boxed(out), "aabb " + trial);
         }
+    }
+
+    @Test
+    void movingTheOriginShiftsBodiesIntoTheNewFrame() {
+        long h = world.spawn(COW, ALIVE, 1.5, 2.0, 3.5, 0);
+        world.commitSpawns(out);
+        world.setOrigin(-(1L << 40), 4097, (1L << 40) + 3);
+        double[] body = new double[8];
+        assertTrue(world.bodyOf(h, body));
+        assertEquals(1.5 + (1L << 40), body[0]);
+        assertEquals(2.0 - 4097, body[1]);
+        assertEquals(3.5 - (1L << 40) - 3, body[2]);
+        world.queryRadius(body[0], body[1], body[2], 0.1, null, out);
+        assertEquals(1, out.size());
+        world.queryRadius(1.5, 2.0, 3.5, 0.1, null, out);
+        assertEquals(0, out.size(), "no longer at the old local place");
     }
 
     private static boolean accepts(EntityFilter f, Ref r) {
@@ -209,14 +260,14 @@ class EntityWorldTest {
     @Test
     void bodiesStartFromTheTypeAndFollowSyncs() {
         long h = world.spawn(COW, ALIVE | LIVING, 1, 2, 3, 90);
-        float[] body = new float[8];
+        double[] body = new double[8];
         assertTrue(world.bodyOf(h, body));
-        assertArrayEquals(new float[]{1, 2, 3, 90, 1.1f, 0.4f, 1.3f, 0.62f}, body);
+        assertArrayEquals(new double[]{1, 2, 3, 90, 1.1f, 0.4f, 1.3f, 0.62f}, body);
         assertEquals(ALIVE | LIVING, world.bodyFlags(h));
         world.body(0, h, 5, 6, 7, 45, 2, 2, 2, 0, ALIVE);
         assertEquals(1, world.syncBodies(1));
         assertTrue(world.bodyOf(h, body));
-        assertArrayEquals(new float[]{5, 6, 7, 45, 2, 2, 2, 0}, body);
+        assertArrayEquals(new double[]{5, 6, 7, 45, 2, 2, 2, 0}, body);
         assertEquals(ALIVE, world.bodyFlags(h));
     }
 

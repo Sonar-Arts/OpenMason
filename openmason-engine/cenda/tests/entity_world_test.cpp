@@ -1,8 +1,9 @@
 // Plain-assert checks for the Cenda entity model (ce_*): handles and their generations, deferred
 // spawn/despawn commits (cancellation, retirement, slot reuse), live order, type descriptors,
-// body sync + spatial queries against a brute-force reference, the float rules shared with the
-// Java code it replaced, clip clocks, and spawning from other threads. The Java side re-tests the
-// contract through FFM (EntityWorldTest).
+// body sync + spatial queries against a brute-force reference (at the origin, in a frame moved to
+// +-2^40, and with positions at 2^40 and no rebasing — ABI 2, OpenMason #142), the distance rules,
+// the 3D grid, origin moves, keys that aliased under the old int32 XZ key, clip clocks, and spawning
+// from other threads. The Java side re-tests the contract through FFM (EntityWorldTest).
 
 #include "cenda/entity.h"
 
@@ -15,6 +16,9 @@
 #include <thread>
 #include <vector>
 
+// The Java binding (engine-core entity.CendaEntities / EntityWorld) hard-codes this layout.
+static_assert(sizeof(ce_body) == 64, "ce_body layout");
+
 namespace {
 
 int failures = 0;
@@ -26,7 +30,8 @@ void check(bool ok, const char* what) {
     }
 }
 
-constexpr float kInf = std::numeric_limits<float>::infinity();
+constexpr double kInf = std::numeric_limits<double>::infinity();
+constexpr int64_t kFar = int64_t{1} << 40;
 
 ce_type_desc desc(float w, float h, float l, float leg, float yaw = 0.0f, uint32_t flags = 0u) {
     return ce_type_desc{w, h, l, leg, yaw, flags};
@@ -56,7 +61,7 @@ std::vector<ce_handle> live(ce_world* w) {
 }
 
 void testLifecycle() {
-    ce_world* w = ce_world_create(8.0f);
+    ce_world* w = ce_world_create(8);
     ce_type_desc cow = desc(1.1f, 0.4f, 1.3f, 0.62f, 180.0f, 1u);
     check(ce_type_define(w, 3, &cow, "stonebreak:cow") == CE_OK, "define type");
     check(ce_spawn(w, 4, 0u, 0, 0, 0, 0) == 0, "undefined type refuses spawn");
@@ -146,13 +151,16 @@ void testLifecycle() {
 
 struct Ref {
     ce_handle h;
-    float x, y, z, w, hgt, l, leg;
+    double x, y, z;
+    float w, hgt, l, leg;
     uint32_t flags;
     int32_t type;
 };
 
-void testQueriesMatchBruteForce() {
-    ce_world* w = ce_world_create(4.0f);
+// origin: the world's frame origin; shift: added to every position (far positions without rebasing).
+void testQueriesMatchBruteForce(int64_t ox, int64_t oy, int64_t oz, double shift) {
+    ce_world* w = ce_world_create(4);
+    check(ce_set_origin(w, ox, oy, oz) == CE_OK, "set origin");
     ce_type_desc t0 = desc(0.6f, 1.8f, 0.6f, 0.0f);
     ce_type_desc t1 = desc(1.1f, 0.4f, 1.3f, 0.62f);
     ce_type_define(w, 0, &t0, nullptr);
@@ -165,23 +173,24 @@ void testQueriesMatchBruteForce() {
     for (int i = 0; i < 400; ++i) {
         int32_t type = static_cast<int32_t>(rng() % 2u);
         ce_handle h = ce_spawn(w, type, 0u, 0, 0, 0, 0);
-        refs.push_back(Ref{h, pos(rng), pos(rng) * 0.25f, pos(rng), size(rng), size(rng), size(rng),
+        double rx = shift + pos(rng), ry = -shift + pos(rng) * 0.25, rz = -shift + pos(rng);
+        refs.push_back(Ref{h, rx, ry, rz, size(rng), size(rng), size(rng),
                            (rng() % 3u) == 0u ? size(rng) : 0.0f, static_cast<uint32_t>(rng() % 8u), type});
     }
     // A few entities on the bad side of float: they must still be found by unbounded scans.
-    refs[5].x = std::numeric_limits<float>::quiet_NaN();
+    refs[5].x = std::numeric_limits<double>::quiet_NaN();
     refs[6].z = kInf;
     commit_all(w);
     std::vector<ce_body> bodies;
     for (const Ref& r : refs) {
-        bodies.push_back(ce_body{r.h, r.x, r.y, r.z, 0.0f, r.w, r.hgt, r.l, r.leg, r.flags, 0u});
+        bodies.push_back(ce_body{r.h, r.x, r.y, r.z, 0.0f, r.w, r.hgt, r.l, r.leg, r.flags, {0u, 0u}});
     }
     check(ce_sync_bodies(w, bodies.data(), static_cast<int32_t>(bodies.size())) == 400, "sync applies all");
 
     std::vector<ce_handle> out(512);
     for (int trial = 0; trial < 200; ++trial) {
-        float cx = pos(rng), cy = pos(rng) * 0.25f, cz = pos(rng);
-        float r = trial % 50 == 0 ? kInf : size(rng) * 6.0f;
+        double cx = shift + pos(rng), cy = -shift + pos(rng) * 0.25, cz = -shift + pos(rng);
+        double r = trial % 50 == 0 ? kInf : size(rng) * 6.0;
         ce_filter f{trial % 3 == 0 ? -1 : static_cast<int32_t>(trial % 2), (trial % 4 == 0) ? 1u : 0u,
                     (trial % 5 == 0) ? 2u : 0u, 0u, refs[static_cast<size_t>(trial)].h};
         auto pass = [&](const Ref& ref) {
@@ -190,9 +199,9 @@ void testQueriesMatchBruteForce() {
         };
 
         std::vector<ce_handle> expect;
-        float r2 = r * r;
+        double r2 = r * r;
         for (const Ref& ref : refs) {
-            float dx = ref.x - cx, dy = ref.y - cy, dz = ref.z - cz;
+            double dx = ref.x - cx, dy = ref.y - cy, dz = ref.z - cz;
             if (pass(ref) && dx * dx + (dy * dy + dz * dz) <= r2) {
                 expect.push_back(ref.h);
             }
@@ -201,19 +210,19 @@ void testQueriesMatchBruteForce() {
         check(std::vector<ce_handle>(out.begin(), out.begin() + n) == expect, "radius query = brute force");
 
         ce_handle best = 0;
-        float bestD = std::numeric_limits<float>::max();
+        double bestD = std::numeric_limits<double>::max();
         for (const Ref& ref : refs) {
-            float dx = ref.x - cx, dy = ref.y - cy, dz = ref.z - cz;
-            float d = std::sqrt(dx * dx + (dy * dy + dz * dz));
+            double dx = ref.x - cx, dy = ref.y - cy, dz = ref.z - cz;
+            double d = std::sqrt(dx * dx + (dy * dy + dz * dz));
             if (pass(ref) && d < bestD) {
                 bestD = d;
                 best = ref.h;
             }
         }
-        float gotD = 0.0f;
+        double gotD = 0.0;
         check(ce_query_nearest(w, cx, cy, cz, kInf, &f, &gotD) == best && gotD == bestD, "nearest = brute force");
 
-        float box[6] = {cx - 8.0f, -kInf, cz - 8.0f, cx + 8.0f, kInf, cz + 8.0f};
+        double box[6] = {cx - 8.0, -kInf, cz - 8.0, cx + 8.0, kInf, cz + 8.0};
         expect.clear();
         for (const Ref& ref : refs) {
             if (pass(ref) && ref.x >= box[0] && ref.x < box[3] && ref.z >= box[2] && ref.z < box[5]) {
@@ -223,12 +232,25 @@ void testQueriesMatchBruteForce() {
         n = ce_query_box(w, box, &f, out.data(), 512);
         check(std::vector<ce_handle>(out.begin(), out.begin() + n) == expect, "box query = brute force");
 
-        float aabb[6] = {cx - 2.0f, cy - 2.0f, cz - 2.0f, cx + 2.0f, cy + 2.0f, cz + 2.0f};
+        // A bounded Y range: the 3D grid narrows it.
+        double box3[6] = {cx - 8.0, cy - 3.0, cz - 8.0, cx + 8.0, cy + 3.0, cz + 8.0};
         expect.clear();
         for (const Ref& ref : refs) {
-            bool hit = ref.x - ref.w / 2.0f < aabb[3] && ref.x + ref.w / 2.0f > aabb[0]
-                       && ref.y - ref.leg < aabb[4] && ref.y + ref.hgt > aabb[1]
-                       && ref.z - ref.l / 2.0f < aabb[5] && ref.z + ref.l / 2.0f > aabb[2];
+            if (pass(ref) && ref.x >= box3[0] && ref.x < box3[3] && ref.y >= box3[1] && ref.y < box3[4]
+                && ref.z >= box3[2] && ref.z < box3[5]) {
+                expect.push_back(ref.h);
+            }
+        }
+        n = ce_query_box(w, box3, &f, out.data(), 512);
+        check(std::vector<ce_handle>(out.begin(), out.begin() + n) == expect, "3D box query = brute force");
+
+        double aabb[6] = {cx - 2.0, cy - 2.0, cz - 2.0, cx + 2.0, cy + 2.0, cz + 2.0};
+        expect.clear();
+        for (const Ref& ref : refs) {
+            bool hit = ref.x - static_cast<double>(ref.w) / 2.0 < aabb[3] && ref.x + static_cast<double>(ref.w) / 2.0 > aabb[0]
+                       && ref.y - static_cast<double>(ref.leg) < aabb[4] && ref.y + static_cast<double>(ref.hgt) > aabb[1]
+                       && ref.z - static_cast<double>(ref.l) / 2.0 < aabb[5]
+                       && ref.z + static_cast<double>(ref.l) / 2.0 > aabb[2];
             if (pass(ref) && hit) {
                 expect.push_back(ref.h);
             }
@@ -243,20 +265,21 @@ void testQueriesMatchBruteForce() {
     check(total == 400 && two[0] == refs[0].h && two[1] == refs[1].h, "cap truncates, total reported");
 
     // Membership changes rebuild the index without a new sync.
-    ce_handle late = ce_spawn(w, 0, 0u, 100.0f, 0.0f, 100.0f, 0.0f);
-    check(ce_query_radius(w, 100.0f, 0.0f, 100.0f, 1.0f, nullptr, out.data(), 512) == 0, "pending not found");
+    const double lx = shift + 100.0, ly = -shift, lz = -shift + 100.0;
+    ce_handle late = ce_spawn(w, 0, 0u, lx, ly, lz, 0.0f);
+    check(ce_query_radius(w, lx, ly, lz, 1.0, nullptr, out.data(), 512) == 0, "pending not found");
     commit_all(w);
-    check(ce_query_radius(w, 100.0f, 0.0f, 100.0f, 1.0f, nullptr, out.data(), 512) == 1 && out[0] == late,
+    check(ce_query_radius(w, lx, ly, lz, 1.0, nullptr, out.data(), 512) == 1 && out[0] == late,
           "committed entity found at its spawn position");
     ce_despawn(w, late);
     despawn_all(w);
-    check(ce_query_radius(w, 100.0f, 0.0f, 100.0f, 1.0f, nullptr, out.data(), 512) == 0, "retired not found");
+    check(ce_query_radius(w, lx, ly, lz, 1.0, nullptr, out.data(), 512) == 0, "retired not found");
 
     ce_world_destroy(w);
 }
 
 void testNearestTiesAndRadiusBoundary() {
-    ce_world* w = ce_world_create(0.0f); // default cell
+    ce_world* w = ce_world_create(0); // default cell
     ce_type_desc t = desc(1, 1, 1, 0);
     ce_type_define(w, 0, &t, nullptr);
     ce_handle first = ce_spawn(w, 0, 0u, 3, 0, 0, 0);
@@ -266,14 +289,14 @@ void testNearestTiesAndRadiusBoundary() {
     check(ce_query_nearest(w, 0, 0, 0, 2.0f, nullptr, nullptr) == 0, "max radius bounds nearest");
     ce_handle out[4];
     check(ce_query_radius(w, 0, 0, 0, 3.0f, nullptr, out, 4) == 2, "radius boundary is inclusive");
-    check(ce_query_radius(w, 0, 0, 0, std::nextafter(3.0f, 0.0f), nullptr, out, 4) == 0, "just inside excludes");
+    check(ce_query_radius(w, 0, 0, 0, std::nextafter(3.0, 0.0), nullptr, out, 4) == 0, "just inside excludes");
     ce_filter onlySecond{-1, 0u, 0u, 0u, first};
     check(ce_query_nearest(w, 0, 0, 0, kInf, &onlySecond, nullptr) == second, "exclude handle");
     ce_world_destroy(w);
 }
 
 void testClipClock() {
-    ce_world* w = ce_world_create(8.0f);
+    ce_world* w = ce_world_create(8);
     ce_type_desc t = desc(1, 1, 1, 0);
     ce_type_define(w, 0, &t, nullptr);
     ce_handle h = ce_spawn(w, 0, 0u, 0, 0, 0, 0);
@@ -304,7 +327,7 @@ void testClipClock() {
 }
 
 void testSpawnFromOtherThreads() {
-    ce_world* w = ce_world_create(8.0f);
+    ce_world* w = ce_world_create(8);
     ce_type_desc t = desc(1, 1, 1, 0);
     ce_type_define(w, 0, &t, nullptr);
     constexpr int kThreads = 4;
@@ -342,12 +365,69 @@ void testSpawnFromOtherThreads() {
     ce_world_destroy(w);
 }
 
+// The old grid key was (int32 cx, int32 cz): cells 2^32 apart on x or z aliased, and y was not keyed.
+void testGridKeysNeverAlias() {
+    ce_world* w = ce_world_create(8);
+    ce_type_desc t = desc(1, 1, 1, 0);
+    ce_type_define(w, 0, &t, nullptr);
+    const double alias = 8.0 * 4294967296.0; // 2^32 cells of 8
+    ce_handle a = ce_spawn(w, 0, 0u, 4.0, 10.0, 4.0, 0);
+    ce_handle b = ce_spawn(w, 0, 0u, 4.0 + alias, 10.0, 4.0, 0);
+    ce_handle c = ce_spawn(w, 0, 0u, 4.0, -500000.0, 4.0 - alias, 0);
+    ce_handle d = ce_spawn(w, 0, 0u, 4.0, 900.0, 4.0, 0); // same column as a, far up
+    commit_all(w);
+    ce_handle out[8];
+    check(ce_query_radius(w, 4.0, 10.0, 4.0, 1.0, nullptr, out, 8) == 1 && out[0] == a, "radius: own cell only");
+    check(ce_query_radius(w, 4.0 + alias, 10.0, 4.0, 1.0, nullptr, out, 8) == 1 && out[0] == b, "radius: aliased x");
+    check(ce_query_radius(w, 4.0, -500000.0, 4.0 - alias, 1.0, nullptr, out, 8) == 1 && out[0] == c,
+          "radius: aliased z, deep y");
+    double column[6] = {0.0, -kInf, 0.0, 8.0, kInf, 8.0};
+    check(ce_query_box(w, column, nullptr, out, 8) == 2 && out[0] == a && out[1] == d, "unbounded column");
+    double low[6] = {0.0, 0.0, 0.0, 8.0, 100.0, 8.0};
+    check(ce_query_box(w, low, nullptr, out, 8) == 1 && out[0] == a, "3D cell range");
+    ce_world_destroy(w);
+}
+
+// Moving the origin shifts stored bodies into the new frame: same absolute places, same answers.
+void testOriginMoves() {
+    ce_world* w = ce_world_create(8);
+    ce_type_desc t = desc(1, 2, 1, 0.5f);
+    ce_type_define(w, 0, &t, nullptr);
+    ce_handle a = ce_spawn(w, 0, 0u, 1.5, 2.0, 3.5, 0);
+    ce_handle p = ce_spawn(w, 0, 0u, 10.0, 0.0, 0.0, 0); // still pending when the origin moves
+    std::vector<ce_handle> committed(1);
+    check(ce_commit_spawns(w, committed.data(), 1) == 1 && committed[0] == a, "commit one");
+    check(ce_query_radius(w, 1.5, 2.0, 3.5, 0.1, nullptr, nullptr, 0) == 1, "found before the move");
+    const int64_t o[3] = {-kFar, 4097, kFar + 3};
+    check(ce_set_origin(w, o[0], o[1], o[2]) == CE_OK, "move origin");
+    int64_t got[3];
+    check(ce_get_origin(w, got) == CE_OK && got[0] == o[0] && got[1] == o[1] && got[2] == o[2], "origin read back");
+    const double lx = 1.5 - static_cast<double>(o[0]), ly = 2.0 - static_cast<double>(o[1]);
+    const double lz = 3.5 - static_cast<double>(o[2]);
+    ce_body body{};
+    check(ce_body_get(w, a, &body) == 1 && body.x == lx && body.y == ly && body.z == lz, "body shifted");
+    ce_handle out[4];
+    check(ce_query_radius(w, lx, ly, lz, 0.1, nullptr, out, 4) == 1 && out[0] == a, "found after the move");
+    check(ce_query_radius(w, 1.5, 2.0, 3.5, 0.1, nullptr, out, 4) == 0, "not at the old local place");
+    double aabb[6] = {lx - 0.25, ly + 1.5, lz - 0.25, lx + 0.25, ly + 1.75, lz + 0.25};
+    check(ce_query_aabb(w, aabb, nullptr, out, 4) == 1, "body box in the new frame");
+    commit_all(w);
+    check(ce_body_get(w, p, &body) == 1 && body.x == 10.0 - static_cast<double>(o[0]), "pending body shifted too");
+    double near_d = 0.0;
+    check(ce_query_nearest(w, lx, ly, lz, kInf, nullptr, &near_d) == a && near_d == 0.0, "nearest after move");
+    ce_world_destroy(w);
+}
+
 } // namespace
 
 int main() {
     check(ce_abi_version() == CE_ABI_VERSION, "abi version");
     testLifecycle();
-    testQueriesMatchBruteForce();
+    testQueriesMatchBruteForce(0, 0, 0, 0.0);
+    testQueriesMatchBruteForce(kFar, -kFar - 7, -kFar * 3, 0.0);  // rebased far frame
+    testQueriesMatchBruteForce(0, 0, 0, static_cast<double>(kFar)); // far positions, origin 0
+    testGridKeysNeverAlias();
+    testOriginMoves();
     testNearestTiesAndRadiusBoundary();
     testClipClock();
     testSpawnFromOtherThreads();

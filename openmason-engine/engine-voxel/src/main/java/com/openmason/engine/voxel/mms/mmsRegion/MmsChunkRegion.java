@@ -22,16 +22,36 @@ import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL44;
 
+import org.joml.Vector3f;
+
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
 
 /**
- * One render region's shared GPU storage: a vertex arena (40-byte
- * {@link MmsBufferLayout} stride), a u16 index arena, and ONE VAO covering
- * both — so a whole region draws with one VAO bind and one
- * {@code glMultiDrawElementsBaseVertex} instead of a bind + draw per chunk.
+ * One render region's shared GPU storage: a vertex arena (the region
+ * format's stride), an index arena (u16 or u32; none for pulled formats, which
+ * share the quad EBO), and ONE VAO covering both — so a whole region draws
+ * with one VAO bind and one {@code glMultiDrawElementsBaseVertex} (or one GPU
+ * cull + {@code glMultiDrawElementsIndirect}) instead of a bind + draw per mesh.
+ *
+ * <h2>Cubic regions (3D, 2026-11-17)</h2>
+ * A region created with an {@link MmsRegionKey} covers 8x8x8 cubes = 256^3
+ * blocks; its origin is the key's int64 block corner, every mesh in it is
+ * REGION-LOCAL on all three axes (the packed formats address 0..256 per axis),
+ * and the per-region origin the shader sees ({@code aOrigin}) is that int64
+ * corner made camera-relative by {@link com.openmason.engine.rendering.RenderOrigin}
+ * (exact long subtraction, re-baked on every origin step). Cull bounds are
+ * region-local too ({@link #uploadLocal}); the culler adds
+ * {@link #renderOrigin(Vector3f)}. Native meshes ({@code cv_gpu_mesh}) upload
+ * straight from their {@link MemorySegment}s into the staging ring / arena.
+ *
+ * <p>Regions created without a key are the column-world path (deprecated, kept
+ * until the game drops it): the first upload fixes the origin and the legacy
+ * {@code upload(...)} overloads take world-space bounds, converted to
+ * region-local on the way in.
  *
  * <p>Chunk meshes are sub-allocated via {@link MmsArenaAllocator}. Two
  * storage modes, chosen by the plan's {@code grow} directive:
@@ -56,7 +76,7 @@ import java.util.List;
  */
 public final class MmsChunkRegion {
 
-    /** Region span: 8x8 chunk columns. */
+    /** Region span: 8 cubes per axis (cubic path; 8x8 chunk columns on the deprecated column path). */
     public static final int REGION_SHIFT = 3;
     public static final int REGION_SPAN = 1 << REGION_SHIFT;
 
@@ -79,9 +99,17 @@ public final class MmsChunkRegion {
     /** Vertex pulling: no index arena (shared EBO), quads read via a buffer texture. */
     private final boolean pulled;
     private int quadTextureId;
-    /** World-space origin shared by every mesh in the region (local-position formats). */
-    private float originX, originY, originZ;
+    /** 3D region coordinates (cubic path), or null on the column path. */
+    private final MmsRegionKey key;
+    /** Bytes per index-arena element: 2 (GL_UNSIGNED_SHORT) or 4 (GL_UNSIGNED_INT). */
+    private final int indexBytes;
+    /** World origin shared by every mesh in the region: exact int64 block corner on the cubic path. */
+    private long originBlockX, originBlockY, originBlockZ;
+    /** The same origin as doubles (column path: the first upload's mesh origin, possibly fractional). */
+    private double originX, originY, originZ;
     private boolean originSet;
+    /** Sum of live handles' draw commands (GPU-cull metadata records). */
+    private int liveCommands;
     private int originBufferId;
     private final boolean sparse;
     private final long pageSize;
@@ -106,6 +134,20 @@ public final class MmsChunkRegion {
     int gpuCmdBufferId;
     long gpuCmdOffsetBytes;
 
+    // Hi-Z two-phase state (MmsGpuCuller.beginEarlyPass/beginLatePass). The visibility
+    // history is one u32 per draw command, GPU-written by cull_late and read by the next
+    // frame's cull_early; it describes the live list only while meshListVersion is unchanged.
+    /** Bumped on every live-list change (upload / free): command indices may have moved. */
+    int meshListVersion;
+    /** The meshListVersion the history buffer describes; -1 = no history. */
+    int hizHistoryVersion = -1;
+    int hizVisBufferId;
+    int hizVisCapacity;
+    /** What this frame's phase 1 did with the region (epoch, rule, list version). */
+    long hizEarlyEpoch = -1;
+    int hizEarlyRule;
+    int hizEarlyVersion;
+
     /** Per-draw-cycle member bucket, managed by the region renderer. */
     private final List<MmsRegionMeshHandle> cycleMembers = new ArrayList<>();
     private int cycleStamp = Integer.MIN_VALUE;
@@ -127,7 +169,34 @@ public final class MmsChunkRegion {
     /** Creates a region holding meshes of an explicit format (stamp regions use {@code stampFormat()}). */
     public MmsChunkRegion(MmsVertexFormat format, VramArenaPolicy policy) {
         this(elementCount(policy.vertexInitialBytes(), format.stride()),
-            format.pulled() ? 0 : elementCount(policy.indexInitialBytes(), Short.BYTES), policy, format);
+            format.pulled() ? 0 : elementCount(policy.indexInitialBytes(), Short.BYTES), policy, format,
+            null, Short.BYTES);
+    }
+
+    /**
+     * A cubic (3D) region: 8x8x8 cubes at {@code key}, region-local meshes,
+     * u16 indices (pulled formats have none).
+     */
+    public MmsChunkRegion(MmsRegionKey key, MmsVertexFormat format, VramArenaPolicy policy) {
+        this(key, format, policy, Short.BYTES);
+    }
+
+    /**
+     * A cubic (3D) region with an explicit index width: {@code indexBytes} 4
+     * for meshes carrying u32 indices (the native stamp meshes,
+     * {@code cv_gpu_mesh.stamp_indices}), 2 for u16. Ignored for pulled formats.
+     */
+    public MmsChunkRegion(MmsRegionKey key, MmsVertexFormat format, VramArenaPolicy policy, int indexBytes) {
+        this(elementCount(policy.vertexInitialBytes(), format.stride()),
+            format.pulled() ? 0 : elementCount(policy.indexInitialBytes(), checkIndexBytes(indexBytes)),
+            policy, format, java.util.Objects.requireNonNull(key, "key"), indexBytes);
+    }
+
+    private static int checkIndexBytes(int indexBytes) {
+        if (indexBytes != Short.BYTES && indexBytes != Integer.BYTES) {
+            throw new IllegalArgumentException("index width must be 2 or 4 bytes, got " + indexBytes);
+        }
+        return indexBytes;
     }
 
     /**
@@ -139,11 +208,14 @@ public final class MmsChunkRegion {
      */
     public MmsChunkRegion(int initialVertexCapacity, int initialIndexCapacity) {
         this(initialVertexCapacity, initialIndexCapacity, VramPlans.defaultArena(),
-            MmsVertexFormat.active());
+            MmsVertexFormat.active(), null, Short.BYTES);
     }
 
     private MmsChunkRegion(int initialVertexCapacity, int initialIndexCapacity,
-                           VramArenaPolicy policy, MmsVertexFormat format) {
+                           VramArenaPolicy policy, MmsVertexFormat format,
+                           MmsRegionKey key, int indexBytes) {
+        this.key = key;
+        this.indexBytes = format.pulled() ? Short.BYTES : checkIndexBytes(indexBytes);
         this.format = format;
         this.vertexStride = format.stride();
         this.pulled = format.pulled();
@@ -170,7 +242,7 @@ public final class MmsChunkRegion {
             this.vertexVirtualBytes = virtualBytes(
                 (long) initialVertexCapacity * vertexStride, pageSize);
             this.indexVirtualBytes = pulled ? 0 : virtualBytes(
-                (long) initialIndexCapacity * Short.BYTES, pageSize);
+                (long) initialIndexCapacity * this.indexBytes, pageSize);
             this.vertexBufferId = createSparseBuffer(vertexVirtualBytes);
             this.indexBufferId = pulled ? MmsSharedQuadIndexBuffer.id() : createSparseBuffer(indexVirtualBytes);
             // Physical pages commit on demand under the first uploads — an
@@ -191,16 +263,27 @@ public final class MmsChunkRegion {
                 this.indexBufferId = GL15.glGenBuffers();
                 GL15.glBindBuffer(GL31.GL_COPY_WRITE_BUFFER, indexBufferId);
                 GL15.glBufferData(GL31.GL_COPY_WRITE_BUFFER,
-                    (long) initialIndexCapacity * Short.BYTES, GL15.GL_STATIC_DRAW);
+                    (long) initialIndexCapacity * this.indexBytes, GL15.GL_STATIC_DRAW);
             }
             GL15.glBindBuffer(GL31.GL_COPY_WRITE_BUFFER, 0);
             trackedBytes = (long) initialVertexCapacity * vertexStride
-                + (long) initialIndexCapacity * Short.BYTES;
+                + (long) initialIndexCapacity * this.indexBytes;
         }
 
         if (pulled) {
             this.quadTextureId = GL11.glGenTextures();
             attachQuadTexture();
+        }
+        if (key != null) {
+            // Cubic region: the origin is the key's int64 corner, known up front.
+            this.originBlockX = key.minBlockX();
+            this.originBlockY = key.minBlockY();
+            this.originBlockZ = key.minBlockZ();
+            this.originX = originBlockX;
+            this.originY = originBlockY;
+            this.originZ = originBlockZ;
+            this.originSet = true;
+            this.originBufferId = format.createOriginBuffer(originBlockX, originBlockY, originBlockZ);
         }
         this.vaoId = GL30.glGenVertexArrays();
         rebuildVao();
@@ -294,15 +377,15 @@ public final class MmsChunkRegion {
     }
 
     /**
-     * Uploads one packed chunk mesh into this region's arenas. The six bound
-     * parameters are the mesh's world-space AABB, recorded for the GPU-cull
-     * metadata (the engine stays agnostic of chunk dimensions — the caller
-     * supplies the box).
+     * Column path: uploads one LEGACY40 chunk mesh. The six bound parameters
+     * are the mesh's WORLD-space AABB (converted to region-local here).
      *
      * @param vertexBytes interleaved {@link MmsBufferLayout} vertex bytes
      * @param indexBytes  u16 index bytes
      * @return a live handle whose segments the caller must eventually close
+     * @deprecated column-world path; cubic regions use {@link #uploadLocal}.
      */
+    @Deprecated
     public MmsRegionMeshHandle upload(byte[] vertexBytes, byte[] indexBytes,
                                       int vertexCount, int indexCount,
                                       float minX, float minY, float minZ,
@@ -311,7 +394,12 @@ public final class MmsChunkRegion {
             MmsVertexFormat.LEGACY40, 0f, 0f, 0f, minX, minY, minZ, maxX, maxY, maxZ);
     }
 
-    /** Uploads a packed mesh: its format must match the region's; all meshes share one origin. */
+    /**
+     * Uploads a packed Java-built mesh: its format must match the region's and
+     * its origin the region's (cubic regions: the key's corner, i.e. the mesh
+     * was built region-local). Bounds are WORLD-space, converted to
+     * region-local in double here.
+     */
     public MmsRegionMeshHandle upload(MmsMeshData mesh, float minX, float minY, float minZ,
                                       float maxX, float maxY, float maxZ) {
         return upload(mesh.getPackedVertexData(), mesh.getPackedIndexData(),
@@ -323,7 +411,9 @@ public final class MmsChunkRegion {
     /**
      * @param meshFormat layout of {@code vertexBytes} — must equal this region's format
      * @param originX    world origin the mesh positions are relative to (local formats);
-     *                   the first upload fixes the region origin, later ones must agree
+     *                   on the column path the first upload fixes the region origin, later
+     *                   ones (and every upload into a cubic region) must agree
+     * @param minX       WORLD-space bounds (converted to region-local in double)
      */
     public MmsRegionMeshHandle upload(byte[] vertexBytes, byte[] indexBytes,
                                       int vertexCount, int indexCount,
@@ -336,6 +426,10 @@ public final class MmsChunkRegion {
             throw new IllegalArgumentException("Mesh format " + meshFormat
                 + " cannot join a " + format + " region");
         }
+        if (!pulled && this.indexBytes != Short.BYTES) {
+            throw new IllegalArgumentException("byte[] meshes carry u16 indices; this region holds u"
+                + (this.indexBytes * 8) + " (use uploadLocal)");
+        }
         // Every format gets an origin buffer, local-position or not: it is also
         // the seam that rebases the region into render space (RenderOrigin).
         // LEGACY40 meshes report origin (0,0,0), which agrees across uploads.
@@ -343,6 +437,9 @@ public final class MmsChunkRegion {
             this.originX = originX;
             this.originY = originY;
             this.originZ = originZ;
+            this.originBlockX = (long) Math.floor(originX);
+            this.originBlockY = (long) Math.floor(originY);
+            this.originBlockZ = (long) Math.floor(originZ);
             this.originSet = true;
             this.originBufferId = format.createOriginBuffer(originX, originY, originZ);
             rebuildVao();
@@ -351,6 +448,76 @@ public final class MmsChunkRegion {
                 "Mesh origin (%.1f,%.1f,%.1f) differs from region origin (%.1f,%.1f,%.1f)",
                 originX, originY, originZ, this.originX, this.originY, this.originZ));
         }
+        return place(MemorySegment.ofArray(vertexBytes), vertexCount,
+            pulled ? null : MemorySegment.ofArray(indexBytes), indexCount,
+            pulled ? vertexCount / 4 : 0,
+            (float) (minX - this.originX), (float) (minY - this.originY), (float) (minZ - this.originZ),
+            (float) (maxX - this.originX), (float) (maxY - this.originY), (float) (maxZ - this.originZ));
+    }
+
+    /**
+     * Uploads a REGION-LOCAL mesh into a cubic region straight from (native or
+     * heap) memory: the bytes go into the persistent staging ring (or one
+     * {@code glBufferSubData} from the segment's address) with no Java heap
+     * copy — the path for {@code cv_gpu_mesh} buffers handed out by the native
+     * streamer. Positions in the bytes are relative to this region's origin;
+     * so are the bounds. The bytes are consumed before this returns (memcpy into
+     * the ring, or {@code glBufferSubData}, which copies), so the caller may
+     * release the native mesh ({@code cv_stream_release_mesh}) right after.
+     *
+     * @param vertices    {@code vertexCount * format().stride()} bytes (pulled formats:
+     *                    4 elements per 16-byte quad record)
+     * @param vertexCount vertex-arena elements
+     * @param indices     {@code indexCount * indexBytes()} bytes; ignored (may be null) for pulled formats
+     * @param indexCount  indices (pulled formats: 6 per quad)
+     */
+    public MmsRegionMeshHandle uploadLocal(MemorySegment vertices, int vertexCount,
+                                           MemorySegment indices, int indexCount,
+                                           float minX, float minY, float minZ,
+                                           float maxX, float maxY, float maxZ) {
+        ensureNotDeleted();
+        if (key == null) {
+            throw new IllegalStateException("uploadLocal needs a cubic region (created with an MmsRegionKey)");
+        }
+        long vertexBytesNeeded = (long) vertexCount * vertexStride;
+        if (vertices.byteSize() < vertexBytesNeeded) {
+            throw new IllegalArgumentException("vertex segment holds " + vertices.byteSize()
+                + " bytes, " + vertexCount + " elements need " + vertexBytesNeeded);
+        }
+        if (!pulled) {
+            long indexBytesNeeded = (long) indexCount * indexBytes;
+            if (indices == null || indices.byteSize() < indexBytesNeeded) {
+                throw new IllegalArgumentException("index segment holds "
+                    + (indices == null ? 0 : indices.byteSize()) + " bytes, " + indexCount
+                    + " u" + (indexBytes * 8) + " indices need " + indexBytesNeeded);
+            }
+        } else if ((vertexCount & 3) != 0) {
+            throw new IllegalArgumentException("pulled meshes upload whole quads (4 elements each), got "
+                + vertexCount);
+        }
+        return place(vertices.asSlice(0, vertexBytesNeeded), vertexCount,
+            pulled ? null : indices.asSlice(0, (long) indexCount * indexBytes), indexCount,
+            pulled ? vertexCount / 4 : 0, minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
+    /**
+     * {@link #uploadLocal} for a pulled format ({@code QUAD16} / {@code WATERQUAD16} /
+     * {@code LODQUAD16}): {@code quadCount} 16-byte records, region-local bounds.
+     */
+    public MmsRegionMeshHandle uploadQuads(MemorySegment quads, int quadCount,
+                                           float minX, float minY, float minZ,
+                                           float maxX, float maxY, float maxZ) {
+        if (!pulled) {
+            throw new IllegalStateException(format + " is not a pulled quad format");
+        }
+        return uploadLocal(quads, quadCount * 4, null, quadCount * 6, minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
+    /** Allocates arena space, streams the bytes in and registers the handle. Bounds are region-local. */
+    private MmsRegionMeshHandle place(MemorySegment vertexData, int vertexCount,
+                                      MemorySegment indexData, int indexCount, int quadCount,
+                                      float minX, float minY, float minZ,
+                                      float maxX, float maxY, float maxZ) {
         MmsArenaAllocator.Segment vertexSeg = allocOrGrow(vertexAlloc, vertexCount, true);
         MmsArenaAllocator.Segment indexSeg = null;
         if (!pulled) {
@@ -370,20 +537,21 @@ public final class MmsChunkRegion {
                 (long) (vertexSeg.offset() + vertexSeg.length()) * vertexStride);
             if (indexSeg != null) {
                 ensureCommitted(false,
-                    (long) indexSeg.offset() * Short.BYTES,
-                    (long) (indexSeg.offset() + indexSeg.length()) * Short.BYTES);
+                    (long) indexSeg.offset() * indexBytes,
+                    (long) (indexSeg.offset() + indexSeg.length()) * indexBytes);
             }
         }
-        uploadBytes(vertexBufferId, (long) vertexSeg.offset() * vertexStride,
-            vertexBytes);
+        uploadBytes(vertexBufferId, (long) vertexSeg.offset() * vertexStride, vertexData);
         if (indexSeg != null) {
-            uploadBytes(indexBufferId, (long) indexSeg.offset() * Short.BYTES, indexBytes);
+            uploadBytes(indexBufferId, (long) indexSeg.offset() * indexBytes, indexData);
         }
 
         MmsRegionMeshHandle handle = new MmsRegionMeshHandle(this, vertexSeg, indexSeg, indexCount,
-            minX, minY, minZ, maxX, maxY, maxZ);
+            indexBytes, quadCount, minX, minY, minZ, maxX, maxY, maxZ);
         handle.liveIndex = liveHandles.size();
         liveHandles.add(handle);
+        liveCommands += handle.commandCount();
+        meshListVersion++;
         return handle;
     }
 
@@ -396,6 +564,8 @@ public final class MmsChunkRegion {
         if (indexAlloc != null && handle.indexSegment != null) {
             indexAlloc.free(handle.indexSegment);
         }
+        liveCommands -= handle.commandCount();
+        meshListVersion++;
         MmsRegionMeshHandle last = liveHandles.removeLast();
         if (last != handle) {
             liveHandles.set(handle.liveIndex, last);
@@ -441,16 +611,72 @@ public final class MmsChunkRegion {
         return vertexStride;
     }
 
+    /** Bytes per index-arena element (2 or 4; 2 for pulled formats, whose shared quad EBO is u16). */
+    public int indexBytes() {
+        return indexBytes;
+    }
+
+    /** GL element type of this region's draws: {@code GL_UNSIGNED_SHORT} or {@code GL_UNSIGNED_INT}. */
+    public int indexType() {
+        return indexBytes == Integer.BYTES ? GL11.GL_UNSIGNED_INT : GL11.GL_UNSIGNED_SHORT;
+    }
+
+    /** The region's 3D coordinates, or null for a column-path region. */
+    public MmsRegionKey key() {
+        return key;
+    }
+
+    /** Exact int64 block origin X (cubic regions: the key's corner). */
+    public long originBlockX() {
+        return originBlockX;
+    }
+
+    public long originBlockY() {
+        return originBlockY;
+    }
+
+    public long originBlockZ() {
+        return originBlockZ;
+    }
+
+    /** Region origin X as a float (column path compatibility; inexact past 2^24 — use {@link #originBlockX()}). */
     public float originX() {
-        return originX;
+        return (float) originX;
     }
 
     public float originY() {
-        return originY;
+        return (float) originY;
     }
 
     public float originZ() {
-        return originZ;
+        return (float) originZ;
+    }
+
+    /**
+     * The region origin made camera-relative ({@code origin - RenderOrigin}),
+     * computed in long/double and rounded once to float — what the culler adds
+     * to every region-local AABB and what the shader's {@code aOrigin.xyz}
+     * holds (before the format's Y shift). Recompute after an origin step.
+     */
+    public Vector3f renderOrigin(Vector3f dest) {
+        if (key != null) {
+            return com.openmason.engine.rendering.RenderOrigin.relative(
+                originBlockX, originBlockY, originBlockZ, dest);
+        }
+        return com.openmason.engine.rendering.RenderOrigin.relative(originX, originY, originZ, dest);
+    }
+
+    /** GL ids for the opt-in GL test (vertex arena, index arena, origin attribute buffer). */
+    int vertexBufferIdForTest() {
+        return vertexBufferId;
+    }
+
+    int indexBufferIdForTest() {
+        return indexBufferId;
+    }
+
+    int originBufferIdForTest() {
+        return originBufferId;
     }
 
     /** True when this region grows by sparse page commitment rather than copy. */
@@ -491,21 +717,83 @@ public final class MmsChunkRegion {
 
     /**
      * Writes the live set's cull metadata ({@link #GPU_META_STRIDE} bytes per
-     * mesh, in command order) into {@code dst}. The culler uploads it to fresh
-     * fenced ring space every cull: an in-place SSBO updated with
-     * {@code glBufferSubData} while the CPU ran frames ahead let queued cull
-     * dispatches read the next frame's metadata (swap-remove reorders it), and
-     * the commands they built drew stretched triangles (NVIDIA 595, Blackwell).
+     * draw command, in command order) into {@code dst}: region-local AABB
+     * ({@code minb.xyz}, {@code maxb.xyz}), then {@code (indexCount,
+     * firstIndex, baseVertex, flags)} with {@link MmsRegionMeshHandle#FLAG_ENABLED}
+     * in bit 0. The culler uploads it to fresh fenced ring space every cull:
+     * an in-place SSBO updated with {@code glBufferSubData} while the CPU ran
+     * frames ahead let queued cull dispatches read the next frame's metadata
+     * (swap-remove reorders it), and the commands they built drew stretched
+     * triangles (NVIDIA 595, Blackwell).
      */
     void writeGpuCullMeta(ByteBuffer dst) {
+        writeGpuCullMeta(dst, null);
+    }
+
+    /**
+     * {@link #writeGpuCullMeta(ByteBuffer)} that also clears the enable bit of
+     * every mesh whose WORLD-space AABB lies wholly outside the vertical box
+     * {@code keepXZ = {minX, minZ, maxX, maxZ}} (column-path compatibility for
+     * the old keep-box planes; null = no box). Computed in double.
+     */
+    void writeGpuCullMeta(ByteBuffer dst, float[] keepXZ) {
         ensureNotDeleted();
         for (MmsRegionMeshHandle h : liveHandles) {
+            int flags = h.metaFlags();
+            if (keepXZ != null && !insideKeepBox(h, keepXZ)) {
+                flags &= ~MmsRegionMeshHandle.FLAG_ENABLED;
+            }
+            writeMeta(dst, h, flags);
+        }
+    }
+
+    private boolean insideKeepBox(MmsRegionMeshHandle h, float[] keepXZ) {
+        return originX + h.maxX >= keepXZ[0] && originZ + h.maxZ >= keepXZ[1]
+            && originX + h.minX <= keepXZ[2] && originZ + h.minZ <= keepXZ[3];
+    }
+
+    /** One handle's MeshMeta records (one per draw command). Package-private for tests. */
+    static void writeMeta(ByteBuffer dst, MmsRegionMeshHandle h, int flags) {
+        for (int k = 0; k < h.commandCount(); k++) {
             dst.putFloat(h.minX).putFloat(h.minY).putFloat(h.minZ).putFloat(0f);
             dst.putFloat(h.maxX).putFloat(h.maxY).putFloat(h.maxZ).putFloat(0f);
-            dst.putInt(h.getIndexCount())
-                .putInt(h.indexSegment == null ? 0 : h.indexSegment.offset())
-                .putInt(h.baseVertex()).putInt(0);
+            dst.putInt(h.commandIndexCount(k))
+                .putInt(h.commandFirstIndex(k))
+                .putInt(h.commandBaseVertex(k)).putInt(flags);
         }
+    }
+
+    // ─── CPU culling (GL 3.2 / macOS 4.1 path, same semantics as the kernel) ──
+
+    private final Vector3f cpuOrigin = new Vector3f();
+
+    /**
+     * Appends every enabled live mesh whose region-local AABB (plus this
+     * region's camera-relative origin) passes {@code renderPlanes} to
+     * {@code batch} — the CPU twin of the GPU cull kernel, same plane test,
+     * same enable semantics. Draw it with {@code bind()} +
+     * {@code batch.draw(indexType())}.
+     *
+     * @param renderPlanes 6 render-space frustum planes (24 floats, JOML
+     *                     {@code frustumPlane} convention), or null to skip the frustum test
+     * @return commands appended
+     */
+    public int appendVisible(MmsMultiDrawBatch batch, float[] renderPlanes) {
+        ensureNotDeleted();
+        Vector3f o = renderOrigin(cpuOrigin);
+        int added = 0;
+        for (int i = 0; i < liveHandles.size(); i++) {
+            MmsRegionMeshHandle h = liveHandles.get(i);
+            if (!h.isEnabled()) {
+                continue;
+            }
+            if (renderPlanes != null && !MmsGpuCuller.aabbVisible(renderPlanes, o.x, o.y, o.z,
+                    h.minX, h.minY, h.minZ, h.maxX, h.maxY, h.maxZ)) {
+                continue;
+            }
+            added += batch.add(h);
+        }
+        return added;
     }
 
     /** Sum of live meshes' index counts (6 per quad) — a page-independent size measure. */
@@ -517,8 +805,13 @@ public final class MmsChunkRegion {
         return n;
     }
 
-    /** Command count the last cull wrote for this region (one per live mesh). */
+    /** Command count a cull writes for this region (one per live mesh, more for split pulled meshes). */
     public int gpuCommandCount() {
+        return liveCommands;
+    }
+
+    /** Live meshes in this region. */
+    public int liveMeshCount() {
         return liveHandles.size();
     }
 
@@ -532,7 +825,7 @@ public final class MmsChunkRegion {
         }
         long grown = nextCapacity(alloc.used() + length, alloc.capacity(),
             growthFactor, growthReserve, alignElements);
-        long elementBytes = vertex ? vertexStride : Short.BYTES;
+        long elementBytes = vertex ? vertexStride : indexBytes;
         if (sparse) {
             // Sparse growth: pure bookkeeping — capacity extends in place,
             // offsets never move, pages commit under the upload that follows.
@@ -672,7 +965,7 @@ public final class MmsChunkRegion {
             return decommit(vertex, dead);
         }
         MmsArenaAllocator alloc = vertex ? vertexAlloc : indexAlloc;
-        long elementBytes = vertex ? vertexStride : Short.BYTES;
+        long elementBytes = vertex ? vertexStride : indexBytes;
         long committed = (long) pages.cardinality() * pageSize;
         if (committed == 0) {
             return false;
@@ -697,7 +990,7 @@ public final class MmsChunkRegion {
     private BitSet deadPages(boolean vertex) {
         BitSet pages = vertex ? vertexPages : indexPages;
         MmsArenaAllocator alloc = vertex ? vertexAlloc : indexAlloc;
-        long elementBytes = vertex ? vertexStride : Short.BYTES;
+        long elementBytes = vertex ? vertexStride : indexBytes;
         BitSet live = new BitSet();
         alloc.forEachLive((offset, length) -> {
             int from = (int) ((long) offset * elementBytes / pageSize);
@@ -774,7 +1067,7 @@ public final class MmsChunkRegion {
     private static final boolean ARENA_DEBUG = EngineProperties.flag("arena.debug");
 
     private void resizeArena(MmsArenaAllocator alloc, long newCapacity, boolean vertex) {
-        int elementBytes = vertex ? vertexStride : Short.BYTES;
+        int elementBytes = vertex ? vertexStride : indexBytes;
         if (ARENA_DEBUG) {
             System.out.println("[arena] " + format + (vertex ? " vertex" : " index")
                 + (newCapacity < alloc.capacity() ? " TRIM " : " GROW ")
@@ -867,19 +1160,32 @@ public final class MmsChunkRegion {
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
     }
 
-    private void uploadBytes(int bufferId, long offsetBytes, byte[] data) {
-        // Preferred path: persistent-mapped staging ring (GL 4.4) — CPU writes
-        // land directly in mapped memory and the GPU copies them in, with no
-        // driver-side staging allocation per upload.
+    /**
+     * Streams {@code data} (heap or native) into {@code bufferId} at
+     * {@code offsetBytes}. Preferred path: the persistent-mapped staging ring
+     * (GL 4.4) — one memcpy into mapped memory, then a GPU-side copy, no
+     * driver staging allocation. Fallback: {@code glBufferSubData} straight
+     * from a native segment's address, or via a pooled direct buffer for heap
+     * data.
+     */
+    private void uploadBytes(int bufferId, long offsetBytes, MemorySegment data) {
+        if (data.byteSize() == 0) {
+            return;
+        }
         MmsStagingRing ring = MmsStagingRing.sharedInstance();
         if (ring != null && ring.upload(bufferId, offsetBytes, data)) {
             return;
         }
-        ByteBuffer staging = MmsUploadBufferPool.acquire(data.length);
-        staging.put(data);
-        staging.flip();
         GL15.glBindBuffer(GL31.GL_COPY_WRITE_BUFFER, bufferId);
-        GL15.glBufferSubData(GL31.GL_COPY_WRITE_BUFFER, offsetBytes, staging);
+        if (data.isNative()) {
+            GL15.nglBufferSubData(GL31.GL_COPY_WRITE_BUFFER, offsetBytes, data.byteSize(), data.address());
+        } else {
+            int len = Math.toIntExact(data.byteSize());
+            ByteBuffer staging = MmsUploadBufferPool.acquire(len);
+            MemorySegment.ofBuffer(staging).copyFrom(data);
+            staging.limit(len);
+            GL15.glBufferSubData(GL31.GL_COPY_WRITE_BUFFER, offsetBytes, staging);
+        }
         GL15.glBindBuffer(GL31.GL_COPY_WRITE_BUFFER, 0);
     }
 
@@ -909,7 +1215,15 @@ public final class MmsChunkRegion {
             GL11.glDeleteTextures(quadTextureId);
             quadTextureId = 0;
         }
+        if (hizVisBufferId != 0) {
+            GL15.glDeleteBuffers(hizVisBufferId);
+            hizVisBufferId = 0;
+            hizVisCapacity = 0;
+        }
+        hizHistoryVersion = -1;
         liveHandles.clear();
+        liveCommands = 0;
+        meshListVersion++;
         cancelPendingDecommit(0);
         cancelPendingDecommit(1);
         GpuMemoryTracker.getInstance()

@@ -188,5 +188,8 @@ check_abi "behaviour scheduler" "$HERE/native/kernels/include/cenda/behavior.h" 
   "$HERE/../engine-core/src/main/java/com/openmason/engine/entity/CendaBehaviors.java"
 check_abi "navigation" "$HERE/native/kernels/include/cenda/nav.h" CN_ABI_VERSION \
   "$HERE/../engine-core/src/main/java/com/openmason/engine/nav/CendaNav.java"
+# The voxel world (cv_*, #141) has no Java fallback either: CubeWorld.create throws with this diagnostic.
+check_abi "voxel world" "$HERE/native/kernels/include/cenda/voxel_world.h" CV_ABI_VERSION \
+  "$HERE/../engine-voxel/src/main/java/com/openmason/engine/voxel/world/CendaVoxelWorld.java"
 
 echo "[cenda] kernels ready: $LIB"

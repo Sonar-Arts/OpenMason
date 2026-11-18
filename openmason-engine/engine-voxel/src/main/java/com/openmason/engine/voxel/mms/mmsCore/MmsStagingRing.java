@@ -10,6 +10,7 @@ import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL44;
 
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 
 /**
@@ -98,6 +99,8 @@ public final class MmsStagingRing implements AutoCloseable {
     private final long capacity;
     private final long sliceBytes;
     private final ByteBuffer mapped;
+    /** The same mapping as a segment, for bulk copies from native ({@code cv_gpu_mesh}) memory. */
+    private final MemorySegment mappedSegment;
     private final long[] sliceFences = new long[SLICES];
     private long head;
     private int currentSlice = -1;
@@ -116,6 +119,7 @@ public final class MmsStagingRing implements AutoCloseable {
             GL15.glDeleteBuffers(bufferId);
             throw new IllegalStateException("glMapBufferRange(PERSISTENT|COHERENT) returned null");
         }
+        this.mappedSegment = MemorySegment.ofBuffer(mapped);
         GpuMemoryTracker.getInstance().track(GpuMemoryTracker.Category.OTHER, capacity);
     }
 
@@ -126,10 +130,22 @@ public final class MmsStagingRing implements AutoCloseable {
      * alignment rule) — the caller must then use its classic upload path.
      */
     public boolean upload(int targetBuffer, long targetOffsetBytes, byte[] data) {
+        return upload(targetBuffer, targetOffsetBytes, MemorySegment.ofArray(data));
+    }
+
+    /**
+     * {@link #upload(int, long, byte[])} from any memory segment — heap, or the
+     * native meshes the cubic streamer hands out ({@code cv_gpu_mesh}): one
+     * memcpy from the segment into the mapped ring, no Java heap copy.
+     */
+    public boolean upload(int targetBuffer, long targetOffsetBytes, MemorySegment data) {
         if (closed) {
             return false;
         }
-        int len = data.length;
+        if (data.byteSize() > sliceBytes) {
+            return false;
+        }
+        int len = (int) data.byteSize();
         if (len == 0) {
             return true;
         }
@@ -152,9 +168,7 @@ public final class MmsStagingRing implements AutoCloseable {
             currentSlice = slice;
         }
 
-        mapped.clear();
-        mapped.position((int) head);
-        mapped.put(data, 0, len);
+        MemorySegment.copy(data, 0L, mappedSegment, head, len);
 
         GL15.glBindBuffer(GL31.GL_COPY_READ_BUFFER, bufferId);
         GL15.glBindBuffer(GL31.GL_COPY_WRITE_BUFFER, targetBuffer);

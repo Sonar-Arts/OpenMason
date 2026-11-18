@@ -22,20 +22,26 @@ class VramPlansTest {
     }
 
     /**
-     * The builtin pools must mirror the constants the allocators shipped with
-     * before CEARL existed — this is the "no plan file, no behavior change"
-     * guarantee. 16384 vertices × 40 B, 24576 indices × 2 B, and the LOD
-     * batcher's 128k/192k and 32k/48k element counts.
+     * The builtin pools: the LOD pools and the staging ring keep the constants
+     * the allocators shipped with before CEARL existed (128k/192k and 32k/48k
+     * element counts); the near-terrain pools are sized for the cubic runtime's
+     * 3D regions (2026-11-17), each with its own policy.
      */
     @Test
-    void builtinMirrorsPreCearlConstants() {
+    void builtinPools() {
         VramArenaPolicy chunk = VramPlans.arena(VramPlans.POOL_CHUNK_MESH);
-        assertEquals(16 * 1024 * 40L, chunk.vertexInitialBytes());
-        assertEquals(24 * 1024 * 2L, chunk.indexInitialBytes());
-        assertEquals(1.75, chunk.growthFactor());
-        assertEquals(0.25, chunk.growthReserve());
+        assertEquals(2L << 20, chunk.vertexInitialBytes());
+        assertEquals(64L << 10, chunk.indexInitialBytes());
+        assertEquals(1.5, chunk.growthFactor());
+        assertEquals(0.125, chunk.growthReserve());
         assertEquals(4, chunk.alignElements());
-        assertEquals(0, chunk.trimFraction()); // pre-CEARL arenas never shrank
+        assertEquals(0.4, chunk.trimFraction());
+        assertTrue(chunk.sparseGrowth());
+        assertEquals(VramPlans.CUBE_REGION_WATER, VramPlans.arena(VramPlans.POOL_CHUNK_WATER));
+        assertEquals(VramPlans.CUBE_REGION_STAMP, VramPlans.arena(VramPlans.POOL_CHUNK_STAMP));
+        // u32 stamp indices: 6 per 4 COMPACT20 vertices of 20 B = 0.3x the vertex bytes.
+        assertTrue(VramPlans.CUBE_REGION_STAMP.indexInitialBytes()
+            >= VramPlans.CUBE_REGION_STAMP.vertexInitialBytes() * 3 / 10);
 
         VramArenaPolicy lod = VramPlans.arena(VramPlans.POOL_LOD_TERRAIN);
         assertEquals(128 * 1024 * 40L, lod.vertexInitialBytes());
@@ -46,6 +52,11 @@ class VramPlansTest {
         assertEquals(48 * 1024 * 2L, water.indexInitialBytes());
 
         assertEquals(8L << 20, VramPlans.budgetBytes(VramPlans.POOL_STAGING, 0));
+
+        // The default growth policy (explicit-capacity regions, unknown pools) is unchanged.
+        assertEquals(16 * 1024 * 40L, VramPlans.defaultArena().vertexInitialBytes());
+        assertEquals(1.75, VramPlans.defaultArena().growthFactor());
+        assertEquals(0, VramPlans.defaultArena().trimFraction());
     }
 
     @Test

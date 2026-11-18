@@ -2,11 +2,12 @@ package com.openmason.engine.nav;
 
 /**
  * A ground body as it stands this tick ({@code cn_body}), filled by the host before
- * {@link GroundAgent#tick}. Reusable.
+ * {@link GroundAgent#tick}. Reusable. The position is a double in the caller's frame (the agent's
+ * origin for {@link GroundAgent#tick}, the physics world's for {@link NavSteering}).
  */
 public final class AgentBody {
     /** Origin: the top of the legs. */
-    public float x, y, z;
+    public double x, y, z;
     /** Degrees. */
     public float yaw;
     /** Feet = y - legHeight. */

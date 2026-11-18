@@ -11,9 +11,12 @@ import java.util.Map;
  * and the allocation call sites ({@code MmsChunkRegion} arenas, the LOD region
  * batcher, the staging ring).
  *
- * <p>The <b>builtin plan</b> mirrors the constants those systems shipped with
- * before CEARL existed, byte for byte — so with no plan installed (or a plan
- * that fails to compile) behavior is identical to the pre-CEARL engine.
+ * <p>The <b>builtin plan</b>: the near-terrain pools ({@code chunk_mesh},
+ * {@code chunk_water}, {@code chunk_stamp}) are sized for the cubic runtime's
+ * 3D regions (8x8x8 cubes = 256^3 blocks, region-local pulled quads; see
+ * {@link #CUBE_REGION_MESH}); the LOD pools, the staging ring and the
+ * {@link #defaultArena() default growth policy} keep the constants they shipped
+ * with before CEARL existed.
  * {@link #install} merges an incoming plan over the builtin pools: a plan only
  * has to name what it changes, and a pool it omits keeps its proven defaults.
  *
@@ -37,6 +40,38 @@ public final class VramPlans {
         48L * 1024,           // 24576 u16 indices
         1.75, 0.25, 4, 0, false);
 
+    /**
+     * Cubic region terrain arena (2026-11-17). A region is 256x256 blocks of
+     * footprint — four times the old 8x8-column region — but only the cubes
+     * that actually hold faces upload anything (uniform air/stone cubes are
+     * empty meshes and cost nothing), and the surface usually splits across
+     * two Y regions. The old dense column region carried ~1.3 MiB of 16-byte
+     * pulled quads, so a surface region starts at 2 MiB (131072 quads) and
+     * grows sparse (page commitment) where the driver allows; trim at 40%
+     * gives back what a region stops using. Indices are unused by pulled
+     * regions (kept for the compact/legacy formats).
+     */
+    public static final VramArenaPolicy CUBE_REGION_MESH = new VramArenaPolicy(
+        2L << 20, 64L * 1024, 1.5, 0.125, 4, 0.4, true);
+
+    /**
+     * Cubic region water (WATERQUAD16, greedy-merged per cube): only regions
+     * holding a sea level or lakes upload, and a flat sea is a handful of
+     * 32-wide records per cube — 512 KiB covers a full ocean region.
+     */
+    public static final VramArenaPolicy CUBE_REGION_WATER = new VramArenaPolicy(
+        512L * 1024, 24L * 1024, 1.5, 0.125, 4, 0.4, true);
+
+    /**
+     * Cubic region stamps (COMPACT20 vertices + u32 indices from the native
+     * stamp emitter: snow layers, stairs, slabs, crosses, models). ~45 KiB per
+     * old 16x16 chunk in a tundra ⇒ ~3 MiB for a dense 256^2 surface region;
+     * start at 1 MiB. Index bytes are sized for u32 (6 indices per 4 vertices of
+     * 20 B ⇒ 0.3x the vertex bytes).
+     */
+    public static final VramArenaPolicy CUBE_REGION_STAMP = new VramArenaPolicy(
+        1L << 20, 320L * 1024, 1.5, 0.125, 4, 0.4, true);
+
     private static final VramPlan BUILTIN = buildBuiltin();
 
     private static volatile VramPlan active = BUILTIN;
@@ -48,7 +83,13 @@ public final class VramPlans {
         LinkedHashMap<String, VramPool> pools = new LinkedHashMap<>();
         pools.put(POOL_CHUNK_MESH, new VramPool(POOL_CHUNK_MESH,
             GpuMemoryTracker.Category.CHUNK_MESH, 0, 100,
-            VramPool.Storage.STATIC, VramPool.Grow.COPY, DEFAULT_GROWTH_CHUNK));
+            VramPool.Storage.STATIC, VramPool.Grow.SPARSE, CUBE_REGION_MESH));
+        pools.put(POOL_CHUNK_WATER, new VramPool(POOL_CHUNK_WATER,
+            GpuMemoryTracker.Category.CHUNK_MESH, 0, 90,
+            VramPool.Storage.STATIC, VramPool.Grow.SPARSE, CUBE_REGION_WATER));
+        pools.put(POOL_CHUNK_STAMP, new VramPool(POOL_CHUNK_STAMP,
+            GpuMemoryTracker.Category.CHUNK_MESH, 0, 95,
+            VramPool.Storage.STATIC, VramPool.Grow.SPARSE, CUBE_REGION_STAMP));
         pools.put(POOL_LOD_TERRAIN, new VramPool(POOL_LOD_TERRAIN,
             GpuMemoryTracker.Category.CHUNK_MESH, 0, 60,
             VramPool.Storage.STATIC, VramPool.Grow.COPY,

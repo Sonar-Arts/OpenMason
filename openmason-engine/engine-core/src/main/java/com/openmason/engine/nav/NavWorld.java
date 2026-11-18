@@ -8,6 +8,7 @@ import java.lang.ref.Cleaner;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static com.openmason.engine.nav.CendaNav.F32;
+import static com.openmason.engine.nav.CendaNav.F64;
 import static com.openmason.engine.nav.CendaNav.I32;
 import static com.openmason.engine.nav.CendaNav.I64;
 import static com.openmason.engine.nav.CendaNav.rethrow;
@@ -19,6 +20,16 @@ import static com.openmason.engine.nav.CendaNav.rethrow;
  * {@link #step} once per simulation tick, on the owner thread, with an expansion budget. The rules
  * live in C++ ({@code cenda/native/kernels/src/nav/}, contract in {@code nav.h}); this class only
  * marshals.
+ *
+ * <p><b>Coordinates (OpenMason #142, CN ABI 3).</b> Cells are ABSOLUTE {@code long}s ({@link #cell},
+ * the Y bounds, {@link Reach} cells); Y is signed and unbounded ({@link #Y_UNBOUNDED_MIN},
+ * {@link #Y_UNBOUNDED_MAX}). Positions in raw queries, the waypoints they return and reach surfaces
+ * are {@code double}s relative to this world's frame origin ({@link #setOrigin}, default 0) — keep it
+ * equal to the physics world's. Agents have their own frame ({@link GroundAgent#setOrigin}); probes
+ * use the physics world's. Moving an origin never invalidates a queued search or a finished result:
+ * routes are stored against absolute cells and read out in the frame current at the time. Searches do
+ * their float math relative to an anchor near their start, so precision does not depend on the
+ * distance from 0.
  *
  * <p><b>Threads.</b> Owned by the physics world's owner thread; {@link #stats()} may be read from
  * any thread. Close it before its physics world.
@@ -39,6 +50,11 @@ public final class NavWorld implements AutoCloseable {
     public static final int SEARCH_CANCELLED = 4;
     public static final int SEARCH_OUT_OF_RANGE = 5;
 
+    /** No lower Y bound ({@link #create}, {@link AirProfile}, {@link NavFlood}). */
+    public static final long Y_UNBOUNDED_MIN = Long.MIN_VALUE;
+    /** No upper Y bound. */
+    public static final long Y_UNBOUNDED_MAX = Long.MAX_VALUE;
+
     private static final Cleaner CLEANER = Cleaner.create();
 
     /** Service counters; {@code averageMicros} is the mean search time. */
@@ -46,31 +62,31 @@ public final class NavWorld implements AutoCloseable {
                         long averageMicros) {
     }
 
-    /** A ground search: from the walker's FEET to a goal. */
-    public record GroundQuery(float feetX, float feetY, float feetZ, float goalX, float goalY, float goalZ,
+    /** A ground search: from the walker's FEET to a goal (frame positions). */
+    public record GroundQuery(double feetX, double feetY, double feetZ, double goalX, double goalY, double goalZ,
                               float goalRadius, int snapDown, int snapUp, GroundProfile profile, NavLimits limits) {
     }
 
-    /** An air search: from the flyer's position to a goal, nudged onto flyable air within goalSnapCells. */
-    public record AirQuery(float fromX, float fromY, float fromZ, float goalX, float goalY, float goalZ,
+    /** An air search: from the flyer's position to a goal (frame positions), nudged onto flyable air within goalSnapCells. */
+    public record AirQuery(double fromX, double fromY, double fromZ, double goalX, double goalY, double goalZ,
                            float goalRadius, int goalSnapCells, AirProfile profile, NavLimits limits) {
     }
 
     /**
-     * Cells a walker can reach ({@link #reachGround}), cheapest first: cell {@code i}'s feet cell,
-     * the index of the cell it was reached from ({@code -1} for the start), the height its feet rest
-     * at and its route cost. Walk {@code parent} back from any cell for the way there.
+     * Cells a walker can reach ({@link #reachGround}), cheapest first: cell {@code i}'s ABSOLUTE feet
+     * cell, the index of the cell it was reached from ({@code -1} for the start), the frame height its
+     * feet rest at and its route cost. Walk {@code parent} back from any cell for the way there.
      */
-    public record Reach(int count, int[] cells, int[] parents, float[] surfaces, float[] costs) {
-        public int x(int i) {
+    public record Reach(int count, long[] cells, int[] parents, double[] surfaces, float[] costs) {
+        public long x(int i) {
             return cells[i * 3];
         }
 
-        public int y(int i) {
+        public long y(int i) {
             return cells[i * 3 + 1];
         }
 
-        public int z(int i) {
+        public long z(int i) {
             return cells[i * 3 + 2];
         }
 
@@ -78,7 +94,7 @@ public final class NavWorld implements AutoCloseable {
             return parents[i];
         }
 
-        public float surface(int i) {
+        public double surface(int i) {
             return surfaces[i];
         }
 
@@ -106,6 +122,7 @@ public final class NavWorld implements AutoCloseable {
     private final MemorySegment query;
     private final MemorySegment info;
     private MemorySegment points;
+    private long originX, originY, originZ;
 
     private NavWorld(PhysicsWorld physics, MemorySegment world) {
         this.physics = physics;
@@ -114,7 +131,7 @@ public final class NavWorld implements AutoCloseable {
         this.statsOut = Arena.ofAuto().allocate(CendaNav.STATS_BYTES, 8);
         this.query = arena.allocate(CendaNav.GROUND_QUERY_BYTES, 8);
         this.info = arena.allocate(CendaNav.SEARCH_INFO_BYTES, 8);
-        this.points = arena.allocate(F32, 3 * 64);
+        this.points = arena.allocate(F64, 3 * 64);
         this.cleanable = CLEANER.register(this, new Destroy(world));
     }
 
@@ -124,13 +141,13 @@ public final class NavWorld implements AutoCloseable {
      * @param solidMask   shape categories that occupy space (a walker's collision categories)
      * @param hazardMask  shape categories that are impassable hazards (0 = none)
      * @param fluidMask   fluid categories that are liquid
-     * @param minY        cells below are unknown
-     * @param maxY        cells at or above are unknown
+     * @param minY        absolute; cells below are unknown ({@link #Y_UNBOUNDED_MIN}: none)
+     * @param maxY        absolute; cells at or above are unknown ({@link #Y_UNBOUNDED_MAX}: none)
      * @param maxInFlight queued searches before refusing more (&lt;= 0 picks 64)
      * @throws IllegalStateException when Cenda navigation is unavailable (the message says why)
      */
-    public static NavWorld create(PhysicsWorld physics, int solidMask, int hazardMask, int fluidMask, int minY,
-                                  int maxY, int maxInFlight) {
+    public static NavWorld create(PhysicsWorld physics, int solidMask, int hazardMask, int fluidMask, long minY,
+                                  long maxY, int maxInFlight) {
         CendaNav.requireAvailable();
         if (physics == null) {
             throw new IllegalArgumentException("physics");
@@ -141,9 +158,9 @@ public final class NavWorld implements AutoCloseable {
             desc.set(I32, 8, solidMask);
             desc.set(I32, 12, hazardMask);
             desc.set(I32, 16, fluidMask);
-            desc.set(I32, 20, minY);
-            desc.set(I32, 24, maxY);
-            desc.set(I32, 28, maxInFlight);
+            desc.set(I32, 20, maxInFlight);
+            desc.set(I64, 24, minY);
+            desc.set(I64, 32, maxY);
             MemorySegment w = (MemorySegment) CendaNav.WORLD_CREATE.invokeExact(desc);
             if (w.equals(MemorySegment.NULL)) {
                 throw new IllegalArgumentException("cn_world_create: " + CendaNav.lastError());
@@ -204,10 +221,42 @@ public final class NavWorld implements AutoCloseable {
         return current == null ? MemorySegment.NULL : current;
     }
 
+    // ---- the frame --------------------------------------------------------------------------------
+
+    /**
+     * Moves this world's frame origin (raw queries, their waypoints, reach surfaces). Queued searches
+     * and finished results stay valid. Owner thread.
+     */
+    public void setOrigin(long ox, long oy, long oz) {
+        try {
+            int rc = (int) CendaNav.WORLD_SET_ORIGIN.invokeExact(w(), ox, oy, oz);
+            if (rc != 0) {
+                throw new IllegalStateException("cn_world_set_origin: " + CendaNav.lastError());
+            }
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+        originX = ox;
+        originY = oy;
+        originZ = oz;
+    }
+
+    public long originX() {
+        return originX;
+    }
+
+    public long originY() {
+        return originY;
+    }
+
+    public long originZ() {
+        return originZ;
+    }
+
     // ---- cells and the service -----------------------------------------------------------------
 
-    /** The cell's flags ({@code CELL_*}), as a search classifies it. */
-    public int cell(int x, int y, int z) {
+    /** The (absolute) cell's flags ({@code CELL_*}), as a search classifies it. */
+    public int cell(long x, long y, long z) {
         try {
             return (int) CendaNav.CELL.invokeExact(w(), x, y, z, topOut);
         } catch (Throwable t) {
@@ -216,7 +265,7 @@ public final class NavWorld implements AutoCloseable {
     }
 
     /** The cell's top as a search sees it (quantised to 1/1024): solid height or liquid surface, else 0. */
-    public float cellTop(int x, int y, int z) {
+    public float cellTop(long x, long y, long z) {
         cell(x, y, z);
         return topOut.get(F32, 0);
     }
@@ -262,36 +311,40 @@ public final class NavWorld implements AutoCloseable {
      * {@code cn_reach_ground}): cheapest first, within {@code radius} columns of the start, at most
      * {@code maxCells}, none costing more than {@code maxCost}. Synchronous, owner thread.
      */
-    public Reach reachGround(float feetX, float feetY, float feetZ, int snapDown, int snapUp, int radius, int maxCells,
-                             float maxCost, GroundProfile profile) {
+    public Reach reachGround(double feetX, double feetY, double feetZ, int snapDown, int snapUp, int radius,
+                             int maxCells, float maxCost, GroundProfile profile) {
         try (Arena a = Arena.ofConfined()) {
+            // cn_reach_query (96 bytes): double feet[3]; int32 snap_down, snap_up, radius, max_cells;
+            // float max_cost; int32 reserved; profile (48).
             MemorySegment q = a.allocate(CendaNav.REACH_QUERY_BYTES, 8);
-            q.set(F32, 0, feetX);
-            q.set(F32, 4, feetY);
-            q.set(F32, 8, feetZ);
-            q.set(I32, 12, snapDown);
-            q.set(I32, 16, snapUp);
-            q.set(I32, 20, radius);
-            q.set(I32, 24, maxCells);
-            q.set(F32, 28, maxCost);
-            CendaNav.writeGroundProfile(q, 32, profile);
+            q.set(F64, 0, feetX);
+            q.set(F64, 8, feetY);
+            q.set(F64, 16, feetZ);
+            q.set(I32, 24, snapDown);
+            q.set(I32, 28, snapUp);
+            q.set(I32, 32, radius);
+            q.set(I32, 36, maxCells);
+            q.set(F32, 40, maxCost);
+            q.set(I32, 44, 0);
+            CendaNav.writeGroundProfile(q, 48, profile);
             MemorySegment out = a.allocate(CendaNav.REACH_CELL_BYTES * Math.max(1, maxCells), 8);
             int n = (int) CendaNav.REACH_GROUND.invokeExact(w(), q, out, maxCells);
             if (n < 0) {
                 throw new IllegalArgumentException("cn_reach_ground: " + CendaNav.lastError());
             }
-            int[] cells = new int[n * 3];
+            long[] cells = new long[n * 3];
             int[] parents = new int[n];
-            float[] surfaces = new float[n];
+            double[] surfaces = new double[n];
             float[] costs = new float[n];
+            // cn_reach_cell (40 bytes): int64 x, y, z; int32 parent; float cost; double surface.
             for (int i = 0; i < n; i++) {
                 long o = i * CendaNav.REACH_CELL_BYTES;
-                cells[i * 3] = out.get(I32, o);
-                cells[i * 3 + 1] = out.get(I32, o + 4);
-                cells[i * 3 + 2] = out.get(I32, o + 8);
-                parents[i] = out.get(I32, o + 12);
-                surfaces[i] = out.get(F32, o + 16);
-                costs[i] = out.get(F32, o + 20);
+                cells[i * 3] = out.get(I64, o);
+                cells[i * 3 + 1] = out.get(I64, o + 8);
+                cells[i * 3 + 2] = out.get(I64, o + 16);
+                parents[i] = out.get(I32, o + 24);
+                costs[i] = out.get(F32, o + 28);
+                surfaces[i] = out.get(F64, o + 32);
             }
             return new Reach(n, cells, parents, surfaces, costs);
         } catch (Throwable t) {
@@ -303,19 +356,21 @@ public final class NavWorld implements AutoCloseable {
 
     /** Queues a ground search. Returns its id, or 0 when the queue is full. */
     public long searchGround(GroundQuery q) {
+        // cn_ground_query (128 bytes): double feet[3], goal[3]; float goal_radius; int32 snap_down,
+        // snap_up, reserved; profile (48); limits (16).
         MemorySegment s = query;
-        s.set(F32, 0, q.feetX());
-        s.set(F32, 4, q.feetY());
-        s.set(F32, 8, q.feetZ());
-        s.set(F32, 12, q.goalX());
-        s.set(F32, 16, q.goalY());
-        s.set(F32, 20, q.goalZ());
-        s.set(F32, 24, q.goalRadius());
-        s.set(I32, 28, q.snapDown());
-        s.set(I32, 32, q.snapUp());
-        s.set(I32, 36, 0);
-        CendaNav.writeGroundProfile(s, 40, q.profile());
-        CendaNav.writeLimits(s, 88, q.limits());
+        s.set(F64, 0, q.feetX());
+        s.set(F64, 8, q.feetY());
+        s.set(F64, 16, q.feetZ());
+        s.set(F64, 24, q.goalX());
+        s.set(F64, 32, q.goalY());
+        s.set(F64, 40, q.goalZ());
+        s.set(F32, 48, q.goalRadius());
+        s.set(I32, 52, q.snapDown());
+        s.set(I32, 56, q.snapUp());
+        s.set(I32, 60, 0);
+        CendaNav.writeGroundProfile(s, 64, q.profile());
+        CendaNav.writeLimits(s, 112, q.limits());
         try {
             return (long) CendaNav.SEARCH_GROUND.invokeExact(w(), s);
         } catch (Throwable t) {
@@ -325,17 +380,19 @@ public final class NavWorld implements AutoCloseable {
 
     /** Queues an air search. Returns its id, or 0 when the queue is full. */
     public long searchAir(AirQuery q) {
+        // cn_air_query (120 bytes): double from[3], goal[3]; float goal_radius; int32 goal_snap_cells;
+        // profile (48); limits (16).
         MemorySegment s = query;
-        s.set(F32, 0, q.fromX());
-        s.set(F32, 4, q.fromY());
-        s.set(F32, 8, q.fromZ());
-        s.set(F32, 12, q.goalX());
-        s.set(F32, 16, q.goalY());
-        s.set(F32, 20, q.goalZ());
-        s.set(F32, 24, q.goalRadius());
-        s.set(I32, 28, q.goalSnapCells());
-        CendaNav.writeAirProfile(s, 32, q.profile());
-        CendaNav.writeLimits(s, 72, q.limits());
+        s.set(F64, 0, q.fromX());
+        s.set(F64, 8, q.fromY());
+        s.set(F64, 16, q.fromZ());
+        s.set(F64, 24, q.goalX());
+        s.set(F64, 32, q.goalY());
+        s.set(F64, 40, q.goalZ());
+        s.set(F32, 48, q.goalRadius());
+        s.set(I32, 52, q.goalSnapCells());
+        CendaNav.writeAirProfile(s, 56, q.profile());
+        CendaNav.writeLimits(s, 104, q.limits());
         try {
             return (long) CendaNav.SEARCH_AIR.invokeExact(w(), s);
         } catch (Throwable t) {
@@ -358,12 +415,12 @@ public final class NavWorld implements AutoCloseable {
             boolean complete = info.get(I32, 8) != 0;
             int expansions = info.get(I32, 12);
             float cost = info.get(F32, 16);
-            if (points.byteSize() < (long) n * 12L) {
-                points = arena.allocate(F32, (long) n * 3L);
+            if (points.byteSize() < (long) n * 24L) {
+                points = arena.allocate(F64, (long) n * 3L);
             }
             int got = (int) CendaNav.SEARCH_POINTS.invokeExact(w(), id, points, n);
-            float[] xyz = new float[got * 3];
-            MemorySegment.copy(points, F32, 0, xyz, 0, xyz.length);
+            double[] xyz = new double[got * 3];
+            MemorySegment.copy(points, F64, 0, xyz, 0, xyz.length);
             return new Outcome(status, xyz.length == 0 ? NavPath.EMPTY : new NavPath(xyz, complete), expansions, cost);
         } catch (Throwable t) {
             throw rethrow(t);

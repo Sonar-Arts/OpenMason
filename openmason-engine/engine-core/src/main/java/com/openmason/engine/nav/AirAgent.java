@@ -4,7 +4,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.ref.Cleaner;
 
-import static com.openmason.engine.nav.CendaNav.F32;
+import static com.openmason.engine.nav.CendaNav.F64;
 import static com.openmason.engine.nav.CendaNav.I32;
 import static com.openmason.engine.nav.CendaNav.rethrow;
 
@@ -12,6 +12,9 @@ import static com.openmason.engine.nav.CendaNav.rethrow;
  * One flyer's navigation (native {@code cn_air_agent}, OpenMason #116): routes to a horizon along the
  * bearing to a far destination, re-planned as the flyer advances, and publishes the point to fly at
  * ({@link #steerTarget}). It does not steer. The state machine lives in C++; this class only marshals.
+ *
+ * <p><b>Frame.</b> As {@link GroundAgent}: positions (flyer, destination, cruise altitude, route,
+ * steer target) are doubles in the agent's own frame ({@link #create}, {@link #setOrigin}).
  *
  * <p><b>Threads.</b> As {@link GroundAgent}: calls on the simulating thread, {@link #view()} and
  * {@link #path()} readable anywhere.
@@ -36,9 +39,9 @@ public final class AirAgent implements AutoCloseable {
     private AirAgent(MemorySegment agent) {
         this.agent = agent;
         this.viewOut = arena.allocate(CendaNav.VIEW_BYTES, 8);
-        this.target = arena.allocate(F32, 3);
+        this.target = arena.allocate(F64, 3);
         this.completeOut = arena.allocate(I32, 1);
-        this.points = arena.allocate(F32, 3 * 16);
+        this.points = arena.allocate(F64, 3 * 16);
         this.cleanable = CLEANER.register(this, new Destroy(agent));
     }
 
@@ -47,12 +50,19 @@ public final class AirAgent implements AutoCloseable {
      *
      * @throws IllegalStateException when Cenda navigation is unavailable (the message says why)
      */
-    public static AirAgent create(AirAgentDesc desc, float x, float y, float z) {
+    public static AirAgent create(AirAgentDesc desc, double x, double y, double z) {
+        return create(desc, 0L, 0L, 0L, x, y, z);
+    }
+
+    /** An agent whose frame origin is (originX, originY, originZ), for a flyer at the frame position (x, y, z). */
+    public static AirAgent create(AirAgentDesc desc, long originX, long originY, long originZ, double x, double y,
+                                  double z) {
         CendaNav.requireAvailable();
         try (Arena a = Arena.ofConfined()) {
             MemorySegment d = a.allocate(CendaNav.AIR_AGENT_DESC_BYTES, 8);
             desc.write(d);
-            MemorySegment ag = (MemorySegment) CendaNav.AIR_CREATE.invokeExact(d, x, y, z);
+            MemorySegment o = CendaNav.origin(a, originX, originY, originZ);
+            MemorySegment ag = (MemorySegment) CendaNav.AIR_CREATE.invokeExact(d, o, x, y, z);
             if (ag.equals(MemorySegment.NULL)) {
                 throw new IllegalArgumentException("cn_air_agent_create: " + CendaNav.lastError());
             }
@@ -90,7 +100,7 @@ public final class AirAgent implements AutoCloseable {
     }
 
     /** The altitude routes prefer: they hold it and leave it only where terrain forces them to. */
-    public void setCruiseAltitude(float altitude) {
+    public void setCruiseAltitude(double altitude) {
         try {
             CendaNav.AIR_SET_CRUISE.invokeExact(a(), altitude);
         } catch (Throwable t) {
@@ -99,7 +109,7 @@ public final class AirAgent implements AutoCloseable {
     }
 
     /** Sets the far destination. Cheap to repeat every tick; re-planning is throttled. */
-    public void moveTo(float x, float y, float z) {
+    public void moveTo(double x, double y, double z) {
         try {
             check((int) CendaNav.AIR_MOVE_TO.invokeExact(a(), x, y, z, viewOut), "cn_air_agent_move_to");
         } catch (Throwable t) {
@@ -130,7 +140,7 @@ public final class AirAgent implements AutoCloseable {
     }
 
     /** One tick at the flyer's position. {@code world} may be null (no service: the agent backs off). */
-    public void tick(NavWorld world, float x, float y, float z, float deltaTime) {
+    public void tick(NavWorld world, double x, double y, double z, float deltaTime) {
         try {
             check((int) CendaNav.AIR_TICK.invokeExact(a(), NavWorld.handleOrNull(world), x, y, z, deltaTime, viewOut),
                 "cn_air_agent_tick");
@@ -144,16 +154,29 @@ public final class AirAgent implements AutoCloseable {
      * The point to fly at from (x, y, z), written to {@code out[0..2]}: the next waypoint, or the
      * horizon along the bearing while there is no route.
      */
-    public float[] steerTarget(float x, float y, float z, float[] out) {
+    public double[] steerTarget(double x, double y, double z, double[] out) {
         try {
             check((int) CendaNav.AIR_STEER_TARGET.invokeExact(a(), x, y, z, target), "cn_air_agent_steer_target");
         } catch (Throwable t) {
             throw rethrow(t);
         }
-        out[0] = target.get(F32, 0);
-        out[1] = target.get(F32, 4);
-        out[2] = target.get(F32, 8);
+        out[0] = target.get(F64, 0);
+        out[1] = target.get(F64, 8);
+        out[2] = target.get(F64, 16);
         return out;
+    }
+
+    /**
+     * Moves the agent's frame origin: destination, cruise altitude, route and plan origin shift by
+     * old - new.
+     */
+    public void setOrigin(long ox, long oy, long oz) {
+        try {
+            check((int) CendaNav.AIR_SET_ORIGIN.invokeExact(a(), ox, oy, oz), "cn_air_agent_set_origin");
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+        path = fetchPath();
     }
 
     private static void check(int rc, String call) {
@@ -177,12 +200,12 @@ public final class AirAgent implements AutoCloseable {
             if (n == 0) {
                 return NavPath.EMPTY;
             }
-            if (points.byteSize() < (long) n * 12L) {
-                points = arena.allocate(F32, (long) n * 3L);
+            if (points.byteSize() < (long) n * 24L) {
+                points = arena.allocate(F64, (long) n * 3L);
             }
             n = (int) CendaNav.AIR_PATH.invokeExact(agent, points, n, completeOut);
-            float[] xyz = new float[n * 3];
-            MemorySegment.copy(points, F32, 0, xyz, 0, xyz.length);
+            double[] xyz = new double[n * 3];
+            MemorySegment.copy(points, F64, 0, xyz, 0, xyz.length);
             return new NavPath(xyz, completeOut.get(I32, 0) != 0);
         } catch (Throwable t) {
             throw rethrow(t);

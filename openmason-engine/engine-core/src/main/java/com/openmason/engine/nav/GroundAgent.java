@@ -6,7 +6,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.ref.Cleaner;
 
-import static com.openmason.engine.nav.CendaNav.F32;
+import static com.openmason.engine.nav.CendaNav.F64;
 import static com.openmason.engine.nav.CendaNav.I32;
 import static com.openmason.engine.nav.CendaNav.rethrow;
 
@@ -17,6 +17,11 @@ import static com.openmason.engine.nav.CendaNav.rethrow;
  * {@link NavSteering}). It never moves the body: every
  * call that decides something fills an {@link AgentApply} for the host to apply. The state machine
  * lives in C++ ({@code nav_agents.cpp}); this class only marshals.
+ *
+ * <p><b>Frame (OpenMason #142).</b> Every position the agent takes or gives (body, goal, route, view)
+ * is a {@code double} relative to the agent's own frame origin — given at {@link #create}, moved by
+ * {@link #setOrigin}; keep it equal to the physics world's. The agent talks to the world in absolute
+ * cells, so its frame never has to match the nav world's.
  *
  * <p><b>Threads.</b> Calls belong to the thread simulating the body. {@link #view()} and
  * {@link #path()} may be read from any thread (a debug overlay): they are snapshots published after
@@ -48,21 +53,33 @@ public final class GroundAgent implements AutoCloseable {
         this.apply = arena.allocate(CendaNav.APPLY_BYTES, 8);
         this.viewOut = arena.allocate(CendaNav.VIEW_BYTES, 8);
         this.completeOut = arena.allocate(I32, 1);
-        this.points = arena.allocate(F32, 3 * 32);
+        this.points = arena.allocate(F64, 3 * 32);
         this.cleanable = CLEANER.register(this, new Destroy(agent));
     }
 
     /**
-     * An agent for a body at (x, y, z) (seeds the stuck detector).
+     * An agent in frame 0 for a body at (x, y, z) (seeds the stuck detector).
      *
      * @throws IllegalStateException when Cenda navigation is unavailable (the message says why)
      */
-    public static GroundAgent create(GroundAgentDesc desc, float x, float y, float z) {
+    public static GroundAgent create(GroundAgentDesc desc, double x, double y, double z) {
+        return create(desc, 0L, 0L, 0L, x, y, z);
+    }
+
+    /**
+     * An agent whose frame origin is (originX, originY, originZ) (absolute), for a body at the frame
+     * position (x, y, z).
+     *
+     * @throws IllegalStateException when Cenda navigation is unavailable (the message says why)
+     */
+    public static GroundAgent create(GroundAgentDesc desc, long originX, long originY, long originZ, double x,
+                                     double y, double z) {
         CendaNav.requireAvailable();
         try (Arena a = Arena.ofConfined()) {
             MemorySegment d = a.allocate(CendaNav.GROUND_AGENT_DESC_BYTES, 8);
             desc.write(d);
-            MemorySegment ag = (MemorySegment) CendaNav.GROUND_CREATE.invokeExact(d, x, y, z);
+            MemorySegment o = CendaNav.origin(a, originX, originY, originZ);
+            MemorySegment ag = (MemorySegment) CendaNav.GROUND_CREATE.invokeExact(d, o, x, y, z);
             if (ag.equals(MemorySegment.NULL)) {
                 throw new IllegalArgumentException("cn_ground_agent_create: " + CendaNav.lastError());
             }
@@ -105,12 +122,27 @@ public final class GroundAgent implements AutoCloseable {
     }
 
     /**
-     * Sets where to go; cheap to repeat every tick with a moving target.
+     * Moves the agent's frame origin: its goal, route and stuck anchor shift by old - new, and every
+     * later position is in the new frame.
+     */
+    public void setOrigin(long ox, long oy, long oz) {
+        try {
+            int rc = (int) CendaNav.GROUND_SET_ORIGIN.invokeExact(a(), ox, oy, oz);
+            check(rc, "cn_ground_agent_set_origin");
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+        // The route's numbers changed (same version natively): fetch it again.
+        path = fetchPath();
+    }
+
+    /**
+     * Sets where to go (frame position); cheap to repeat every tick with a moving target.
      *
      * @param goalRadius how close counts as arrival
      * @param speed      multiplier on the body's speed while walking this route
      */
-    public void moveTo(float x, float y, float z, float goalRadius, float speed) {
+    public void moveTo(double x, double y, double z, float goalRadius, float speed) {
         try {
             int rc = (int) CendaNav.GROUND_MOVE_TO.invokeExact(a(), x, y, z, goalRadius, speed, viewOut);
             check(rc, "cn_ground_agent_move_to");
@@ -189,12 +221,12 @@ public final class GroundAgent implements AutoCloseable {
             if (n == 0) {
                 return NavPath.EMPTY;
             }
-            if (points.byteSize() < (long) n * 12L) {
-                points = arena.allocate(F32, (long) n * 3L);
+            if (points.byteSize() < (long) n * 24L) {
+                points = arena.allocate(F64, (long) n * 3L);
             }
             n = (int) CendaNav.GROUND_PATH.invokeExact(agent, points, n, completeOut);
-            float[] xyz = new float[n * 3];
-            MemorySegment.copy(points, F32, 0, xyz, 0, xyz.length);
+            double[] xyz = new double[n * 3];
+            MemorySegment.copy(points, F64, 0, xyz, 0, xyz.length);
             return new NavPath(xyz, completeOut.get(I32, 0) != 0);
         } catch (Throwable t) {
             throw rethrow(t);

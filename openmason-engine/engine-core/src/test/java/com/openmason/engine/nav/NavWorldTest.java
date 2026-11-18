@@ -33,19 +33,25 @@ class NavWorldTest {
     private static final int FULL = 1;
     private static final int SNOW = 2;
 
-    private final Map<Long, int[]> cells = new HashMap<>();
+    private static final long FAR = 1L << 40;
+
+    private record Cell(long x, long y, long z) {
+    }
+
+    /** (shape, fluid) per ABSOLUTE cell. */
+    private final Map<Cell, int[]> cells = new HashMap<>();
     private PhysicsWorld physics;
     private NavWorld nav;
 
-    private static long key(int x, int y, int z) {
-        return ((long) (x & 0x1FFFFF) << 42) | ((long) (y & 0x1FFFFF) << 21) | (z & 0x1FFFFF);
+    private static Cell key(long x, long y, long z) {
+        return new Cell(x, y, z);
     }
 
-    private void set(int x, int y, int z, int shape, int fluid) {
+    private void set(long x, long y, long z, int shape, int fluid) {
         cells.put(key(x, y, z), new int[] {shape, fluid});
     }
 
-    private boolean fill(int x0, int y0, int z0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
+    private boolean fill(long x0, long y0, long z0, int sx, int sy, int sz, short[] shapes, short[] fluids) {
         for (int y = 0; y < sy; y++) {
             for (int z = 0; z < sz; z++) {
                 for (int x = 0; x < sx; x++) {
@@ -206,8 +212,8 @@ class NavWorldTest {
             new NavLimits(3000, Float.MAX_VALUE, 1.25f), 112, 32, 1.5f, 3, 0.5f, 4, 6, 2);
         try (AirAgent agent = AirAgent.create(desc, 0, 90, 0)) {
             agent.moveTo(400, 90, 0);
-            float[] target = agent.steerTarget(0, 90, 0, new float[3]);
-            assertEquals(112.0f, target[0], 1e-4f);
+            double[] target = agent.steerTarget(0, 90, 0, new double[3]);
+            assertEquals(112.0, target[0], 1e-4);
             agent.tick(nav, 0, 90, 0, 0.05f);
             int version = agent.view().pathVersion();
             nav.step(1 << 20);
@@ -317,6 +323,103 @@ class NavWorldTest {
             steering.steerAlong(physics, body, 1, 0, 1.0f, 0.1f, true, out);
             assertFalse(out.jump());
         }
+    }
+
+    @Test
+    void everything_works_in_a_frame_far_from_zero() {
+        // The floor of setUp, copied to +-2^40 (Y negative), with every frame moved there.
+        long ox = -FAR * 5, oy = -FAR - 4096, oz = FAR * 3;
+        for (int x = -4; x <= 24; x++) {
+            for (int z = -4; z <= 4; z++) {
+                set(ox + x, oy + 63, oz + z, FULL, 0);
+            }
+        }
+        set(ox + 2, oy + 64, oz, SNOW, 0);
+        physics.setOrigin(ox, oy, oz);
+        nav.close();
+        nav = NavWorld.create(physics, SOLID, 0, WATER, NavWorld.Y_UNBOUNDED_MIN, NavWorld.Y_UNBOUNDED_MAX, 8);
+        nav.setOrigin(ox, oy, oz);
+        assertEquals(oy, nav.originY());
+        assertEquals(NavWorld.CELL_SOLID, nav.cell(ox + 2, oy + 64, oz));
+        assertEquals(0.25f, nav.cellTop(ox + 2, oy + 64, oz));
+
+        NavLimits limits = new NavLimits(600, Float.MAX_VALUE, 1.0f);
+        long id = nav.searchGround(new NavWorld.GroundQuery(0.5, 64, 0.5, 10.5, 64, 0.5, 0, 4, 2, walker(), limits));
+        nav.step(1 << 20);
+        NavWorld.Outcome outcome = nav.poll(id);
+        nav.release(id);
+        assertTrue(outcome.reachedGoal());
+        assertEquals(10.5, outcome.path().x(outcome.path().size() - 1));
+        assertEquals(64.0, outcome.path().y(outcome.path().size() - 1));
+
+        NavWorld.Reach reach = nav.reachGround(0.5, 64, 0.5, 4, 2, 2, 1000, Float.MAX_VALUE, walker());
+        assertEquals(25, reach.count());
+        assertEquals(ox, reach.x(0));
+        assertEquals(oy + 64, reach.y(0));
+        assertEquals(64.0, reach.surface(0));
+
+        assertEquals(64.0, NavProbes.groundLevel(physics, 0.5, 0.5, 66, 5, 10, SOLID));
+        NavFlood flood = new NavFlood(16);
+        assertTrue(flood.run(physics, ox, oy + 63, oz, 2, SOLID, NavWorld.Y_UNBOUNDED_MIN,
+            NavWorld.Y_UNBOUNDED_MAX) > 1);
+        assertEquals(oz, flood.z(0));
+
+        AgentBody body = new AgentBody();
+        body.x = 0.5;
+        body.y = 64.4;
+        body.z = 0.5;
+        body.legHeight = 0.4f;
+        body.halfWidth = 0.3f;
+        body.halfLength = 0.3f;
+        body.moveSpeed = 3.0f;
+        body.speedMultiplier = 1.0f;
+        body.onGround = true;
+        AgentApply out = new AgentApply();
+        try (GroundAgent agent = GroundAgent.create(agentDesc(), ox, oy, oz, body.x, body.y, body.z);
+             NavSteering steering = NavSteering.create(steeringDesc())) {
+            agent.moveTo(12.5, 64.0, 0.5, 1.0f, 1.0f);
+            int arrivedAt = -1;
+            for (int tick = 0; tick < 200 && arrivedAt < 0; tick++) {
+                agent.tick(steering, nav, physics, body, 0.05f, out);
+                if (out.turn()) {
+                    body.yaw = out.yaw();
+                }
+                if (out.setVelocity()) {
+                    body.x += out.vx() * 0.05;
+                    body.z += out.vz() * 0.05;
+                }
+                nav.step(1 << 20);
+                if (tick == 10) {
+                    // Rebase the agent mid-walk by an odd amount: its route and goal follow.
+                    agent.setOrigin(ox + 7, oy - 3, oz + 11);
+                    body.x -= 7;
+                    body.y += 3;
+                    body.z -= 11;
+                    agent.moveTo(12.5 - 7, 64.0 + 3, 0.5 - 11, 1.0f, 1.0f);
+                    assertEquals(12.5 - 7, agent.view().goalX());
+                    assertEquals(11.5 - 7, agent.path().x(agent.path().size() - 1));
+                }
+                if (agent.view().status() == AgentView.ARRIVED) {
+                    arrivedAt = tick;
+                }
+            }
+            assertTrue(arrivedAt > 10, "never arrived");
+            assertEquals(11.5 - 7, body.x, 0.7);
+        }
+    }
+
+    @Test
+    void a_queued_search_survives_a_frame_move() {
+        NavLimits limits = new NavLimits(600, Float.MAX_VALUE, 1.0f);
+        long id = nav.searchGround(new NavWorld.GroundQuery(0.5, 64, 0.5, 10.5, 64, 0.5, 0, 4, 2, walker(), limits));
+        nav.setOrigin(4099, -70001, 12);
+        nav.step(1 << 20);
+        NavWorld.Outcome outcome = nav.poll(id);
+        nav.release(id);
+        assertTrue(outcome.reachedGoal());
+        assertEquals(10.5 - 4099, outcome.path().x(1));
+        assertEquals(64.0 + 70001, outcome.path().y(1));
+        assertEquals(0.5 - 12, outcome.path().z(1));
     }
 
     @Test
