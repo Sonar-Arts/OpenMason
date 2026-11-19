@@ -136,3 +136,17 @@ if(CENDA_BUILD_KERNELS)
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
     endif()
 endif()
+
+# Inference engine (ci_*): ABI + plan executor with a tiny in-test model (exit 77 = SKIP without a CUDA device).
+if(CENDA_BUILD_KERNELS AND CENDA_BUILD_INFER)
+    add_executable(infer_engine infer_engine_test.cpp)
+    target_link_libraries(infer_engine PRIVATE cenda_kernels Threads::Threads cenda_warnings)
+    target_compile_definitions(infer_engine PRIVATE
+            CI_VIT_CU="${CMAKE_CURRENT_SOURCE_DIR}/../native/kernels/src/infer/cuda/ci_vit.cu")
+    add_test(NAME infer_engine COMMAND infer_engine)
+    set_tests_properties(infer_engine PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+    if(WIN32)
+        set_tests_properties(infer_engine PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:cenda_kernels>")
+    endif()
+endif()

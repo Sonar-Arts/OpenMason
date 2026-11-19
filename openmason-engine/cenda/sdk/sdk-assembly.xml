@@ -8,6 +8,9 @@
        native/kernels/include/cenda/voxel_world.h     the cubic voxel runtime C ABI (cv_generator /
                                                       cv_gen_api for game worldgen libs; needs only
                                                       <stdint.h>)
+       native/kernels/include/cenda/infer.h           the inference engine C ABI (ci_*: models, compute API) that
+                                                      game libraries call through dlopen (Stonebreak's
+                                                      libstonebreak_terrain); types only, no CUDA toolkit
        cenda-sdk.properties                     version + ABI numbers this SDK matches -->
 <assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -33,6 +36,7 @@
             <includes>
                 <include>noise_nodes.hpp</include>
                 <include>voxel_world.h</include>
+                <include>infer.h</include>
             </includes>
             <lineEnding>keep</lineEnding>
         </fileSet>

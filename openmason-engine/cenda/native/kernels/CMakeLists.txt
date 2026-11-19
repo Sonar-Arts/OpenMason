@@ -172,3 +172,12 @@ target_sources(cenda_kernels PRIVATE
         src/voxel_world/lod_owner.cpp
         src/voxel_world/lod_data.cpp
         src/voxel_world/lod_mesh.cpp)
+
+# Inference engine (ci_*, Stonebreak DaedalusTGM-Exp-2): GPU networks through the CUDA driver + NVRTC, both opened at
+# run time, so the library builds and loads without a CUDA toolkit (ci_cuda_available reports why it cannot run).
+option(CENDA_BUILD_INFER "Build the inference engine (ci_*) into cenda_kernels" ON)
+if(CENDA_BUILD_INFER)
+    add_subdirectory(src/infer)
+    target_sources(cenda_kernels PRIVATE $<TARGET_OBJECTS:cenda_infer>)
+    target_link_libraries(cenda_kernels PRIVATE ${CMAKE_DL_LIBS})
+endif()

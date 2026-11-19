@@ -1,0 +1,17 @@
+# Writes OUT as a sequence of C++ raw string literals holding the text of IN (chunks under MSVC's 16 KB literal
+# limit; adjacent literals concatenate). Run as: cmake -DIN=<file> -DOUT=<file> -P EmbedText.cmake
+file(READ "${IN}" _text)
+string(LENGTH "${_text}" _len)
+set(_out "")
+set(_pos 0)
+while(_pos LESS _len)
+    string(SUBSTRING "${_text}" ${_pos} 12000 _chunk)
+    string(APPEND _out "R\"CENDA_EMBED(${_chunk})CENDA_EMBED\"\n")
+    math(EXPR _pos "${_pos} + 12000")
+endwhile()
+if(_out STREQUAL "")
+    set(_out "\"\"\n")
+endif()
+file(WRITE "${OUT}.tmp" "${_out}")
+file(COPY_FILE "${OUT}.tmp" "${OUT}" ONLY_IF_DIFFERENT)
+file(REMOVE "${OUT}.tmp")
