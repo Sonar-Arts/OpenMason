@@ -1174,10 +1174,16 @@ bool check_cover(const Host& h, const std::set<std::pair<int64_t, int64_t>>& rea
     return ok;
 }
 
+// Ticks until the LOD is idle (3 quiet ticks in a row). The tick budget alone made this machine-dependent: on a slow
+// 2-core CI runner (Windows, 2026-11-20) the workers had not finished when max_ticks ran out, the helper returned
+// silently and every later cover check failed in a cascade. Now it keeps ticking past max_ticks until a wall-clock
+// deadline (120 s, far above any real convergence) and reports a stall as ONE clear failure.
 void run_until_idle(cv_lod* lod, Host& h, int max_ticks = 4000) {
     const cv_lod_event* ev = nullptr;
     int quiet = 0;
-    for (int t = 0; t < max_ticks && quiet < 3; ++t) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    int t = 0;
+    for (; quiet < 3 && (t < max_ticks || std::chrono::steady_clock::now() < deadline); ++t) {
         const int32_t n = cv_lod_tick(lod, nullptr, &ev);
         h.apply(lod, ev, n);
         cv_lod_stats st{};
@@ -1189,6 +1195,8 @@ void run_until_idle(cv_lod* lod, Host& h, int max_ticks = 4000) {
         }
         if (n == 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+    if (quiet < 3) std::printf("run_until_idle: LOD still busy after %d ticks (120 s deadline)\n", t);
+    CHECK(quiet >= 3);
 }
 
 int fallbacks_inside(const Host& h, int64_t c0, int64_t c1) {
