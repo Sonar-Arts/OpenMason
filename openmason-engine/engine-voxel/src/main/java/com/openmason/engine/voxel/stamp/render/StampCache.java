@@ -66,6 +66,15 @@ public class StampCache {
         return byState == null ? 0 : byState.size();
     }
 
+    /**
+     * Every stamp registered for a block type, by state name ({@code null} key = the default), read-only;
+     * empty when none.
+     */
+    public Map<String, BlockStamp> variants(IBlockType blockType) {
+        Map<String, BlockStamp> byState = stamps.get(blockType.getId());
+        return byState == null ? Map.of() : java.util.Collections.unmodifiableMap(byState);
+    }
+
     /** True if any stamp (default or variant) exists for this block type. */
     public boolean has(IBlockType blockType) {
         Map<String, BlockStamp> byState = stamps.get(blockType.getId());

@@ -406,6 +406,7 @@ void step_mesh_dispatch(cv_stream* s) {
         j.kind = JobKind::Mesh;
         j.c = c;
         j.epoch = s->mesh_epoch;
+        j.detail = want_detail(s, c, (st->flags & kDetailMesh) != 0);
         batch.push_back(std::move(j));
     }
     submit_all(s, batch);
@@ -461,6 +462,7 @@ void step_handout(cv_stream* s, int64_t max_meshes, int64_t max_bytes) {
                 touch(s, c.x, c.z);
             }
             ++s->meshed_total;
+            note_detail(s, c, *st, m->build.flags);
             give_mesh(s, m);
             continue;
         }
@@ -481,6 +483,7 @@ void step_handout(cv_stream* s, int64_t max_meshes, int64_t max_bytes) {
             touch(s, c.x, c.z);
         }
         ++s->meshed_total;
+        note_detail(s, c, *st, m->build.flags);
         const auto slot = static_cast<int32_t>(s->handed.size());
         s->handed.push_back(std::move(m));
         emit(s, CV_EV_REMESHED, slot, c.x, c.y, c.z);
@@ -629,6 +632,7 @@ int32_t tick_locked(cv_stream* s, const cv_budget* budget) {
     step_dirty(s);
     lap(4);
     step_waits(s);
+    step_detail(s);
     lap(5);
     step_populate(s);
     lap(6);

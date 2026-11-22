@@ -27,7 +27,10 @@ constexpr float kAoPerNeighbour = 0.13f;
 
 void build_classes(MeshWork& w) {
     const MeshConfig& cfg = *w.cfg;
-    if (w.cls_flags == w.flags && w.cls_cfg == &cfg && w.cls_version == cfg.version) return;
+    // The reference predates CV_BLOCK_DETAIL: it always uses the mode-0 table (no detail).
+    w.cls = w.cls_tab[0];
+    if (w.cls_flags[0] == w.flags && w.cls_cfg[0] == &cfg && w.cls_version[0] == cfg.version) return;
+    uint8_t* cls = w.cls_tab[0];
     const uint16_t air = world_air(w.world);
     for (uint32_t id = 0; id < 65536; ++id) {
         const uint16_t f = w.flags[id];
@@ -45,11 +48,11 @@ void build_classes(MeshWork& w) {
             if ((f & (CV_BLOCK_TRANSPARENT | CV_BLOCK_TRANSLUCENT)) != 0) c |= kClsSee;
         }
         if (bid != air && (f & CV_BLOCK_VIS_OPAQUE) != 0) c |= kClsVisClosed;
-        w.cls[id] = c;
+        cls[id] = c;
     }
-    w.cls_flags = w.flags;
-    w.cls_cfg = &cfg;
-    w.cls_version = cfg.version;
+    w.cls_flags[0] = w.flags;
+    w.cls_cfg[0] = &cfg;
+    w.cls_version[0] = cfg.version;
 }
 
 void classify(MeshWork& w) {

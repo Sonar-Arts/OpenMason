@@ -58,6 +58,8 @@ public final class CubeStream implements AutoCloseable {
     /** Mesh flags ({@code CV_MESH_*}). */
     public static final int MESH_SMOOTH_LIGHTING = 1;
     public static final int MESH_GREEDY = 2;
+    /** {@code CV_MESH_DETAIL}: {@link BlockFlags#DETAIL} blocks draw their model (streams set it per cube). */
+    public static final int MESH_DETAIL = 4;
     /**
      * {@code CV_STREAM_NO_MESH} (or it into the mesh flags): the stream never builds GPU meshes (server /
      * integrated world). No REMESHED events; {@link #EV_CHANGED} still reports content changes and
@@ -245,6 +247,24 @@ public final class CubeStream implements AutoCloseable {
             long n = (long) h.invokeExact(pointer());
             if (n < 0) throw failure("cv_stream_remesh_all", n);
             return n;
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /**
+     * Detail radius ({@code cv_stream_set_detail_radius}): cubes whose box lies within {@code radiusBlocks} of a
+     * viewer mesh {@link BlockFlags#DETAIL} blocks as their model, the others as cube faces (a cube keeps its
+     * detail mesh up to radius + 8). Moving the viewers re-meshes only the cubes holding exposed detail blocks
+     * that crossed the radius. Negative (the default) = detail everywhere. Owner thread. No-op on a library
+     * without the call.
+     */
+    public void setDetailRadius(int radiusBlocks) {
+        MethodHandle h = CendaVoxelWorld.STREAM_SET_DETAIL_RADIUS;
+        if (h == null) return;
+        try {
+            int rc = (int) h.invokeExact(pointer(), radiusBlocks);
+            if (rc < 0) throw failure("cv_stream_set_detail_radius", rc);
         } catch (Throwable t) {
             throw rethrow(t);
         }

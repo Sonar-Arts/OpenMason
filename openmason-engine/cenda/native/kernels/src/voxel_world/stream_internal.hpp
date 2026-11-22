@@ -76,6 +76,12 @@ uint64_t prio_of(cv_stream* s, const Int3& c);
 void held_union(const std::vector<Int3>& origins, std::vector<Int3>& out);
 bool origin_done(cv_stream* s, const Int3& o);
 void enqueue_mesh(cv_stream* s, const Int3& c, CubeState& st);
+// DETAIL RADIUS: whether cube c's next mesh is built with CV_MESH_DETAIL (had = its current mesh is).
+bool want_detail(const cv_stream* s, const Int3& c, bool had);
+// Records the detail bits of a handed-out (or found-empty) mesh and re-queues it when its mode is stale.
+void note_detail(cv_stream* s, const Int3& c, CubeState& st, uint16_t build_flags);
+// Re-evaluates the detail cubes when the viewers moved or the radius changed (owner tick).
+void step_detail(cv_stream* s);
 void consider_mesh(cv_stream* s, const Int3& c, CubeState& st);
 void request_remesh(cv_stream* s, const Int3& c, CubeState& st);
 void note_changed(cv_stream* s, const Int3& c, CubeState& st);

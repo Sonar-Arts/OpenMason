@@ -416,7 +416,7 @@ void run_world(uint64_t seed, int& cubes) {
     d.air_id = s.air;
     s.w = cv_world_create(&d);
     configure(s, r);
-    meshref::mesh_work().cls_flags = nullptr;   // the reference's class cache is keyed by pointers (see report)
+    meshref::mesh_work().cls_flags[0] = meshref::mesh_work().cls_flags[1] = nullptr;   // the reference's class cache is keyed by pointers (see report)
     const int64_t ccx = far != 0 && r.pct(50) ? far : static_cast<int64_t>(r.range(-3, 3));
     const int64_t ccz = r.range(-3, 3);
     const int ckind = static_cast<int>(r.below(6));
@@ -574,7 +574,7 @@ void bench() {
     }());
     cv_block_table_set(w, kRealFlags, kIds);
     terrain_world(w, 3, -2, 2);
-    meshref::mesh_work().cls_flags = nullptr;
+    meshref::mesh_work().cls_flags[0] = meshref::mesh_work().cls_flags[1] = nullptr;
     bool ok = true;
     for (int cz = -2; cz <= 2; ++cz)
         for (int cx = -2; cx <= 2; ++cx)

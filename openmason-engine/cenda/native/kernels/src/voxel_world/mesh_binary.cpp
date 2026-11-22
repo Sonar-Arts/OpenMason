@@ -59,17 +59,31 @@ constexpr float kAoPerNeighbour = 0.13f;
 
 void build_classes(MeshWork& w) {
     const MeshConfig& cfg = *w.cfg;
-    if (w.cls_flags == w.flags && w.cls_cfg == &cfg && w.cls_version == cfg.version) return;
+    const int mode = w.detail ? 1 : 0;
+    w.cls = w.cls_tab[mode];
+    w.is_detail = w.is_detail_tab[mode];
+    if (w.cls_flags[mode] == w.flags && w.cls_cfg[mode] == &cfg && w.cls_version[mode] == cfg.version) {
+        w.any_detail = w.any_detail_of[mode];
+        return;
+    }
+    uint8_t* cls = w.cls_tab[mode];
+    uint8_t* is_detail = w.is_detail_tab[mode];
     const uint16_t air = world_air(w.world);
+    bool any_detail = false;
     for (uint32_t id = 0; id < 65536; ++id) {
         const uint16_t f = w.flags[id];
         const auto bid = static_cast<uint16_t>(id);
         uint8_t c = 0;
+        // CV_BLOCK_DETAIL: a cube with a bound model - the model in detail meshes, the cube elsewhere.
+        const bool detail_block = bid != air && (f & CV_BLOCK_DETAIL) != 0 && (f & CV_BLOCK_CUBE) != 0 &&
+                                  cfg.is_bound(bid);
+        is_detail[id] = detail_block ? 1 : 0;
+        any_detail = any_detail || detail_block;
         if (bid == air) {
             c = kClsSee | kClsAir;
         } else if (cfg.is_fluid(bid)) {
             c = kClsSee | kClsSpecial;
-        } else if ((f & CV_BLOCK_CUBE) != 0) {
+        } else if ((f & CV_BLOCK_CUBE) != 0 && !(detail_block && w.detail)) {
             c = (f & (CV_BLOCK_TRANSPARENT | CV_BLOCK_TRANSLUCENT)) != 0 ? uint8_t{kClsTranspCube | kClsSee}
                                                                        : uint8_t{kClsOpaqueCube};
             if ((f & CV_BLOCK_TRANSLUCENT) != 0) c |= kClsTranslucentCube;
@@ -78,11 +92,13 @@ void build_classes(MeshWork& w) {
             if ((f & (CV_BLOCK_TRANSPARENT | CV_BLOCK_TRANSLUCENT)) != 0) c |= kClsSee;
         }
         if (bid != air && (f & CV_BLOCK_VIS_OPAQUE) != 0) c |= kClsVisClosed;
-        w.cls[id] = c;
+        cls[id] = c;
     }
-    w.cls_flags = w.flags;
-    w.cls_cfg = &cfg;
-    w.cls_version = cfg.version;
+    w.cls_flags[mode] = w.flags;
+    w.cls_cfg[mode] = &cfg;
+    w.cls_version[mode] = cfg.version;
+    w.any_detail_of[mode] = any_detail;
+    w.any_detail = any_detail;
 }
 
 // True when all 34 ids of the row are equal (SWAR on little-endian targets).
@@ -340,6 +356,23 @@ const Model* MeshWork::model_at(int px, int py, int pz) const {
     return cfg->model_for(id, b->layer >= 0 ? layer_at(b->layer, px, py, pz) : uint16_t{0});
 }
 
+bool mesh_has_exposed_detail(const MeshWork& w) {
+    if (!w.any_detail) return false;
+    for (int py = 1; py <= 32; ++py) {
+        for (int pz = 1; pz <= 32; ++pz) {
+            for (int px = 1; px <= 32; ++px) {
+                if (w.is_detail[w.id_at(px, py, pz)] == 0) continue;
+                for (int f = 0; f < 6; ++f) {
+                    const uint16_t nid = w.id_at(px + kFaceDx[f], py + kFaceDy[f], pz + kFaceDz[f]);
+                    if (w.is_detail[nid] != 0) continue;   // ore against ore: hidden in both modes
+                    if ((w.cls[nid] & (kClsSee | kClsSpecial)) != 0) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool cell_fills(const MeshWork& w, int px, int py, int pz, int face) {
     const uint16_t id = w.id_at(px, py, pz);
     const uint8_t c = w.cls[id];
@@ -363,6 +396,7 @@ int32_t mesh_prepare(cv_world* world, int64_t cx, int64_t cy, int64_t cz, uint32
     w.flags = table_snapshot(world, &w.generation);
     w.cfg = mesh_config(world);
     w.smooth = (flags & CV_MESH_SMOOTH_LIGHTING) != 0;
+    w.detail = (flags & CV_MESH_DETAIL) != 0;
     w.ring_ready = false;
     int32_t layers[CV_MAX_LAYERS];
     uint16_t* bufs[CV_MAX_LAYERS];

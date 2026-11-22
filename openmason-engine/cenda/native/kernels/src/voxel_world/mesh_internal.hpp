@@ -165,11 +165,18 @@ struct MeshWork {
     uint32_t generation = 0;
     std::shared_ptr<const MeshConfig> cfg;
     bool smooth = true;
-    // Class table cache.
-    const uint16_t* cls_flags = nullptr;
-    uint64_t cls_version = ~uint64_t{0};
-    const MeshConfig* cls_cfg = nullptr;
-    uint8_t cls[65536];
+    bool detail = false;            // CV_MESH_DETAIL: CV_BLOCK_DETAIL blocks are model cells (else cubes)
+    // Class table cache: one table per detail mode (workers alternate near and far cubes), each keyed by
+    // (table, config, version). cls / is_detail / any_detail point at the current mode's.
+    const uint16_t* cls_flags[2] = {nullptr, nullptr};
+    uint64_t cls_version[2] = {~uint64_t{0}, ~uint64_t{0}};
+    const MeshConfig* cls_cfg[2] = {nullptr, nullptr};
+    bool any_detail_of[2] = {false, false};
+    uint8_t cls_tab[2][65536];
+    uint8_t is_detail_tab[2][65536];  // 1 for CV_BLOCK_DETAIL ids with a bound model (same in both modes)
+    const uint8_t* cls = cls_tab[0];
+    const uint8_t* is_detail = is_detail_tab[0];
+    bool any_detail = false;        // the table has a CV_BLOCK_DETAIL id with a bound model
 
     uint16_t id_at(int px, int py, int pz) const { return pad.ids[pad_index(px, py, pz)]; }
     // Layer value (0 when the layer is not read).
@@ -188,6 +195,9 @@ struct MeshWork {
 MeshWork& mesh_work();
 // Reads cube (cx, cy, cz) into w (padded ids, masks, layers, classes). CV_OK / CV_ERR_MISSING / CV_ERR_ARG.
 int32_t mesh_prepare(cv_world* world, int64_t cx, int64_t cy, int64_t cz, uint32_t flags, MeshWork& w);
+// True when an interior cell of the prepared cube is a CV_BLOCK_DETAIL block (with a bound model) next to a cell
+// a face can show against (see-through or special): the cube's mesh differs with/without CV_MESH_DETAIL.
+bool mesh_has_exposed_detail(const MeshWork& w);
 
 // Cube faces as cube-local quads: out[0] opaque, [1] cutout, [2] translucent (appended).
 void mesh_cube_faces(MeshWork& w, bool greedy, std::vector<cv_quad>* out3);

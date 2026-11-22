@@ -112,6 +112,16 @@ public final class StreamMesh {
         return (flags() & 2) != 0;
     }
 
+    /** Holds an exposed {@link BlockFlags#DETAIL} block: its look depends on the detail mode. */
+    public boolean hasDetail() {
+        return (flags() & 4) != 0;
+    }
+
+    /** Built with {@link CubeStream#MESH_DETAIL} (detail blocks drawn as their models). */
+    public boolean builtWithDetail() {
+        return (flags() & 8) != 0;
+    }
+
     /** The cube revision the mesh was built from. */
     public long revision() {
         return m.get(I64, 136);

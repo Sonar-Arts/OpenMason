@@ -210,6 +210,9 @@ int32_t build_gpu_mesh(cv_world* world, int64_t cx, int64_t cy, int64_t cz, uint
         mesh_models(w, out, bmin, bmax);
         mesh_fluids(w, out, bmin, bmax);
     }
+    // bit2: the look of this cube depends on CV_MESH_DETAIL (an exposed CV_BLOCK_DETAIL cell); bit3: built with it.
+    if (mesh_has_exposed_detail(w)) out.flags = static_cast<uint16_t>(out.flags | 4u);
+    if (w.detail) out.flags = static_cast<uint16_t>(out.flags | 8u);
     out.visibility = visibility_of(world, cx, cy, cz, w);
     const bool empty = out.quad_count[0] == 0 && out.quad_count[1] == 0 && out.quad_count[2] == 0 &&
                        out.water_count == 0 && out.stamp_vertex_count == 0;

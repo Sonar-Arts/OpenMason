@@ -332,8 +332,9 @@ public final class MmsArenaSim {
         if (committed == 0) {
             return false;
         }
+        // Same rule as MmsChunkRegion.sweepDecommit (2026-11-22): copy-free, so dead pages >= 1/8 of the commitment.
         long usedBytes = alloc.used() * elementBytes;
-        if (usedBytes > (long) (committed * trimFraction)) {
+        if (usedBytes > 0 && (committed - usedBytes) * 8 < committed) {
             return false;
         }
         BitSet live = new BitSet();
@@ -345,7 +346,7 @@ public final class MmsArenaSim {
         BitSet dead = (BitSet) pages.clone();
         dead.andNot(live);
         long deadBytes = (long) dead.cardinality() * pageSize;
-        if (deadBytes == 0 || (usedBytes > 0 && deadBytes * 3 < committed)) {
+        if (deadBytes == 0 || (usedBytes > 0 && deadBytes * 8 < committed)) {
             return false;
         }
         pages.andNot(dead);

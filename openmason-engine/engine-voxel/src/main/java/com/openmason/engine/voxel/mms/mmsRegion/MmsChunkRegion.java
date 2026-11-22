@@ -98,6 +98,12 @@ public final class MmsChunkRegion {
     private final int vertexStride;
     /** Vertex pulling: no index arena (shared EBO), quads read via a buffer texture. */
     private final boolean pulled;
+    /**
+     * No index arena: draws use a shared quad element buffer through {@code baseVertex} - pulled formats
+     * ({@link MmsSharedQuadIndexBuffer#id()}) and quad-indexed vertex regions ({@link #quadIndexed},
+     * {@link MmsSharedQuadIndexBuffer#stampId()}).
+     */
+    private final boolean implicitQuads;
     private int quadTextureId;
     /** 3D region coordinates (cubic path), or null on the column path. */
     private final MmsRegionKey key;
@@ -192,6 +198,20 @@ public final class MmsChunkRegion {
             policy, format, java.util.Objects.requireNonNull(key, "key"), indexBytes);
     }
 
+    /**
+     * A cubic region of 4-vertex quads drawn (0,1,2) (0,2,3) - the native stamp meshes - WITHOUT an index arena:
+     * draws address quads through the shared {@link MmsSharedQuadIndexBuffer#stampId()} buffer and
+     * {@code baseVertex}, so a stamp quad costs its 4 vertices only (COMPACT20: 80 instead of 104 bytes).
+     * {@link #uploadLocal} ignores the indices of such a region (vertex count must be a multiple of 4).
+     */
+    public static MmsChunkRegion quadIndexed(MmsRegionKey key, MmsVertexFormat format, VramArenaPolicy policy) {
+        if (format.pulled()) {
+            throw new IllegalArgumentException(format + " is pulled: use the plain cubic constructor");
+        }
+        return new MmsChunkRegion(elementCount(policy.vertexInitialBytes(), format.stride()), 0, policy, format,
+            java.util.Objects.requireNonNull(key, "key"), Short.BYTES, true);
+    }
+
     private static int checkIndexBytes(int indexBytes) {
         if (indexBytes != Short.BYTES && indexBytes != Integer.BYTES) {
             throw new IllegalArgumentException("index width must be 2 or 4 bytes, got " + indexBytes);
@@ -214,12 +234,19 @@ public final class MmsChunkRegion {
     private MmsChunkRegion(int initialVertexCapacity, int initialIndexCapacity,
                            VramArenaPolicy policy, MmsVertexFormat format,
                            MmsRegionKey key, int indexBytes) {
+        this(initialVertexCapacity, initialIndexCapacity, policy, format, key, indexBytes, false);
+    }
+
+    private MmsChunkRegion(int initialVertexCapacity, int initialIndexCapacity,
+                           VramArenaPolicy policy, MmsVertexFormat format,
+                           MmsRegionKey key, int indexBytes, boolean quadIndexed) {
         this.key = key;
-        this.indexBytes = format.pulled() ? Short.BYTES : checkIndexBytes(indexBytes);
+        this.pulled = format.pulled();
+        this.implicitQuads = pulled || quadIndexed;
+        this.indexBytes = implicitQuads ? Short.BYTES : checkIndexBytes(indexBytes);
         this.format = format;
         this.vertexStride = format.stride();
-        this.pulled = format.pulled();
-        if (pulled) {
+        if (implicitQuads) {
             initialIndexCapacity = 0;
         }
         this.growthFactor = policy.growthFactor();
@@ -231,7 +258,7 @@ public final class MmsChunkRegion {
         this.initialVertexCapacity = initialVertexCapacity;
         this.initialIndexCapacity = initialIndexCapacity;
         this.vertexAlloc = new MmsArenaAllocator(initialVertexCapacity);
-        this.indexAlloc = pulled ? null : new MmsArenaAllocator(initialIndexCapacity);
+        this.indexAlloc = implicitQuads ? null : new MmsArenaAllocator(initialIndexCapacity);
 
         this.sparse = policy.sparseGrowth() && sparseSupported();
         if (sparse) {
@@ -241,10 +268,10 @@ public final class MmsChunkRegion {
             this.indexPages = new BitSet();
             this.vertexVirtualBytes = virtualBytes(
                 (long) initialVertexCapacity * vertexStride, pageSize);
-            this.indexVirtualBytes = pulled ? 0 : virtualBytes(
+            this.indexVirtualBytes = implicitQuads ? 0 : virtualBytes(
                 (long) initialIndexCapacity * this.indexBytes, pageSize);
             this.vertexBufferId = createSparseBuffer(vertexVirtualBytes);
-            this.indexBufferId = pulled ? MmsSharedQuadIndexBuffer.id() : createSparseBuffer(indexVirtualBytes);
+            this.indexBufferId = implicitQuads ? sharedQuadBuffer() : createSparseBuffer(indexVirtualBytes);
             // Physical pages commit on demand under the first uploads — an
             // empty sparse region costs (almost) nothing.
             trackedBytes = 0;
@@ -257,8 +284,8 @@ public final class MmsChunkRegion {
             GL15.glBufferData(GL31.GL_COPY_WRITE_BUFFER,
                 (long) initialVertexCapacity * vertexStride,
                 GL15.GL_STATIC_DRAW);
-            if (pulled) {
-                this.indexBufferId = MmsSharedQuadIndexBuffer.id();
+            if (implicitQuads) {
+                this.indexBufferId = sharedQuadBuffer();
             } else {
                 this.indexBufferId = GL15.glGenBuffers();
                 GL15.glBindBuffer(GL31.GL_COPY_WRITE_BUFFER, indexBufferId);
@@ -288,6 +315,16 @@ public final class MmsChunkRegion {
         this.vaoId = GL30.glGenVertexArrays();
         rebuildVao();
         GpuMemoryTracker.getInstance().track(GpuMemoryTracker.Category.CHUNK_MESH, trackedBytes);
+    }
+
+    /** The shared element buffer of an index-less region: pulled quads or stamp-wound quads. */
+    private int sharedQuadBuffer() {
+        return pulled ? MmsSharedQuadIndexBuffer.id() : MmsSharedQuadIndexBuffer.stampId();
+    }
+
+    /** True when this region carries no index arena (pulled or {@link #quadIndexed}). */
+    public boolean isQuadIndexed() {
+        return implicitQuads;
     }
 
     // ─── Sparse-mode support ──────────────────────────────────────────────
@@ -426,7 +463,7 @@ public final class MmsChunkRegion {
             throw new IllegalArgumentException("Mesh format " + meshFormat
                 + " cannot join a " + format + " region");
         }
-        if (!pulled && this.indexBytes != Short.BYTES) {
+        if (!implicitQuads && this.indexBytes != Short.BYTES) {
             throw new IllegalArgumentException("byte[] meshes carry u16 indices; this region holds u"
                 + (this.indexBytes * 8) + " (use uploadLocal)");
         }
@@ -448,9 +485,13 @@ public final class MmsChunkRegion {
                 "Mesh origin (%.1f,%.1f,%.1f) differs from region origin (%.1f,%.1f,%.1f)",
                 originX, originY, originZ, this.originX, this.originY, this.originZ));
         }
+        if (implicitQuads && (vertexCount & 3) != 0) {
+            throw new IllegalArgumentException("quad-indexed meshes upload whole quads (4 vertices each), got "
+                + vertexCount);
+        }
         return place(MemorySegment.ofArray(vertexBytes), vertexCount,
-            pulled ? null : MemorySegment.ofArray(indexBytes), indexCount,
-            pulled ? vertexCount / 4 : 0,
+            implicitQuads ? null : MemorySegment.ofArray(indexBytes), implicitQuads ? vertexCount / 4 * 6 : indexCount,
+            implicitQuads ? vertexCount / 4 : 0,
             (float) (minX - this.originX), (float) (minY - this.originY), (float) (minZ - this.originZ),
             (float) (maxX - this.originX), (float) (maxY - this.originY), (float) (maxZ - this.originZ));
     }
@@ -484,7 +525,7 @@ public final class MmsChunkRegion {
             throw new IllegalArgumentException("vertex segment holds " + vertices.byteSize()
                 + " bytes, " + vertexCount + " elements need " + vertexBytesNeeded);
         }
-        if (!pulled) {
+        if (!implicitQuads) {
             long indexBytesNeeded = (long) indexCount * indexBytes;
             if (indices == null || indices.byteSize() < indexBytesNeeded) {
                 throw new IllegalArgumentException("index segment holds "
@@ -492,12 +533,13 @@ public final class MmsChunkRegion {
                     + " u" + (indexBytes * 8) + " indices need " + indexBytesNeeded);
             }
         } else if ((vertexCount & 3) != 0) {
-            throw new IllegalArgumentException("pulled meshes upload whole quads (4 elements each), got "
-                + vertexCount);
+            throw new IllegalArgumentException((pulled ? "pulled" : "quad-indexed")
+                + " meshes upload whole quads (4 elements each), got " + vertexCount);
         }
         return place(vertices.asSlice(0, vertexBytesNeeded), vertexCount,
-            pulled ? null : indices.asSlice(0, (long) indexCount * indexBytes), indexCount,
-            pulled ? vertexCount / 4 : 0, minX, minY, minZ, maxX, maxY, maxZ);
+            implicitQuads ? null : indices.asSlice(0, (long) indexCount * indexBytes),
+            implicitQuads ? vertexCount / 4 * 6 : indexCount,
+            implicitQuads ? vertexCount / 4 : 0, minX, minY, minZ, maxX, maxY, maxZ);
     }
 
     /**
@@ -520,7 +562,7 @@ public final class MmsChunkRegion {
                                       float maxX, float maxY, float maxZ) {
         MmsArenaAllocator.Segment vertexSeg = allocOrGrow(vertexAlloc, vertexCount, true);
         MmsArenaAllocator.Segment indexSeg = null;
-        if (!pulled) {
+        if (!implicitQuads) {
             try {
                 indexSeg = allocOrGrow(indexAlloc, indexCount, false);
             } catch (RuntimeException e) {
@@ -908,7 +950,7 @@ public final class MmsChunkRegion {
         if (sparse) {
             // Copy-free: decommit every committed page no live segment
             // touches. Cheap enough to sweep both arenas each call.
-            acted = sweepDecommit(true) | (!pulled && sweepDecommit(false));
+            acted = sweepDecommit(true) | (!implicitQuads && sweepDecommit(false));
         } else {
             acted = false;
             long vertexTarget = trimTarget(vertexAlloc.used(), vertexAlloc.capacity(),
@@ -916,7 +958,7 @@ public final class MmsChunkRegion {
             if (vertexTarget > 0) {
                 resizeArena(vertexAlloc, vertexTarget, true);
                 acted = true;
-            } else if (!pulled) {
+            } else if (!implicitQuads) {
                 long indexTarget = trimTarget(indexAlloc.used(), indexAlloc.capacity(),
                     initialIndexCapacity, trimFraction, growthReserve, alignElements);
                 if (indexTarget > 0) {
@@ -970,13 +1012,16 @@ public final class MmsChunkRegion {
         if (committed == 0) {
             return false;
         }
+        // Sparse trim is copy-free (a page commitment change behind a fence), so it does not wait for usage to fall
+        // under trimFraction like the copy-trim does: it runs once dead pages are an eighth of the commitment
+        // (2026-11-22; was "usage <= trimFraction and a third dead", which parked ~20% of remeshed regions' bytes).
         long usedBytes = alloc.used() * elementBytes;
-        if (usedBytes > (long) (committed * trimFraction)) {
-            return false;
+        if (usedBytes > 0 && (committed - usedBytes) * 8 < committed) {
+            return false;   // dead pages are a subset of the slack: cheap reject before the page scan
         }
         BitSet dead = deadPages(vertex);
         long deadBytes = (long) dead.cardinality() * pageSize;
-        if (deadBytes == 0 || (usedBytes > 0 && deadBytes * 3 < committed)) {
+        if (deadBytes == 0 || (usedBytes > 0 && deadBytes * 8 < committed)) {
             return false;
         }
         // Everything queued so far — including the last draws of the freed
@@ -1208,8 +1253,8 @@ public final class MmsChunkRegion {
             originBufferId = 0;
         }
         GL15.glDeleteBuffers(vertexBufferId);
-        if (!pulled) {
-            GL15.glDeleteBuffers(indexBufferId); // pulled regions share the quad EBO
+        if (!implicitQuads) {
+            GL15.glDeleteBuffers(indexBufferId); // pulled / quad-indexed regions share a quad EBO
         }
         if (quadTextureId != 0) {
             GL11.glDeleteTextures(quadTextureId);

@@ -157,6 +157,7 @@ public final class CendaVoxelWorld {
     static final MethodHandle STREAM_STATS_GET;
     static final MethodHandle STREAM_MISSING;
     static final MethodHandle STREAM_REMESH_ALL;
+    static final MethodHandle STREAM_SET_DETAIL_RADIUS;
     static final MethodHandle TEST_TOY_GENERATOR_CREATE;
     static final MethodHandle TEST_TOY_GENERATOR_DESTROY;
     // octree LOD (#122)
@@ -284,6 +285,7 @@ public final class CendaVoxelWorld {
         STREAM_STATS_GET = optional("cv_stream_stats_get", FunctionDescriptor.ofVoid(ADDR, ADDR));
         STREAM_MISSING = optional("cv_stream_missing", FunctionDescriptor.of(I64, ADDR, ADDR, I64));
         STREAM_REMESH_ALL = optional("cv_stream_remesh_all", FunctionDescriptor.of(I64, ADDR));
+        STREAM_SET_DETAIL_RADIUS = optional("cv_stream_set_detail_radius", FunctionDescriptor.of(I32, ADDR, I32));
         TEST_TOY_GENERATOR_CREATE = optional("cv_test_toy_generator_create", FunctionDescriptor.of(ADDR, I64));
         TEST_TOY_GENERATOR_DESTROY = optional("cv_test_toy_generator_destroy", FunctionDescriptor.ofVoid(ADDR));
 

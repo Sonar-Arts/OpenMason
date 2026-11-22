@@ -802,6 +802,84 @@ StampSummary stamps(const GpuMeshBuild& b) {
     return s;
 }
 
+// CV_BLOCK_DETAIL (2026-11-22): a cube with a bound model draws the model only in CV_MESH_DETAIL meshes and its
+// cube faces otherwise; build flags bit2 = an exposed detail cell (the look depends on the mode), bit3 = mode.
+void test_detail_blocks() {
+    constexpr uint16_t ORE = kIds;        // detail cube with a model (6 faces + a nugget on top)
+    constexpr uint16_t BAREORE = kIds + 1; // DETAIL flag but no model: a plain cube in both modes
+    uint16_t flags[kIds + 2];
+    for (int i = 0; i < kIds; ++i) flags[i] = kFlags[i];
+    flags[ORE] = kOpaque | CV_BLOCK_DETAIL;
+    flags[BAREORE] = kOpaque | CV_BLOCK_DETAIL;
+    cv_world* w = make_world(-1024, 1024);
+    cv_block_table_set(w, flags, kIds + 2);
+    std::vector<cv_model_quad> ore;
+    for (int f = 0; f < 6; ++f) ore.push_back(model_face(f, 1.0f));
+    cv_model_quad nugget = model_face(0, 1.0f);   // a raised square on the top face, culled with the top
+    for (auto& c : nugget.pos) {
+        c[0] = 0.4f + 0.2f * c[0];
+        c[2] = 0.4f + 0.2f * c[2];
+        c[1] = 1.05f;
+    }
+    nugget.texture_layer = 200;
+    ore.push_back(nugget);
+    CHECK(cv_model_define(w, 40, ore.data(), static_cast<int32_t>(ore.size())) == CV_OK);
+    CHECK(cv_block_model_bind(w, ORE, -1, 0, 40) == CV_OK);
+
+    auto stamps_of = [](const GpuMeshBuild& b) { return b.stamp_vertex_count / 4; };
+    auto count_quads = [](const GpuMeshBuild& b) { return b.quad_count[0] + b.quad_count[1] + b.quad_count[2]; };
+
+    // 1. One exposed ore in air: far = 6 cube faces, no stamps; near = 7 model quads, no cube faces.
+    std::vector<uint16_t> ids(CV_CUBE_CELLS, AIR);
+    ids[static_cast<size_t>(idx(5, 5, 5))] = ORE;
+    cv_cube_write_ids(w, 0, 0, 0, ids.data());
+    GpuMeshBuild far_b, near_b;
+    CHECK(build_gpu_mesh(w, 0, 0, 0, CV_MESH_SMOOTH_LIGHTING, far_b) == CV_OK);
+    CHECK(build_gpu_mesh(w, 0, 0, 0, CV_MESH_SMOOTH_LIGHTING | CV_MESH_DETAIL, near_b) == CV_OK);
+    CHECK(count_quads(far_b) == 6 && stamps_of(far_b) == 0);
+    CHECK(count_quads(near_b) == 0 && stamps_of(near_b) == 7);
+    CHECK((far_b.flags & 4u) != 0 && (far_b.flags & 8u) == 0);
+    CHECK((near_b.flags & 4u) != 0 && (near_b.flags & 8u) != 0);
+    // The CPU mesher (no detail flag) agrees with the far GPU mesh.
+    MeshLists m = mesh(w, 0, 0, 0, CV_MESH_SMOOTH_LIGHTING);
+    CHECK(m.q[0].size() == 6 && m.host.empty());
+
+    // 2. Buried ore (stone all around, ore beside ore): nothing exposed, nothing drawn of it, no bit2.
+    std::fill(ids.begin(), ids.end(), STONE);
+    ids[static_cast<size_t>(idx(10, 10, 10))] = ORE;
+    ids[static_cast<size_t>(idx(11, 10, 10))] = ORE;
+    cv_cube_write_ids(w, 0, 0, 0, ids.data());
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dx = -1; dx <= 1; ++dx)
+                if (dx != 0 || dy != 0 || dz != 0) {
+                    std::vector<uint16_t> solid(CV_CUBE_CELLS, STONE);
+                    cv_cube_write_ids(w, dx, dy, dz, solid.data());
+                }
+    CHECK(build_gpu_mesh(w, 0, 0, 0, CV_MESH_SMOOTH_LIGHTING, far_b) == CV_OK);
+    CHECK(build_gpu_mesh(w, 0, 0, 0, CV_MESH_SMOOTH_LIGHTING | CV_MESH_DETAIL, near_b) == CV_OK);
+    CHECK((far_b.flags & 4u) == 0 && (near_b.flags & 4u) == 0);
+    CHECK(stamps_of(near_b) == 0 && count_quads(far_b) == 0 && count_quads(near_b) == 0);
+
+    // 3. Ore with one air neighbour: exposed; far draws one cube face, near the model's top + nugget only.
+    ids[static_cast<size_t>(idx(10, 11, 10))] = AIR;
+    cv_cube_write_ids(w, 0, 0, 0, ids.data());
+    CHECK(build_gpu_mesh(w, 0, 0, 0, CV_MESH_SMOOTH_LIGHTING, far_b) == CV_OK);
+    CHECK(build_gpu_mesh(w, 0, 0, 0, CV_MESH_SMOOTH_LIGHTING | CV_MESH_DETAIL, near_b) == CV_OK);
+    CHECK((far_b.flags & 4u) != 0 && (near_b.flags & 4u) != 0);
+    CHECK(stamps_of(far_b) == 0 && stamps_of(near_b) == 2);   // top face + nugget (both cull with face 0)
+    // far: the ore top + the stone faces around the air cell (5 stone faces, the ore one is the 6th)
+    CHECK(count_quads(far_b) == 6);
+    CHECK(count_quads(near_b) == 5);   // stone faces only; the ore is a model now
+
+    // 4. DETAIL without a bound model: a plain cube in both modes, never "exposed detail".
+    ids[static_cast<size_t>(idx(10, 10, 10))] = BAREORE;
+    cv_cube_write_ids(w, 0, 0, 0, ids.data());
+    CHECK(build_gpu_mesh(w, 0, 0, 0, CV_MESH_SMOOTH_LIGHTING | CV_MESH_DETAIL, near_b) == CV_OK);
+    CHECK((near_b.flags & 4u) == 0 && stamps_of(near_b) == 0 && count_quads(near_b) == 6);
+    cv_world_destroy(w);
+}
+
 void test_oversize_models() {
     cv_world* w = make_world(-1024, 1024);
     // range: [-4, 5] accepted, beyond refused (the old limit was [-1, 2])
@@ -1553,6 +1631,7 @@ int main() {
         {"visibility", test_visibility},
         {"walk", test_walk},
         {"models", test_models},
+        {"detail blocks", test_detail_blocks},
         {"oversize models", test_oversize_models},
         {"fluids", test_fluids},
         {"packing", test_packing},

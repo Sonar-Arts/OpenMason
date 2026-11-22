@@ -46,6 +46,7 @@ struct Job {
     uint64_t epoch = 0;               // Mesh: the stream's mesh_epoch when queued (cv_stream_remesh_all)
     std::vector<Int3> origins;        // Populate: the chain of origins run in order (c = origins[0])
     uint64_t key = 0;                 // Generate / Top: LoadItem key order (worker_main runs the lower first)
+    bool detail = true;               // Mesh: build with CV_MESH_DETAIL (cv_stream_set_detail_radius)
 };
 
 // Store: a store record, Generated: generator output - either way PREPARED on the worker (cv_internal.hpp
@@ -94,8 +95,15 @@ enum : uint16_t {
     kSaveInFlight = 1u << 7,
     kAdopted = 1u << 8,      // installed by the host (REMOTE decode, host create)
     kRemoteWait = 1u << 9,   // in remote_wait
-    kWaitOver = 1u << 10     // remote neighbour wait expired: mesh without waiting
+    kWaitOver = 1u << 10,    // remote neighbour wait expired: mesh without waiting
+    kDetailMesh = 1u << 11,  // its handed-out mesh was built with CV_MESH_DETAIL
+    kHasDetail = 1u << 12    // its handed-out mesh holds exposed CV_BLOCK_DETAIL cells (in detail_cubes)
 };
+
+// DETAIL RADIUS (cv_stream_set_detail_radius): a cube keeps its detail mesh up to radius + this many blocks.
+constexpr int32_t kDetailHysteresis = 8;
+// Viewer movement (blocks, any axis) that re-evaluates the detail cubes.
+constexpr int64_t kDetailMoveStep = 4;
 
 struct CubeState {
     uint8_t level = 0;
@@ -224,6 +232,12 @@ struct cv_stream {
     std::vector<int64_t> dirty_buf;
     std::vector<cenda::Int3> pop_changed;   // cubes of finished populations: CHANGED candidates (next step_dirty)
     uint64_t mesh_epoch = 0;                // bumped by cv_stream_remesh_all
+    // DETAIL RADIUS (owner): < 0 = every mesh with CV_MESH_DETAIL. detail_cubes = cubes whose handed-out mesh
+    // holds exposed detail cells (kHasDetail); detail_at = the viewers they were last evaluated against.
+    int32_t detail_radius = -1;
+    bool detail_dirty = false;
+    std::unordered_set<cenda::Int3, cenda::Int3Hash> detail_cubes;
+    std::vector<cv_center> detail_at;
     std::vector<cv_center> owner_centers;
     uint64_t owner_centers_version = ~uint64_t{0};
     bool tops_changed = false;

@@ -227,7 +227,8 @@ void run_mesh(cv_stream* s, const Job& job, Result& r) {
     MeshResult& m = *r.mesh;
     m.c = job.c;
     m.epoch = job.epoch;
-    r.status = build_gpu_mesh(s->world, job.c.x, job.c.y, job.c.z, s->mesh_flags, m.build);
+    const uint32_t flags = s->mesh_flags | (job.detail ? CV_MESH_DETAIL : 0u);
+    r.status = build_gpu_mesh(s->world, job.c.x, job.c.y, job.c.z, flags, m.build);
     int64_t bytes = 0;
     for (const auto& q : m.build.quad16) bytes += static_cast<int64_t>(q.size());
     bytes += static_cast<int64_t>(m.build.water.size() + m.build.stamp_vertices.size() +

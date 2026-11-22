@@ -9,7 +9,8 @@ struct GpuMeshBuild {
     std::vector<uint8_t> stamp_vertices; int32_t stamp_vertex_count = 0;  // COMPACT20
     std::vector<uint32_t> stamp_indices;
     float aabb_min[3] = {0, 0, 0}, aabb_max[3] = {0, 0, 0};              // region-local
-    uint16_t visibility = 0; uint16_t flags = 0;                          // flags: bit0 empty, bit1 has translucent
+    uint16_t visibility = 0; uint16_t flags = 0;                          // flags: bit0 empty, bit1 has translucent,
+                                                                          // bit2 exposed detail cell, bit3 built with CV_MESH_DETAIL
     int64_t revision = 0;
     void clear();
 };

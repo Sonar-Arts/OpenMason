@@ -20,6 +20,12 @@ public final class BlockFlags {
     public static final int TRANSLUCENT = 0x0020;
     /** Not a cube: the host (or a bound native model) meshes it. */
     public static final int HOST_GEOMETRY = 0x0040;
+    /**
+     * A {@link #CUBE} that also has a bound model (e.g. an ore with relief): meshes built with
+     * {@link CubeStream#MESH_DETAIL} draw the model, the others the cube faces. Streams pick the mode per cube from
+     * {@link CubeStream#setDetailRadius}. Without a bound model the flag does nothing.
+     */
+    public static final int DETAIL = 0x0080;
 
     private BlockFlags() {
     }

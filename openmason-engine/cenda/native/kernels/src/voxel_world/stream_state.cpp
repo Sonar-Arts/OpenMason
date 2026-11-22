@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <vector>
 
@@ -32,6 +33,7 @@ CubeState& get_cube(cv_stream* s, const Int3& c) {
 }
 void erase_cube(cv_stream* s, const Int3& c) {
     if (s->cubes.erase(c) == 0) return;
+    s->detail_cubes.erase(c);
     ColumnState* col = find_col(s, c.x, c.z);
     if (col != nullptr) --col->states;
     touch(s, c.x, c.z);
@@ -82,6 +84,66 @@ bool origin_done(cv_stream* s, const Int3& o) {
     ColumnState* col = find_col(s, o.x, o.z);
     if (col == nullptr || col->rec != 2) return false;
     return std::binary_search(col->populated.begin(), col->populated.end(), o.y);
+}
+
+bool want_detail(const cv_stream* s, const Int3& c, bool had) {
+    if (s->detail_radius < 0) return true;
+    if (s->owner_centers.empty()) return had;
+    const double r = static_cast<double>(s->detail_radius) + (had ? kDetailHysteresis : 0);
+    const double r2 = r * r;
+    for (const cv_center& v : s->owner_centers) {
+        // Distance from the viewer (cell centre) to the cube's box [c * 32, c * 32 + 32).
+        double d2 = 0.0;
+        const int64_t cc[3] = {c.x, c.y, c.z};
+        const int64_t vv[3] = {v.x, v.y, v.z};
+        for (int a = 0; a < 3; ++a) {
+            const double lo = static_cast<double>(cc[a]) * 32.0;
+            const double p = static_cast<double>(vv[a]) + 0.5;
+            const double d = p < lo ? lo - p : (p > lo + 32.0 ? p - lo - 32.0 : 0.0);
+            d2 += d * d;
+        }
+        if (d2 <= r2) return true;
+    }
+    return false;
+}
+
+void note_detail(cv_stream* s, const Int3& c, CubeState& st, uint16_t build_flags) {
+    const bool has = (build_flags & 4u) != 0;
+    const bool built = (build_flags & 8u) != 0;
+    st.flags = static_cast<uint16_t>((st.flags & ~(kDetailMesh | kHasDetail)) | (built ? kDetailMesh : 0) |
+                                     (has ? kHasDetail : 0));
+    if (has) {
+        s->detail_cubes.insert(c);
+        if (want_detail(s, c, built) != built) request_remesh(s, c, st);
+    } else {
+        s->detail_cubes.erase(c);
+    }
+}
+
+void step_detail(cv_stream* s) {
+    if (s->no_mesh) return;
+    bool moved = s->detail_dirty;
+    if (!moved && s->detail_radius >= 0) {
+        if (s->detail_at.size() != s->owner_centers.size()) {
+            moved = true;
+        } else {
+            for (size_t i = 0; i < s->detail_at.size() && !moved; ++i) {
+                const cv_center& a = s->detail_at[i];
+                const cv_center& b = s->owner_centers[i];
+                moved = std::llabs(a.x - b.x) >= kDetailMoveStep || std::llabs(a.y - b.y) >= kDetailMoveStep ||
+                        std::llabs(a.z - b.z) >= kDetailMoveStep;
+            }
+        }
+    }
+    if (!moved) return;
+    s->detail_dirty = false;
+    s->detail_at = s->owner_centers;
+    for (const Int3& c : s->detail_cubes) {
+        CubeState* st = find_cube(s, c);
+        if (st == nullptr || !installed(*st)) continue;
+        const bool have = (st->flags & kDetailMesh) != 0;
+        if (want_detail(s, c, have) != have) request_remesh(s, c, *st);
+    }
 }
 
 void enqueue_mesh(cv_stream* s, const Int3& c, CubeState& st) {

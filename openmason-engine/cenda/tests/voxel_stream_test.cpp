@@ -1408,6 +1408,98 @@ void test_remesh_all() {
     CHECK(env.stats().errors_total == 0);
 }
 
+// DETAIL RADIUS (2026-11-22, cv_stream_set_detail_radius): CV_BLOCK_DETAIL blocks are meshed as their model only
+// in cubes near a viewer; moving the viewer re-meshes exactly the detail cubes that crossed the radius.
+void test_detail_radius() {
+    CHECK(cv_stream_set_detail_radius(nullptr, 10) == CV_ERR_ARG);
+    const uint32_t mesh = CV_MESH_SMOOTH_LIGHTING | CV_MESH_GREEDY;
+    Env env(4, "", false, 7, false, mesh);
+    auto find_cube = [&](cv_stream* s, const Int3& c) -> CubeState* {
+        const auto it = s->cubes.find(c);
+        return it == s->cubes.end() ? nullptr : &it->second;
+    };
+    cv_center viewer = center(8, 20, 8, 112, 32);
+    env.centers({viewer});
+    CHECK(env.settle());
+    // ORE = a detail cube with a bound full-cube model.
+    constexpr uint16_t ORE = 6;
+    uint16_t flags[7];
+    for (int i = 0; i < 6; ++i) flags[i] = kFlags[i];
+    flags[ORE] = kSolid | CV_BLOCK_DETAIL;
+    cv_block_table_set(env.world, flags, 7);
+    std::vector<cv_model_quad> quads;
+    for (int f = 0; f < 6; ++f) {
+        cv_model_quad q{};
+        const int ax = f < 2 ? 1 : (f < 4 ? 2 : 0);   // face order +y -y -z +z +x -x
+        const float side = (f == 0 || f == 3 || f == 4) ? 1.0f : 0.0f;
+        const int u = (ax + 1) % 3, v = (ax + 2) % 3;
+        for (int c = 0; c < 4; ++c) {
+            q.pos[c][ax] = side;
+            q.pos[c][u] = static_cast<float>(c & 1);
+            q.pos[c][v] = static_cast<float>(c >> 1);
+            q.uv[c][0] = static_cast<float>(c & 1);
+            q.uv[c][1] = static_cast<float>(c >> 1);
+        }
+        q.normal[ax] = side > 0.5f ? 1.0f : -1.0f;
+        q.texture_layer = 9;
+        q.cull_face = static_cast<uint8_t>(f);
+        quads.push_back(q);
+    }
+    CHECK(cv_model_define(env.world, 5, quads.data(), 6) == CV_OK);
+    CHECK(cv_block_model_bind(env.world, ORE, -1, 0, 5) == CV_OK);
+    // A floating ore (air below and above) in an installed cube of column (x, z).
+    auto place = [&](int64_t x, int64_t z) -> Int3 {
+        for (int64_t y = 400; y > kMinY + 2; --y) {
+            const Int3 c{x >> 5, y >> 5, z >> 5};
+            const CubeState* st = find_cube(env.stream, c);
+            if (st == nullptr || st->phase != kInstalled) continue;
+            if (cv_get(env.world, x, y, z) == AIR && cv_get(env.world, x, y - 1, z) == AIR &&
+                cv_get(env.world, x, y + 1, z) == AIR) {
+                CHECK(cv_set(env.world, x, y, z, ORE) == CV_OK);
+                return c;
+            }
+        }
+        CHECK(false);
+        return Int3{0, 0, 0};
+    };
+    const Int3 near_c = place(12, 12);
+    const Int3 far_c = place(8 + 80, 8);
+    CHECK(cv_stream_set_detail_radius(env.stream, 24) == CV_OK);
+    CHECK(cv_stream_remesh_all(env.stream) > 0);
+    // Every REMESHED hand-out of a detail cube carries the mode the stream recorded for it.
+    int64_t checked = 0;
+    auto per_tick = [&] {
+        for (const cv_event& e : env.seen.last) {
+            if (e.type != CV_EV_REMESHED) continue;
+            const cv_gpu_mesh* m = cv_stream_mesh(env.stream, e.mesh);
+            if (m == nullptr || (m->flags & 4u) == 0) continue;
+            const CubeState* st = find_cube(env.stream, Int3{e.cx, e.cy, e.cz});
+            CHECK(st != nullptr && ((st->flags & kDetailMesh) != 0) == ((m->flags & 8u) != 0));
+            ++checked;
+        }
+    };
+    CHECK(env.settle(60000, nullptr, per_tick));
+    auto state = [&](const Int3& c) { return find_cube(env.stream, c)->flags; };
+    CHECK((state(near_c) & kHasDetail) != 0 && (state(near_c) & kDetailMesh) != 0);
+    CHECK((state(far_c) & kHasDetail) != 0 && (state(far_c) & kDetailMesh) == 0);
+    CHECK(env.stream->detail_cubes.size() == 2);   // only cubes holding exposed ore
+    // Walk to the far ore: it gains detail, the first one (now ~80 blocks away) loses it.
+    const int64_t meshes_before = env.seen.meshes;
+    viewer.x = 88;
+    viewer.z = 8;
+    env.centers({viewer});
+    CHECK(env.settle(60000, nullptr, per_tick));
+    CHECK((state(far_c) & kDetailMesh) != 0);
+    CHECK((state(near_c) & kDetailMesh) == 0);
+    CHECK(env.seen.meshes > meshes_before);
+    // radius < 0: every mesh with detail.
+    CHECK(cv_stream_set_detail_radius(env.stream, -5) == CV_OK);
+    CHECK(env.settle(60000, nullptr, per_tick));
+    CHECK((state(near_c) & kDetailMesh) != 0 && (state(far_c) & kDetailMesh) != 0);
+    CHECK(checked >= 4);
+    CHECK(env.stats().errors_total == 0);
+}
+
 // ---- planning and priority (2026-11-17): async TOPs, one distance order -------------------------------------
 
 // Ticks until the first COLUMN_READY (false on timeout).
@@ -1638,6 +1730,7 @@ int main() {
         {"native surface factory", test_native_surface},
         {"CHANGED events + NO_MESH", test_changed_and_no_mesh},
         {"remesh_all", test_remesh_all},
+        {"detail radius", test_detail_radius},
         {"CHANGED population paths", test_changed_population_paths},
         {"async TOPs (slow column_surface)", test_async_tops},
         {"READY order nearest first", test_ready_order},

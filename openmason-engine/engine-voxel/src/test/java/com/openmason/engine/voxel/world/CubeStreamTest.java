@@ -288,6 +288,55 @@ class CubeStreamTest {
     }
 
     @Test
+    void detailRadiusPicksTheMeshModePerCube() throws InterruptedException {
+        assumeTrue(CendaVoxelWorld.STREAM_SET_DETAIL_RADIUS != null, "this Cenda library has no detail radius");
+        try (CubeWorld world = newWorld()) {
+            Seen seen = new Seen();
+            try (CubeStream stream = CubeStream.create(world, null, generator, 4,
+                CubeStream.MESH_SMOOTH_LIGHTING | CubeStream.MESH_GREEDY)) {
+                stream.setCenters(StreamCenter.of(8, 20, 8, 112, 32));
+                settle(stream, world, seen, true, null);
+                short[] flags = java.util.Arrays.copyOf(FLAGS, 7);
+                flags[6] = (short) (BlockFlags.CUBE | BlockFlags.OPAQUE | BlockFlags.SKY_OPAQUE
+                    | BlockFlags.VIS_OPAQUE | BlockFlags.DETAIL);
+                world.setBlockTable(flags);
+                float[] top = {0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1};
+                world.defineModel(3, List.of(new CubeWorld.ModelQuad(top, new float[8], new float[] {0, 1, 0}, 9, 0, 0)));
+                world.bindBlockModel(6, -1, 0, 3);
+                CubePos near = placeFloating(world, 12, 12);
+                CubePos far = placeFloating(world, 70, 8);
+                stream.setDetailRadius(32);
+                stream.remeshAll();
+                Map<CubePos, Integer> lastFlags = new HashMap<>();
+                long end = System.currentTimeMillis() + 30_000;
+                while ((!lastFlags.containsKey(near) || !lastFlags.containsKey(far)) && System.currentTimeMillis() < end) {
+                    StreamEvents ev = stream.tick(null);
+                    for (int i = 0; i < ev.count(); i++) {
+                        if (ev.type(i) != CubeStream.EV_REMESHED) continue;
+                        StreamMesh m = stream.mesh(ev.mesh(i));
+                        if (m.hasDetail()) lastFlags.put(new CubePos(m.cx(), m.cy(), m.cz()), m.flags());
+                    }
+                    Thread.sleep(1);
+                }
+                assertEquals(12, lastFlags.get(near) & 12, "near: exposed detail, built with detail");
+                assertEquals(4, lastFlags.get(far) & 12, "far: exposed detail, built without detail");
+            }
+        }
+    }
+
+    /** Puts block 6 in the first air cell with air above and below (an installed cube) of column (x, z). */
+    private static CubePos placeFloating(CubeWorld world, long x, long z) {
+        for (long y = 400; y > -380; y--) {
+            if (!world.hasCube(x >> 5, y >> 5, z >> 5)) continue;
+            if (world.get(x, y, z) == 0 && world.get(x, y - 1, z) == 0 && world.get(x, y + 1, z) == 0) {
+                world.set(x, y, z, 6);
+                return new CubePos(x >> 5, y >> 5, z >> 5);
+            }
+        }
+        throw new AssertionError("no air cell in column " + x + ", " + z);
+    }
+
+    @Test
     void remoteStreamMeshesWhatTheHostDecodes() throws InterruptedException {
         try (CubeWorld server = newWorld(); CubeWorld client = newWorld()) {
             Seen serverSeen = new Seen();

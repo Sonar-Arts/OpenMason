@@ -248,6 +248,20 @@ int32_t cv_stream_save_all(cv_stream* s) {
     return rc;
 }
 
+int32_t cv_stream_set_detail_radius(cv_stream* s, int32_t radius_blocks) {
+    if (s == nullptr) {
+        cv_set_error("cv_stream_set_detail_radius: null stream");
+        return CV_ERR_ARG;
+    }
+    std::lock_guard<std::mutex> owner(s->owner_mutex);
+    const int32_t r = radius_blocks < 0 ? -1 : radius_blocks;
+    if (r != s->detail_radius) {
+        s->detail_radius = r;
+        s->detail_dirty = true;   // step_detail re-evaluates every detail cube on the next tick
+    }
+    return CV_OK;
+}
+
 int64_t cv_stream_remesh_all(cv_stream* s) {
     if (s == nullptr) {
         cv_set_error("cv_stream_remesh_all: null stream");

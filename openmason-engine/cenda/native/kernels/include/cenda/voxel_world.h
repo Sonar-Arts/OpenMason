@@ -79,6 +79,11 @@ enum {
 #define CV_BLOCK_TRANSLUCENT   0x0020u /* drawn in the translucent layer (ice); implies TRANSPARENT */
 #define CV_BLOCK_HOST_GEOMETRY 0x0040u /* not a cube: listed in cv_mesh_out.host_cells for the host to
                                           mesh (stamps, snow layers, crosses, water handled by host) */
+#define CV_BLOCK_DETAIL        0x0080u /* (added 2026-11-22, additive) a CUBE that also has a bound model (e.g. an
+                                          ore with relief nuggets): a mesh built with CV_MESH_DETAIL draws the
+                                          model (the cell is special, as an unflagged bound block), any other
+                                          mesh draws the unit cube faces (cv_block_faces_set). Without a bound
+                                          model the flag does nothing. Combine with CUBE (+ OPAQUE etc.) */
 
 /* ---- world ---------------------------------------------------------------------------------- */
 typedef struct cv_world cv_world;
@@ -282,6 +287,9 @@ typedef struct cv_host_cell {
 
 #define CV_MESH_SMOOTH_LIGHTING 1u /* per-corner AO + sky interpolation (else flat per face) */
 #define CV_MESH_GREEDY          2u /* merge equal faces (same id, identical quantized corner light) */
+#define CV_MESH_DETAIL          4u /* (added 2026-11-22) CV_BLOCK_DETAIL blocks draw their bound model (else
+                                      their cube faces); streams choose it per cube, see
+                                      cv_stream_set_detail_radius */
 
 typedef struct cv_mesh_out {
     cv_quad* opaque;          int32_t opaque_cap;      int32_t opaque_count;
@@ -450,7 +458,8 @@ typedef struct cv_gpu_mesh {
     const uint8_t* stamp_indices;  int32_t stamp_index_count;   /* u32 */
     float aabb_min[3], aabb_max[3];  /* region-local bounds of the geometry */
     uint16_t visibility;       /* as cv_mesh_out */
-    uint16_t flags;            /* bit0 empty, bit1 has translucent */
+    uint16_t flags;            /* bit0 empty, bit1 has translucent, bit2 holds an exposed CV_BLOCK_DETAIL cell
+                                  (its look depends on CV_MESH_DETAIL), bit3 built with CV_MESH_DETAIL */
     int64_t revision;          /* cube revision the mesh was built from */
 } cv_gpu_mesh;
 
@@ -673,6 +682,14 @@ int64_t cv_stream_missing(cv_stream* stream, int64_t* out_xyz, int64_t cap);
  * budgets (max_meshes, max_mesh_bytes); every cube with geometry is handed out once more as REMESHED. Returns
  * the number of cubes queued (0 for a CV_STREAM_NO_MESH stream) or CV_ERR_ARG. */
 int64_t cv_stream_remesh_all(cv_stream* stream);
+/* (added 2026-11-22) OWNER THREAD (takes the owner lock). DETAIL RADIUS: mesh jobs of cubes whose box lies within
+ * radius_blocks of a viewer (cv_stream_set_centers) are built with CV_MESH_DETAIL, the others without it, so
+ * CV_BLOCK_DETAIL blocks draw their model only near a viewer and as cheap cube faces beyond. A cube already
+ * meshed with detail keeps it until it lies more than radius_blocks + 8 away (hysteresis). When the viewers
+ * move (or the radius changes), meshed cubes holding exposed detail cells (cv_gpu_mesh.flags bit2) whose side
+ * of the radius changed are re-meshed through the normal queue. radius_blocks < 0 (the default) = every mesh
+ * with CV_MESH_DETAIL (models everywhere). CV_OK or CV_ERR_ARG. */
+int32_t cv_stream_set_detail_radius(cv_stream* stream, int32_t radius_blocks);
 /* Counters for the debug overlay; any thread. Computed fresh when no tick/save runs at that moment, otherwise
  * the previous snapshot (never blocks behind the owner). */
 typedef struct cv_stream_stats {
