@@ -31,7 +31,8 @@
 
 ## Verify visually, then report
 - viewport_capture after meaningful geometry/texture changes; canvas_capture
-  for the texture editor. Compare against the intent, not memory.
+  for the texture editor (grid:true when you need texel coordinates to fix).
+  Compare against the intent, not memory.
 - Report what changed in model terms ("head widened 6→8, repainted snout"),
   not tool-call logs.
 

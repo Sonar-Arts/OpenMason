@@ -21,15 +21,15 @@ import java.util.concurrent.TimeoutException;
  * but the hop to the main thread stays: the controller and {@link LayerManager}
  * are main-thread state. Canvas textures are tiny (typically 16-64 px), so the
  * image is nearest-neighbor UPSCALED by a whole factor toward {@code max_size}
- * — pixel art stays hard-edged and actually viewable.
+ * — pixel art stays hard-edged and actually viewable. {@link PixelArtCapture}
+ * does the rendering: a per-texel size floor, transparency on a checkerboard
+ * (not black) and an optional coordinate grid.
  */
 public final class CanvasCaptureService {
 
     private static final long DEFAULT_TIMEOUT_MS = 10_000;
 
     static final int DEFAULT_MAX_SIZE = 1024;
-    private static final int MIN_SIZE = 64;
-    private static final int MAX_SIZE = 2048;
 
     private final EditorServices editorServices;
 
@@ -38,7 +38,8 @@ public final class CanvasCaptureService {
     }
 
     /**
-     * @param maxSize    longest-side target, clamped to [64, 2048]
+     * @param maxSize    longest-side target, clamped to [64, 2048] (small canvases are floored, see
+     *                   {@link PixelArtCapture#MIN_TEXEL_PX})
      * @param layerIndex layer to capture, or {@code null} for the visible composite
      */
     public McpImageContent capture(int maxSize, Integer layerIndex) {
@@ -49,12 +50,17 @@ public final class CanvasCaptureService {
      * @param documentId open texture document to capture, or {@code null} for the active one
      */
     public McpImageContent capture(int maxSize, Integer layerIndex, String documentId) {
-        int target = Math.clamp(maxSize, MIN_SIZE, MAX_SIZE);
+        return capture(new PixelArtCapture.Options(maxSize, false, null), layerIndex, documentId);
+    }
+
+    /**
+     * @param options    size, grid and background (see {@link PixelArtCapture})
+     * @param documentId open texture document to capture, or {@code null} for the active one
+     */
+    public McpImageContent capture(PixelArtCapture.Options options, Integer layerIndex, String documentId) {
         BufferedImage canvas = await(MainThreadExecutor.submit(() -> readCanvas(layerIndex, documentId)));
-        BufferedImage scaled = McpImageCodec.upscaleNearest(canvas, target);
-        // Oversized canvases (e.g. a large imported texture) still get capped.
-        scaled = McpImageCodec.downscale(scaled, target);
-        return new McpImageContent(McpImageCodec.encodePngBase64(scaled), "image/png");
+        BufferedImage image = PixelArtCapture.render(canvas, options);
+        return new McpImageContent(McpImageCodec.encodePngBase64(image), "image/png");
     }
 
     private BufferedImage readCanvas(Integer layerIndex, String documentId) {

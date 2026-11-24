@@ -105,14 +105,27 @@ public final class TextureToolDefinitions {
                 "canvas_capture",
                 "Capture the texture editor canvas as a PNG image — the visible layer composite, "
                         + "or one layer via 'layer'. Nearest-neighbor upscaled by a whole factor "
-                        + "toward max_size (default 1024, range 64-2048) so pixel art stays crisp "
-                        + "and viewable. Requires the texture editor to be open.",
+                        + "toward max_size (default 1024, range 64-2048); small canvases always get "
+                        + "at least " + PixelArtCapture.MIN_TEXEL_PX + " px per texel (a 32x32 sprite "
+                        + "comes back ~1280 px) so every texel spans several vision patches. "
+                        + "Transparent texels show a fine grey checkerboard (half-texel cells - a "
+                        + "painted grey texel is uniform), not black. grid:true adds texel lines, a "
+                        + "blue line every 8 texels and x (top) / y (left) rulers: capture plain to "
+                        + "judge the overall shape, then with grid:true to read off exact coordinates "
+                        + "of texels to fix. Requires the texture editor to be open.",
                 schema()
-                        .intg("max_size", "Longest-side pixel target, 64-2048 (default 1024)")
+                        .intg("max_size", "Longest-side pixel target, 64-2048 (default 1024; small "
+                                + "canvases are raised to " + PixelArtCapture.MIN_TEXEL_PX + " px/texel)")
                         .intg("layer", "Optional layer index; omit for the visible composite")
+                        .bool("grid", "Overlay texel grid + coordinate rulers (default false)")
+                        .str("background", "Transparent texels: 'checker' (default), 'transparent' "
+                                + "(keep alpha; many vision models then see black) or '#rrggbb'")
                         .build(),
                 args -> capture.capture(
-                        McpArgs.optInt(args, "max_size", CanvasCaptureService.DEFAULT_MAX_SIZE),
+                        new PixelArtCapture.Options(
+                                McpArgs.optInt(args, "max_size", CanvasCaptureService.DEFAULT_MAX_SIZE),
+                                McpArgs.optBool(args, "grid", false),
+                                PixelArtCapture.Background.parse(McpArgs.optString(args, "background"))),
                         args.hasNonNull("layer") ? reqInt(args, "layer") : null,
                         McpArgs.optString(args, "document"))));
 

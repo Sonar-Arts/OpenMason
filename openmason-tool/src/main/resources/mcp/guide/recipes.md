@@ -41,7 +41,10 @@ om.canvas.add_layer("shade")                        # becomes the active layer
 om.canvas.noise("value", seed=3, strength=0.4)
 om.canvas.set_layer(1, opacity=0.6)
 ```
-Verify with `canvas_capture` (visible composite, or one layer via `layer`).
+Verify with `canvas_capture` (visible composite, or one layer via `layer`). Small
+canvases come back large (>= 40 px per texel) with transparency on a grey checkerboard;
+capture plain to judge the silhouette, then `grid:true` to read exact texel coordinates
+(x ruler on top, y on the left, blue line every 8) before fixing individual pixels.
 Canvas edits land in the texture editor's own history (`undo` domain:"texture").
 
 ## Rig + idle animation
