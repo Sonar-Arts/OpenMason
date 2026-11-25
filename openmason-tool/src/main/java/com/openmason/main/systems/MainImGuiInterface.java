@@ -321,6 +321,10 @@ public class MainImGuiInterface implements ProjectBrowserListener {
             viewport3D.getCommandHistory().setOnHistoryChange(() -> modelState.setUnsavedChanges(true));
             // Skin weights live in the .omo too: a stroke, a weight op, undo and redo dirty the model (OM #165).
             viewport3D.getSkinHistory().setOnChange(() -> modelState.setUnsavedChanges(true));
+            // Bones and sockets too: any edit of either (Rigging pane, gizmo, MCP, undo) dirties the model;
+            // opening a model fills them with load(), which does not.
+            viewport3D.getBoneStore().addEditListener(() -> modelState.setUnsavedChanges(true));
+            viewport3D.getAttachmentStore().addEditListener(() -> modelState.setUnsavedChanges(true));
 
         } catch (Exception e) {
             logger.error("Failed to setup 3D viewport", e);

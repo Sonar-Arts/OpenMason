@@ -18,7 +18,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * OpenMason #165 rig-revamp gaps: binding a part to a bone (and the endpoint snap with it) is one undo step on the
- * MODEL history, which marks the model dirty; skin-weight history steps fire the model's dirty callback too.
+ * MODEL history, which marks the model dirty; skin-weight history steps fire the model's dirty callback too; bone and
+ * socket edits notify their edit listeners (the model state dirties itself there) but loading a model does not.
  */
 class RigEditHistoryTest {
 
@@ -80,5 +81,48 @@ class RigEditHistoryTest {
         assertTrue(history.redo());
         assertEquals(3, dirty.get());
         assertEquals(List.of("body"), skins.partIds());
+    }
+
+    @Test
+    void boneEditsNotifyButLoadingDoesNot() {
+        BoneStore bones = new BoneStore();
+        AtomicInteger edits = new AtomicInteger();
+        bones.addEditListener(edits::incrementAndGet);
+        bones.load(List.of(bone("arm", 1f), bone("leg", 1f)));
+        assertEquals(0, edits.get(), "opening a model is not an edit");
+        assertEquals(2, bones.getBones().size());
+        bones.put(bone("arm", 1f));
+        assertEquals(0, edits.get(), "putting the same bone back changes nothing");
+        bones.put(bone("arm", 2f));
+        bones.editLocal("leg", new Vector3f(0, 1, 0), null);
+        bones.remove("leg");
+        assertEquals(3, edits.get());
+        BoneSnapshot snap = BoneSnapshot.capture(bones);
+        bones.clear();
+        snap.restore(bones);  // an undo: the content changed, so it is an edit
+        assertEquals(5, edits.get());
+        bones.setBones(List.copyOf(bones.getBones()));
+        assertEquals(5, edits.get(), "replacing with the same skeleton is not an edit");
+        bones.setBonePose("arm", new Vector3f(1, 0, 0), new Vector3f());
+        bones.clearPose();
+        assertEquals(5, edits.get(), "poses are not edits");
+    }
+
+    @Test
+    void socketEditsNotifyButLoadingDoesNot() {
+        AttachmentStore sockets = new AttachmentStore();
+        AtomicInteger edits = new AtomicInteger();
+        sockets.addEditListener(edits::incrementAndGet);
+        OMOFormat.AttachmentPointEntry grip = new OMOFormat.AttachmentPointEntry("g", "grip_r", null, null,
+                0, 0, 0, 0, 0, 0, 1, 1, 1);
+        sockets.load(List.of(grip));
+        assertEquals(0, edits.get());
+        sockets.put(grip);
+        sockets.setSelectedAttachmentId("g");
+        assertEquals(0, edits.get());
+        sockets.put(new OMOFormat.AttachmentPointEntry("g", "grip_r", null, null, 0, 1, 0, 0, 0, 0, 1, 1, 1));
+        sockets.remove("g");
+        sockets.setPoints(List.of(grip));
+        assertEquals(3, edits.get());
     }
 }

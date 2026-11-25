@@ -51,8 +51,34 @@ public final class AttachmentStore {
         if (onChange != null) onChange.run();
     }
 
+    /** Listeners told when the socket list's CONTENT changes (not selection, not a {@link #load}). */
+    private final List<Runnable> editListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * Subscribe to edits of the sockets: put, remove, replace, clear (gizmo, inspector, MCP, undo/redo). The model
+     * state marks the model dirty from here (sockets are saved in the .omo); a {@link #load} does not fire it.
+     */
+    public void addEditListener(Runnable listener) {
+        editListeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    private void fireEdited() {
+        for (Runnable l : editListeners) l.run();
+    }
+
+    /** {@link #setPoints} as a LOAD (opening a model): no edit notification, so the model stays clean. */
+    public void load(List<OMOFormat.AttachmentPointEntry> entries) {
+        replace(entries);
+    }
+
     /** Replace the entire socket list. Null or empty clears it. */
     public void setPoints(List<OMOFormat.AttachmentPointEntry> entries) {
+        List<OMOFormat.AttachmentPointEntry> before = List.copyOf(points);
+        replace(entries);
+        if (!before.equals(points)) fireEdited();
+    }
+
+    private void replace(List<OMOFormat.AttachmentPointEntry> entries) {
         points.clear();
         byId.clear();
         if (entries != null) {
@@ -75,6 +101,7 @@ public final class AttachmentStore {
         points.add(entry);
         byId.put(entry.id(), entry);
         fireOnChange();
+        if (!entry.equals(existing)) fireEdited();
     }
 
     /** Remove a socket by id. */
@@ -88,6 +115,7 @@ public final class AttachmentStore {
             selectedAttachmentId = null;
         }
         fireOnChange();
+        fireEdited();
         return true;
     }
 
@@ -98,6 +126,7 @@ public final class AttachmentStore {
         byId.clear();
         selectedAttachmentId = null;
         fireOnChange();
+        fireEdited();
     }
 
     public boolean isEmpty() {

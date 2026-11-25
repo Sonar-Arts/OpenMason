@@ -108,8 +108,35 @@ public final class BoneStore {
         if (onChange != null) onChange.run();
     }
 
+    /** Listeners told when the skeleton's CONTENT changes (not poses or selection, not a {@link #load}). */
+    private final List<Runnable> editListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * Subscribe to edits of the skeleton itself: put, remove, replace, clear (gizmo, inspector, hierarchy, MCP,
+     * undo/redo). The model state marks the model dirty from here (bones are saved in the .omo); a {@link #load}
+     * does not fire it.
+     */
+    public void addEditListener(Runnable listener) {
+        editListeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    private void fireEdited() {
+        for (Runnable l : editListeners) l.run();
+    }
+
+    /** {@link #setBones} as a LOAD (opening a model): no edit notification, so the model stays clean. */
+    public void load(List<OMOFormat.BoneEntry> entries) {
+        replace(entries);
+    }
+
     /** Replace the entire skeleton. Null or empty clears the skeleton. Pose entries of gone bones drop. */
     public void setBones(List<OMOFormat.BoneEntry> entries) {
+        List<OMOFormat.BoneEntry> before = List.copyOf(bones);
+        replace(entries);
+        if (!before.equals(bones)) fireEdited();
+    }
+
+    private void replace(List<OMOFormat.BoneEntry> entries) {
         bones.clear();
         byId.clear();
         if (entries != null) {
@@ -136,6 +163,7 @@ public final class BoneStore {
         byId.put(entry.id(), entry);
         invalidate();
         fireOnChange();
+        if (!entry.equals(existing)) fireEdited();
     }
 
     /** Remove a bone by id. Children of the removed bone become roots. */
@@ -156,6 +184,7 @@ public final class BoneStore {
         }
         invalidate();
         fireOnChange();
+        fireEdited();
         return true;
     }
 
@@ -167,6 +196,7 @@ public final class BoneStore {
         pose.clear();
         invalidate();
         fireOnChange();
+        fireEdited();
     }
 
     public boolean isEmpty() {

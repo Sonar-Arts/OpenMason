@@ -561,7 +561,7 @@ public class ModelOperationService {
                 // Restore bone skeleton (v1.6+) — empty/null wipes any prior session skeleton
                 if (viewport != null) {
                     List<OMOFormat.BoneEntry> boneEntries = omoDeserializer.getLastLoadedBoneEntries();
-                    viewport.getBoneStore().setBones(boneEntries);
+                    viewport.getBoneStore().load(boneEntries);
                     if (boneEntries != null && !boneEntries.isEmpty()) {
                         logger.info("Loaded {} bone entries", boneEntries.size());
                     }
@@ -587,7 +587,7 @@ public class ModelOperationService {
                 if (viewport != null) {
                     List<OMOFormat.AttachmentPointEntry> attachmentPoints =
                             omoDeserializer.getLastLoadedAttachmentPointEntries();
-                    viewport.getAttachmentStore().setPoints(attachmentPoints);
+                    viewport.getAttachmentStore().load(attachmentPoints);
                     // Socket test previews belong to the previous model's sockets
                     viewport.getAttachmentPreviewStore().clearAll();
                     if (attachmentPoints != null && !attachmentPoints.isEmpty()) {
