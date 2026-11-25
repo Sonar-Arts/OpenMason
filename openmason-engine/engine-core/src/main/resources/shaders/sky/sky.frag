@@ -14,7 +14,7 @@ uniform vec3 sunColor;        // sunlight's hue: white high up, gold low, orange
 uniform vec3 earthShadowColor;  // the Earth's shadow rising opposite the sun after sunset
 uniform float earthShadowHeight; // its edge's height straight opposite the sun (sine of elevation)
 uniform float twilightBand;   // 0..1: how strongly the shadow and the Belt of Venus show
-uniform vec3 sunsetColor;     // evening gold × strength (0 = none)
+uniform vec3 sunsetColor;     // evening gold at the horizon × strength (0 = none)
 uniform float sunsetCoverage; // how far round from the sun the gold reaches
 uniform float daylight;       // 0 sun down .. 1 full day
 uniform float seaHorizon;     // the sea's edge seen from the eye (sine of elevation, <= 0)
@@ -32,6 +32,15 @@ const float EARTHSHINE = 0.035;
 const vec3 MOON_HALO = vec3(0.55, 0.62, 0.80);
 // Soft edge of the sunset gold; SkyLight.SUNSET_SOFTNESS.
 const float SUNSET_SOFTNESS = 0.3;
+// Scale heights (sine of elevation) of the gold opposite the sun and toward it;
+// SkyLight.SUNSET_H_AWAY / SUNSET_H_SUN.
+const float SUNSET_H_AWAY = 0.06;
+const float SUNSET_H_SUN = 0.35;
+// The gold's hue at the horizon and at its scale height; SkyLight.SUNSET_GOLD_LOW / HIGH.
+const vec3 SUNSET_GOLD_LOW = vec3(1.0, 0.42, 0.18);
+const vec3 SUNSET_GOLD_HIGH = vec3(1.0, 0.80, 0.48);
+// The gold seen over the land below the horizon, relative to the horizon's.
+const float SUNSET_BELOW = 0.67;
 // The Belt of Venus: the pink of the sky lit by the reddened sun, just above the Earth's shadow.
 const vec3 BELT_PINK = vec3(1.0, 0.58, 0.56);
 // The sun disc's own tint over sunlight's hue: a touch yellow at noon.
@@ -78,21 +87,35 @@ vec3 getTimedSkyColor(vec3 direction) {
     }
 }
 
-// The evening gold over `sky`. It reaches `sunsetCoverage` round from the sun:
-// 0 is the horizon under the sun, 0.5 overhead, 1 the horizon opposite. As the
-// coverage falls the gold leaves the opposite horizon first and ends at the sun.
-// SkyLight.sunsetWeight mirrors this for the fog and clouds.
+// The evening gold over `sky`. Round the sky it reaches `sunsetCoverage` from
+// the sun: 0 is the horizon under the sun, 0.5 overhead, 1 the horizon opposite.
+// As the coverage falls the gold leaves the opposite horizon first and ends at
+// the sun. Up the sky it stays low: the zenith keeps a deep blue through
+// twilight, because the sunlight reaching it has crossed the ozone layer at a
+// grazing angle, and ozone's Chappuis band absorbs the orange and red (it, not
+// Rayleigh scattering, makes most of the twilight blue). So the gold falls off
+// as exp(-y / H), with the scale height H low (SUNSET_H_AWAY) opposite the sun
+// and higher (SUNSET_H_SUN) toward it, where forward scattering lifts the glow.
+// Its hue follows the reddening: deep orange at the horizon, where the light
+// has crossed the most air, paling to a pale gold at height H.
+// SkyLight.sunsetWeight mirrors the shape for the fog and clouds.
 vec3 applySunset(vec3 direction, vec3 sky) {
+    float strength = max(sunsetColor.r, max(sunsetColor.g, sunsetColor.b));
+    if (strength <= 0.0) return sky;
     vec2 flatSun = sunDirection.xz / max(length(sunDirection.xz), 1e-4);
+    vec2 flatDir = direction.xz / max(length(direction.xz), 1e-4);
     float fromSun = 0.5 - 0.5 * dot(direction, vec3(flatSun.x, 0.0, flatSun.y));
     float weight = 1.0 - smoothstep(sunsetCoverage - SUNSET_SOFTNESS, sunsetCoverage + SUNSET_SOFTNESS, fromSun);
-    // The same gradient the pre-moon sunset had: 1.2x at the horizon, darker below it.
-    float up = smoothstep(0.0, 1.0, max(direction.y, 0.0));
+    float h = mix(SUNSET_H_AWAY, SUNSET_H_SUN, 0.5 + 0.5 * dot(flatDir, flatSun));
+    weight *= exp(-max(direction.y, 0.0) / h);
     vec3 gold = direction.y >= 0.0
-            ? mix(sunsetColor * 1.2, sunsetColor, up * 0.8 + 0.2 * smoothstep(0.0, 0.4, direction.y))
-            : mix(sunsetColor * 0.8, sunsetColor * 1.2, smoothstep(-0.3, 0.0, direction.y));
-    float strength = max(sunsetColor.r, max(sunsetColor.g, sunsetColor.b));
-    return mix(sky, gold / max(strength, 1e-4), weight * strength);
+            ? mix(SUNSET_GOLD_LOW, SUNSET_GOLD_HIGH, clamp(direction.y / h, 0.0, 1.0))
+            // Below the horizon, the haze over the land darkens a little.
+            : SUNSET_GOLD_LOW * mix(SUNSET_BELOW, 1.0, smoothstep(-0.3, 0.0, direction.y));
+    // sunsetColor is the horizon gold as the caller tints it (weather greys it):
+    // carry that tint over the whole grade.
+    vec3 tint = sunsetColor / (strength * SUNSET_GOLD_LOW);
+    return mix(sky, gold * tint, weight * strength);
 }
 
 // The afterglow over `sky`: low on the horizon where the sun went down (or will

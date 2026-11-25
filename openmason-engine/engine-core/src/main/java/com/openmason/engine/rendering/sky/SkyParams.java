@@ -11,9 +11,10 @@ import org.joml.Vector3f;
  * @param moonLight      moonlight relative to a full moon overhead (0..1): drives the halo
  * @param zenithColor    sky colour straight up, away from any sunset
  * @param horizonColor   sky colour at the horizon, away from any sunset
- * @param sunsetColor    sunset gold × its strength (black for none), drawn over the sky's sun side
- * @param sunsetCoverage how far round from the sun the gold reaches: 1.15 covers the sky,
- *                       about 85% on the opposite horizon; below 0 none (see {@code sky.frag})
+ * @param sunsetColor    sunset gold at the horizon × its strength (black for none), drawn low over
+ *                       the sky's sun side; {@code sky.frag} grades it paler up to its scale height
+ * @param sunsetCoverage how far round from the sun the gold reaches: 0.5 is overhead, 1 the
+ *                       horizon opposite; below 0 none (see {@code sky.frag})
  * @param sunGlow        the afterglow: red light low on the horizon toward the sun, premultiplied by strength
  * @param sunColor       sunlight's hue (brightest channel 1): the disc and its glow take it
  * @param earthShadowColor  the Earth's shadow, the band rising opposite the sun after sunset
