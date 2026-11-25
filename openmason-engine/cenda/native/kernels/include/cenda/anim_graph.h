@@ -19,7 +19,9 @@
  *   2. time: clip players that just became active restart at 0; players in a sync group follow the most
  *      influential member through sync markers (cm_sync_advance, blend spaces sync their own samples); others
  *      advance by rate x dt. Montages advance, follow their section links and blend out at their end.
- *   3. pose: the active nodes emit one cr_pose_op program (rig.h), run and composed by cr_poses_evaluate.
+ *   3. pose: the active nodes emit one cr_pose_op program (rig.h), run and composed by cr_poses_evaluate; the
+ *      graph's pose-modifier stack (#158) runs last on the root's pose (CR_OP_MODIFY), each modifier's weight =
+ *      its weight x weightParam x weightCurve this frame, the base matrix as the stack's world frame.
  *   4. outputs: notifies the step crossed (players at or above the graph's notifyThreshold influence, and
  *      montages), curves (influence-weighted; a clip without the curve counts 0), root motion (influence-weighted
  *      sum over the base chain and montages; with CG_ROOT_MOTION_EXTRACT the root is pinned in the pose).
@@ -105,10 +107,17 @@ int32_t cg_graph_montage_slot_count(const cg_graph* g);
 const char* cg_graph_montage_slot_name(const cg_graph* g, int32_t index);
 int32_t cg_graph_montage_slot_find(const cg_graph* g, const char* name);
 
+/* Pose-modifier targets the host sets (the file's `targets`) and the modifier count (#158). */
+int32_t cg_graph_target_count(const cg_graph* g);
+const char* cg_graph_target_name(const cg_graph* g, int32_t index);
+int32_t cg_graph_target_find(const cg_graph* g, const char* name);
+int32_t cg_graph_modifier_count(const cg_graph* g);
+
 /* --- Instance ----------------------------------------------------------------------------------------- */
 
 /* character may be NULL (then role masks and role tracks resolve to nothing). *out_unresolved (may be NULL)
- * counts mask entries whose role / joint the rig lacks. */
+ * counts mask entries, colliders and modifiers whose role / joint / socket the rig or character lacks (such a
+ * modifier is left out). */
 cg_instance* cg_instance_create(const cg_graph* g, const cr_rig* rig, const cc_char* character,
                                 int32_t* out_unresolved);
 void cg_instance_destroy(cg_instance* inst);
@@ -131,6 +140,11 @@ int32_t cg_instance_reset_trigger(cg_instance* inst, int32_t param);
 int32_t cg_instance_set_vec2(cg_instance* inst, int32_t param, float x, float y);
 /* out: 2 floats (a scalar parameter in out[0]). */
 int32_t cg_instance_get_param(const cg_instance* inst, int32_t param, float* out);
+
+/* Sets a host target for the pose modifiers: kind CR_TARGET_MODEL / CR_TARGET_WORLD (world goes through the
+ * frame = the base matrix of the evaluate) / CR_TARGET_NONE (the modifiers reading it do nothing); pos 3 floats,
+ * rot a quaternion x, y, z, w (NULL = identity). */
+int32_t cg_instance_set_target(cg_instance* inst, int32_t target, int32_t kind, const float* pos, const float* rot);
 
 /* Root motion modes. */
 enum {

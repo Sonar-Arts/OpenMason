@@ -248,6 +248,10 @@ void binding_into(const cr_rig& rig, const cr_clip& clip, Binding& out) {
     if (rig.bindings.size() > MAX_BINDINGS) rig.bindings.pop_back();
 }
 
+Mat4 joint_local_matrix(const Joint& j, const Pose& p) { return local_matrix(j, p.pos, p.rot, p.scale, 0.0, 0.0); }
+
+Mat4 joint_child_frame(const Joint& j, const Mat4& world) { return child_frame(j, world); }
+
 // ---- pose ops shared with pose.cpp -----------------------------------------------------------
 
 void pose_rest(const cr_rig& rig, PoseBuf& dst) {

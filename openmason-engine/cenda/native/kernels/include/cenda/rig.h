@@ -64,6 +64,7 @@ typedef struct cr_skin cr_skin;
 typedef struct cr_poses cr_poses;
 typedef struct cr_mask cr_mask;
 typedef struct cr_inertia cr_inertia;
+typedef struct cr_modstack cr_modstack;
 
 /* Results. */
 enum {
@@ -298,6 +299,8 @@ enum {
     CR_OP_REMOVE_ROOT = 7   /* in dst, joint b keeps the extracted `axes` of clip `object` at time 0: the
                                translation axes are pinned to the clip's first frame and the yaw turned
                                back to it (what cr_clip_root_motion reported moves the character) */
+    ,CR_OP_MODIFY = 8       /* dst (in/out) through the modifier stack `object` (cr_modstack), spring bones
+                               advanced by `param` (dt) seconds (pose modifiers, #158) */
 };
 
 /* One operation (48 bytes on every 64-bit platform). Unused fields 0. */
@@ -387,6 +390,117 @@ typedef struct cr_root_motion {
  * not key moves nothing. The yaw is the heading of the joint's +Z axis about +Y. */
 int32_t cr_clip_root_motion(const cr_clip* clip, const cr_rig* rig, int32_t joint, uint32_t axes,
                             float prev_time, float delta, cr_root_motion* out);
+
+/* ---------------------------------------------------------------------------------------------- */
+/* Pose modifiers (OpenMason #158; still CR ABI 2: functions and an op were added).                */
+/*                                                                                                 */
+/* Procedural adjustments applied after the animation, as an ordered stack with an influence per   */
+/* modifier (Godot SkeletonModifier3D, Unity Animation Rigging, Unreal IK Rig / Control Rig, Maya  */
+/* constraints). A cr_modstack belongs to one character (spring bones keep state) and runs as      */
+/* CR_OP_MODIFY on a pose slot: every modifier solves at full strength on the current pose (model  */
+/* space, posed by forward kinematics) and its joints are then blended back toward the pose it got */
+/* by its weight (translation and scale lerp, rotation slerp). Rotations act about each joint's    */
+/* pivot (a part's origin, a bone's head) and are written back as local Euler degrees; parent      */
+/* frames are treated as rotation (+ uniform scale).                                               */
+/*                                                                                                 */
+/* TARGETS are slots the stack reads: a model-space or world-space transform the host sets, or a   */
+/* joint's posed frame times an offset (sockets). World targets go through the stack's FRAME (the  */
+/* model -> world matrix, cr_modstack_set_frame); spring bones simulate in world space through it, */
+/* so moving the character swings them.                                                            */
+
+enum {
+    CR_MOD_TWO_BONE = 0,  /* joints [upper, mid, end]; target; pole (optional) sets the bend plane; p[0] =
+                             softness (0 = off: the fraction of the full length over which the reach eases
+                             in, so the limb never snaps straight); flag MATCH_ROTATION also turns the end
+                             joint to the target's rotation. No stretch. */
+    CR_MOD_FABRIK = 1,    /* joints [start, end] (the chain is the path between them); target; p[0] =
+                             iterations (default 10), p[1] = tolerance (default 1e-4) */
+    CR_MOD_CCD = 2,       /* as FABRIK, cyclic coordinate descent */
+    CR_MOD_AIM = 3,       /* joints[0..count) parents first, joint_weights; target; p[0..2] = the aim axis in
+                             the last joint's local frame (default (0,0,-1)): the turn that points it at the
+                             target is shared by the joints in proportion to their weights (they sum to the
+                             requested total). Flag AIM_EACH: every joint aims its own axis fully (eyes);
+                             flag LIMITS: each joint is clamped by its cr_modstack_set_limit range. */
+    CR_MOD_CONSTRAINT = 4,/* joints[0]; target; kind = CR_CONSTRAINT_*; p[0..2] offset position, p[3..5] offset
+                             rotation (Euler XYZ degrees) in the target's frame; AIM uses p[0..2] as the axis */
+    CR_MOD_SPRING = 5,    /* joints [start, end]: each chain joint swings toward its child; p[0] stiffness
+                             (default 1), p[1] drag 0..1 (0.4), p[2..4] gravity (world units/s^2, a vector),
+                             p[5] tail radius, p[6] fixed step (1/60 s; at most 8 steps a frame). Collides
+                             with the stack's colliders. */
+    CR_MOD_FULL_BODY = 6  /* joints[0] = the body (hips); limb k (k < 5) = joints [1+3k, 2+3k, 3+3k] (upper,
+                             mid, end) with target slot `target + k` (kind NONE = no goal), pull weight
+                             joint_weights[1+3k] (how far an unreachable goal drags the body) and reach weight
+                             joint_weights[2+3k]; `pole` = an optional hip goal with weight joint_weights[0];
+                             p[0] = iterations (3). The body moves, then each limb is solved two-bone. */
+};
+
+enum {
+    CR_CONSTRAINT_POINT = 0,
+    CR_CONSTRAINT_ORIENT = 1,
+    CR_CONSTRAINT_PARENT = 2,  /* point + orient: the joint follows target x offset */
+    CR_CONSTRAINT_AIM = 3,
+    CR_CONSTRAINT_COPY = 4     /* the target's transform exactly (no offset) */
+};
+
+enum {
+    CR_MOD_MATCH_ROTATION = 1u << 0,
+    CR_MOD_AIM_EACH = 1u << 1,
+    CR_MOD_LIMITS = 1u << 2
+};
+
+#define CR_MOD_MAX_JOINTS 16
+
+/* One modifier (192 bytes). Unused joints -1. */
+typedef struct cr_modifier_desc {
+    int32_t type;          /* CR_MOD_* */
+    uint32_t flags;        /* CR_MOD_MATCH_ROTATION | ... */
+    int32_t kind;          /* CONSTRAINT: CR_CONSTRAINT_* */
+    int32_t joint_count;
+    int32_t joints[CR_MOD_MAX_JOINTS];
+    float joint_weights[CR_MOD_MAX_JOINTS];
+    int32_t target;        /* target slot, -1 = none */
+    int32_t pole;          /* TWO_BONE: pole slot; FULL_BODY: hip goal slot; -1 = none */
+    float weight;          /* influence 0..1 (cr_modstack_set_weight changes it) */
+    float p[8];
+    uint32_t reserved;
+} cr_modifier_desc;
+
+enum {
+    CR_TARGET_NONE = 0,
+    CR_TARGET_MODEL = 1,   /* pos + rot in model space */
+    CR_TARGET_WORLD = 2,   /* pos + rot in world space (through the frame) */
+    CR_TARGET_JOINT = 3    /* the posed frame of `joint` (its pivot, its rotation) x (pos, rot) */
+};
+
+/* A target (36 bytes). rot = quaternion x, y, z, w (0,0,0,0 = identity). */
+typedef struct cr_target {
+    int32_t kind;
+    int32_t joint;
+    float pos[3];
+    float rot[4];
+} cr_target;
+
+/* A stack over `rig` (which must outlive it) with target_count target slots (all NONE). NULL on a bad
+ * modifier (a joint out of range, a chain whose start is not an ancestor of its end, ...). */
+cr_modstack* cr_modstack_create(const cr_rig* rig, const cr_modifier_desc* mods, int32_t mod_count,
+                                int32_t target_count);
+void cr_modstack_destroy(cr_modstack* stack);
+int32_t cr_modstack_set_target(cr_modstack* stack, int32_t target, const cr_target* value);
+int32_t cr_modstack_set_weight(cr_modstack* stack, int32_t mod, float weight);
+/* A joint's range for CR_MOD_LIMITS: local Euler degrees ref + [min, max] per axis. */
+int32_t cr_modstack_set_limit(cr_modstack* stack, int32_t joint, const float* ref_rot_deg, const float* min_deg,
+                              const float* max_deg);
+/* A collider for spring bones in `joint`'s posed frame: a sphere (a == b) or a capsule a -> b. */
+int32_t cr_modstack_add_collider(cr_modstack* stack, int32_t joint, const float* a, const float* b, float radius);
+/* Model -> world (16 floats, column-major; NULL = identity). */
+int32_t cr_modstack_set_frame(cr_modstack* stack, const float* world_from_model);
+/* Forgets the spring bones' motion (a teleport, a respawn): they restart from the next pose. */
+int32_t cr_modstack_reset(cr_modstack* stack);
+/* A JOINT target for a socket given in rest model space (the OMO / .omchar convention: the socket moves with
+ * the joint's skin matrix): fills out (kind JOINT, joint, the offset in the joint's frame). rot_deg = Euler XYZ. */
+int32_t cr_target_from_socket(const cr_rig* rig, int32_t joint, const float* pos, const float* rot_deg, cr_target* out);
+/* Runs the stack on one slot, advancing spring bones by dt (what CR_OP_MODIFY does). */
+int32_t cr_modstack_apply(cr_modstack* stack, cr_poses* poses, int32_t slot, float dt);
 
 /* ---------------------------------------------------------------------------------------------- */
 /* Skin weights.                                                                                   */

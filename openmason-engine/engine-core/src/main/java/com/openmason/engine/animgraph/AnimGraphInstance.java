@@ -30,6 +30,11 @@ public final class AnimGraphInstance implements AutoCloseable {
     /** {@link #setRootMotion}: the root is pinned in the pose; {@link #rootMotion} reports the motion. */
     public static final int ROOT_MOTION_EXTRACT = 1;
 
+    /** {@link #setTarget} kinds (= {@code CR_TARGET_*}). */
+    public static final int TARGET_NONE = 0;
+    public static final int TARGET_MODEL = 1;
+    public static final int TARGET_WORLD = 2;
+
     /** A notify edge the last frame crossed: {@code source} = clip slot (-1 for a montage, then {@code montage}). */
     public record Notify(String name, String payloadJson, int source, int montage, int index, int phase, float time,
                          float weight) {}
@@ -48,6 +53,8 @@ public final class AnimGraphInstance implements AutoCloseable {
     private final int unresolvedMaskEntries;
     private final MemorySegment scratch;
     private final MemorySegment base;
+    private final MemorySegment targetPos;
+    private final MemorySegment targetRot;
     private MemorySegment extras = MemorySegment.NULL;
     private int extraCapacity;
     private int extraCount;
@@ -82,6 +89,8 @@ public final class AnimGraphInstance implements AutoCloseable {
         this.unresolvedMaskEntries = unresolved;
         this.scratch = Arena.ofAuto().allocate(64, 8);
         this.base = Arena.ofAuto().allocate(64, 16);
+        this.targetPos = Arena.ofAuto().allocate(12, 4);
+        this.targetRot = Arena.ofAuto().allocate(16, 4);
     }
 
     /**
@@ -248,6 +257,38 @@ public final class AnimGraphInstance implements AutoCloseable {
         out[0] = scratch.get(CendaAnimGraph.F32, 0);
         out[1] = scratch.get(CendaAnimGraph.F32, 4);
         return out;
+    }
+
+    /**
+     * Sets a pose-modifier target ({@link AnimGraph#targets}): {@link #TARGET_MODEL} or {@link #TARGET_WORLD}
+     * (world goes through the base matrix of {@link #evaluate}) position and rotation quaternion (x, y, z, w; all
+     * zero = identity), or {@link #TARGET_NONE} (the modifiers reading it rest). Allocation-free.
+     */
+    public void setTarget(int target, int kind, float x, float y, float z, float qx, float qy, float qz, float qw) {
+        targetPos.set(CendaAnimGraph.F32, 0, x);
+        targetPos.set(CendaAnimGraph.F32, 4, y);
+        targetPos.set(CendaAnimGraph.F32, 8, z);
+        targetRot.set(CendaAnimGraph.F32, 0, qx);
+        targetRot.set(CendaAnimGraph.F32, 4, qy);
+        targetRot.set(CendaAnimGraph.F32, 8, qz);
+        targetRot.set(CendaAnimGraph.F32, 12, qw);
+        try {
+            CendaAnimGraph.check((int) CendaAnimGraph.SET_TARGET.invokeExact(handle(), target, kind, targetPos, targetRot),
+                "setTarget");
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        }
+    }
+
+    /** A target position with no rotation. */
+    public void setTarget(int target, int kind, float x, float y, float z) {
+        setTarget(target, kind, x, y, z, 0f, 0f, 0f, 1f);
+    }
+
+    public void clearTarget(int target) {
+        setTarget(target, TARGET_NONE, 0f, 0f, 0f, 0f, 0f, 0f, 1f);
     }
 
     public void setRootMotion(int mode) {

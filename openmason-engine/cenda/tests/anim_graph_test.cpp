@@ -635,6 +635,106 @@ void test_determinism() {
     cr_rig_destroy(rig);
 }
 
+
+// ---- pose modifiers in the graph (#158) ------------------------------------------------------------------
+
+const char* kModifiers = R"({"format": "omanimgraph", "version": "1.0",
+  "parameters": [{"name": "ik", "type": "float", "default": 1}],
+  "slots": ["pose"], "targets": ["footGoal"], "root": "c",
+  "colliders": [{"joint": "role:hips", "a": [0, 0, 0], "radius": 0.1}],
+  "nodes": [{"id": "c", "type": "clip", "slot": "pose"}],
+  "modifiers": [
+    {"type": "twoBone", "upper": "role:upper_leg_l", "mid": "role:lower_leg_l", "end": "role:foot_l",
+     "target": "footGoal", "pole": "joint:pole", "weightParam": "ik"},
+    {"type": "constraint", "kind": "point", "joint": "marker", "target": "role:foot_l", "weightCurve": "follow"}
+  ]})";
+
+void test_modifiers() {
+    // Bones: hips (0) at y 2; thigh (1) down 1; shin (2) down 1; foot (3); a pole marker (4) in front; marker (5).
+    auto bone = [](int parent, float px, float py, float pz, float ex, float ey, float ez) {
+        cr_joint_desc d{};
+        d.parent = parent;
+        d.kind = CR_JOINT_BONE;
+        d.flags = CR_JOINT_HAS_GEOMETRY;
+        d.pos[0] = px;
+        d.pos[1] = py;
+        d.pos[2] = pz;
+        d.scale[0] = d.scale[1] = d.scale[2] = 1.f;
+        d.endpoint[0] = ex;
+        d.endpoint[1] = ey;
+        d.endpoint[2] = ez;
+        return d;
+    };
+    cr_joint_desc j[6] = {bone(-1, 0, 2, 0, 0, 0.01f, 0), bone(0, 0, 0, 0, 0, -1, 0), bone(1, 0, 0, 0, 0, -1, 0),
+                          bone(2, 0, 0, 0, 0, 0, 0.2f), bone(-1, 0, 1, 1, 0, 0, 0), bone(-1, 5, 5, 5, 0, 0, 0)};
+    const char* names[6] = {"hips", "thigh", "shin", "foot", "pole", "marker"};
+    cr_rig* rig = cr_rig_create(j, 6, names, names);
+    cc_char* c = cc_char_create();
+    cc_char_role_set(c, "hips", "hips");
+    cc_char_role_set(c, "upper_leg_l", "thigh");
+    cc_char_role_set(c, "lower_leg_l", "shin");
+    cc_char_role_set(c, "foot_l", "foot");
+    // The format round-trips its modifier sections; unknown targets are refused.
+    cg_graph* g = graph(kModifiers);
+    CHECK(cg_graph_target_count(g) == 1 && cg_graph_target_find(g, "footGoal") == 0 && cg_graph_modifier_count(g) == 2);
+    cc_bytes* a = cg_graph_write(g);
+    std::string text(reinterpret_cast<const char*>(cc_bytes_data(a)), static_cast<size_t>(cc_bytes_size(a)));
+    cg_graph* g2 = graph(text);
+    cc_bytes* b = cg_graph_write(g2);
+    CHECK(cc_bytes_size(a) == cc_bytes_size(b) && std::memcmp(cc_bytes_data(a), cc_bytes_data(b), static_cast<size_t>(cc_bytes_size(a))) == 0);
+    cc_bytes_destroy(a);
+    cc_bytes_destroy(b);
+    cg_graph_destroy(g2);
+    std::string bad = kModifiers;
+    bad.replace(bad.find("\"target\": \"footGoal\""), 20, "\"target\": \"nowhere\" ");
+    CHECK(refuse(bad) == CG_ERR_FORMAT);
+
+    int32_t unresolved = -1;
+    cg_instance* inst = cg_instance_create(g, rig, c, &unresolved);
+    CHECK(unresolved == 0);
+    cm_clip* follow = cm_clip_create();
+    cm_header h{30.f, 1.f, 1, 0, 0.f, 0.f, 0};
+    cm_clip_header_set(follow, &h);
+    cm_curve_key ck[1] = {{0.f, 0.f, 0.f, 0.f, CM_INTERP_LINEAR}};
+    cm_clip_curve_set(follow, "follow", ck, 1);
+    bind(inst, g, "pose", follow);
+    std::vector<float> w(6 * 16);
+    auto foot = [&]() { return std::vector<float>{w[3 * 16 + 12], w[3 * 16 + 13], w[3 * 16 + 14]}; };
+    const float goal[3] = {0.4f, 0.6f, 0.5f};
+    // No target yet: the IK modifier does nothing.
+    CHECK(cg_instance_evaluate(inst, 0.f, nullptr, 0, nullptr, nullptr, w.data(), nullptr) == CG_OK);
+    CHECK(near(foot()[1], 0.01f, 1e-5f));  // at rest (the hips bone's 0.01 tail)
+    CHECK(cg_instance_set_target(inst, 0, CR_TARGET_MODEL, goal, nullptr) == CG_OK);
+    CHECK(cg_instance_evaluate(inst, 1.f / 60.f, nullptr, 0, nullptr, nullptr, w.data(), nullptr) == CG_OK);
+    std::vector<float> f = foot();
+    CHECK(near(f[0], goal[0], 1e-4f) && near(f[1], goal[1], 1e-4f) && near(f[2], goal[2], 1e-4f));
+    const float knee_z = w[2 * 16 + 14];
+    CHECK(knee_z > 0.5f);  // bent toward the pole joint in front
+    // The curve weight is 0: the marker stays; the ik parameter at 0 releases the leg.
+    CHECK(near(w[5 * 16 + 12], 5.f, 1e-6f));
+    cg_instance_set_float(inst, cg_graph_param_find(g, "ik"), 0.f);
+    eval(inst, 1.f / 60.f);
+    CHECK(cg_instance_evaluate(inst, 0.f, nullptr, 0, nullptr, nullptr, w.data(), nullptr) == CG_OK);
+    CHECK(near(foot()[1], 0.01f, 1e-5f));  // at rest (the hips bone's 0.01 tail)
+    // Curve 1: the marker follows the foot (a static joint target).
+    ck[0].value = 1.f;
+    cm_clip_curve_set(follow, "follow", ck, 1);
+    bind(inst, g, "pose", follow);
+    cg_instance_set_float(inst, cg_graph_param_find(g, "ik"), 1.f);
+    CHECK(cg_instance_evaluate(inst, 0.f, nullptr, 0, nullptr, nullptr, w.data(), nullptr) == CG_OK);
+    CHECK(near(w[5 * 16 + 12], goal[0], 1e-4f) && near(w[5 * 16 + 13], goal[1], 1e-4f));
+    CHECK(cg_instance_set_target(inst, 3, CR_TARGET_MODEL, goal, nullptr) == CG_ERR_ARG);
+    cg_instance_destroy(inst);
+    // Without the character the role-addressed modifiers and the collider are left out (the joint:/name ones stay).
+    inst = cg_instance_create(g, rig, nullptr, &unresolved);
+    CHECK(unresolved == 3);
+    cg_instance_destroy(inst);
+    cm_clip_destroy(follow);
+    cg_graph_destroy(g);
+    cc_char_destroy(c);
+    cr_rig_destroy(rig);
+}
+
 }  // namespace
 
 int main() {
@@ -646,6 +746,7 @@ int main() {
     test_layers();
     test_sync_root_motion_notifies_curves();
     test_determinism();
+    test_modifiers();
     if (failures != 0) {
         std::fprintf(stderr, "anim_graph: %d check(s) failed\n", failures);
         return 1;

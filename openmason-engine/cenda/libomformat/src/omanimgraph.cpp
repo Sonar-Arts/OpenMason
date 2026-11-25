@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -378,6 +379,174 @@ Node parse_node(yyjson_val* v, std::size_t i) {
     return n;
 }
 
+void vec3_field(yyjson_val* obj, const char* key, const std::string& where, float out[3]) {
+    yyjson_val* v = field(obj, key);
+    if (v == nullptr) return;
+    if (!yyjson_is_arr(v) || yyjson_arr_size(v) != 3) fail(where + ": \"" + key + "\" must be [x, y, z]");
+    for (std::size_t c = 0; c < 3; ++c) {
+        yyjson_val* e = yyjson_arr_get(v, c);
+        if (!yyjson_is_num(e) || !std::isfinite(yyjson_get_num(e))) fail(where + ": \"" + key + "\" must be numbers");
+        out[c] = static_cast<float>(yyjson_get_num(e));
+    }
+}
+
+const char* mod_type_name(ModType t) {
+    switch (t) {
+        case ModType::Fabrik: return "fabrik";
+        case ModType::Ccd: return "ccd";
+        case ModType::Aim: return "aim";
+        case ModType::Constraint: return "constraint";
+        case ModType::Spring: return "spring";
+        case ModType::FullBody: return "fullBody";
+        default: return "twoBone";
+    }
+}
+
+const char* kind_name(ConstraintKind k) {
+    switch (k) {
+        case ConstraintKind::Orient: return "orient";
+        case ConstraintKind::Parent: return "parent";
+        case ConstraintKind::Aim: return "aim";
+        case ConstraintKind::Copy: return "copy";
+        default: return "point";
+    }
+}
+
+Modifier parse_modifier(yyjson_val* v, std::size_t i) {
+    const std::string at = "modifiers[" + std::to_string(i) + "]";
+    if (!yyjson_is_obj(v)) fail(at + " must be an object");
+    Modifier m;
+    const std::string type = str_field(v, "type", at, true);
+    bool known = false;
+    for (ModType t : {ModType::TwoBone, ModType::Fabrik, ModType::Ccd, ModType::Aim, ModType::Constraint, ModType::Spring,
+                      ModType::FullBody}) {
+        if (type == mod_type_name(t)) {
+            m.type = t;
+            known = true;
+        }
+    }
+    if (!known) fail(at + ": unknown modifier type \"" + type + "\"");
+    m.weight = static_cast<float>(num_field(v, "weight", at, 1.0));
+    if (!(m.weight >= 0.f && m.weight <= 1.f)) fail(at + ": weight must be in [0, 1]");
+    m.weight_param = str_field(v, "weightParam", at, false);
+    m.weight_curve = str_field(v, "weightCurve", at, false);
+    auto iterations = [&]() {
+        const double it = num_field(v, "iterations", at, 0.0);
+        if (it < 0 || it > 1000 || it != std::floor(it)) fail(at + ": iterations must be an integer 0..1000");
+        m.iterations = static_cast<int>(it);
+    };
+    switch (m.type) {
+        case ModType::TwoBone:
+            m.upper = str_field(v, "upper", at, true);
+            m.mid = str_field(v, "mid", at, true);
+            m.end = str_field(v, "end", at, true);
+            m.target = str_field(v, "target", at, true);
+            m.pole = str_field(v, "pole", at, false);
+            m.soft = static_cast<float>(num_field(v, "soft", at, 0.0));
+            if (m.soft < 0.f || m.soft > 1.f) fail(at + ": soft must be in [0, 1]");
+            m.match_rotation = bool_field(v, "matchRotation", at, false);
+            break;
+        case ModType::Fabrik:
+        case ModType::Ccd:
+            m.start = str_field(v, "start", at, true);
+            m.end = str_field(v, "end", at, true);
+            m.target = str_field(v, "target", at, true);
+            iterations();
+            m.tolerance = static_cast<float>(num_field(v, "tolerance", at, 0.0));
+            if (m.tolerance < 0.f) fail(at + ": tolerance must be >= 0");
+            break;
+        case ModType::Aim: {
+            yyjson_val* js = arr_field(v, "joints", at, true);
+            for (std::size_t k = 0, n = yyjson_arr_size(js); k < n; ++k) {
+                yyjson_val* e = yyjson_arr_get(js, k);
+                const std::string ew = at + " joints[" + std::to_string(k) + "]";
+                if (!yyjson_is_obj(e)) fail(ew + " must be an object");
+                AimJoint aj;
+                aj.joint = str_field(e, "joint", ew, true);
+                aj.weight = static_cast<float>(num_field(e, "weight", ew, 1.0));
+                if (aj.weight < 0.f) fail(ew + ": weight must be >= 0");
+                m.aim.push_back(std::move(aj));
+            }
+            if (m.aim.empty() || m.aim.size() > 16) fail(at + ": aim needs 1..16 joints");
+            m.target = str_field(v, "target", at, true);
+            vec3_field(v, "axis", at, m.axis);
+            m.each = bool_field(v, "each", at, false);
+            m.limits = bool_field(v, "limits", at, true);
+            break;
+        }
+        case ModType::Constraint: {
+            const std::string kind = str_field(v, "kind", at, true);
+            known = false;
+            for (ConstraintKind k : {ConstraintKind::Point, ConstraintKind::Orient, ConstraintKind::Parent,
+                                     ConstraintKind::Aim, ConstraintKind::Copy}) {
+                if (kind == kind_name(k)) {
+                    m.kind = k;
+                    known = true;
+                }
+            }
+            if (!known) fail(at + ": kind must be point, orient, parent, aim or copy");
+            m.joint = str_field(v, "joint", at, true);
+            m.target = str_field(v, "target", at, true);
+            vec3_field(v, "offset", at, m.offset);
+            vec3_field(v, "offsetRot", at, m.offset_rot);
+            vec3_field(v, "axis", at, m.axis);
+            break;
+        }
+        case ModType::Spring:
+            m.start = str_field(v, "start", at, true);
+            m.end = str_field(v, "end", at, true);
+            m.stiffness = static_cast<float>(num_field(v, "stiffness", at, 1.0));
+            m.drag = static_cast<float>(num_field(v, "drag", at, 0.4));
+            if (m.drag < 0.f || m.drag > 1.f) fail(at + ": drag must be in [0, 1]");
+            vec3_field(v, "gravity", at, m.gravity);
+            m.radius = static_cast<float>(num_field(v, "radius", at, 0.0));
+            m.step = static_cast<float>(num_field(v, "step", at, 0.0));
+            if (m.radius < 0.f || m.step < 0.f) fail(at + ": radius and step must be >= 0");
+            break;
+        case ModType::FullBody: {
+            m.body = str_field(v, "body", at, true);
+            yyjson_val* ls = arr_field(v, "limbs", at, true);
+            for (std::size_t k = 0, n = yyjson_arr_size(ls); k < n; ++k) {
+                yyjson_val* e = yyjson_arr_get(ls, k);
+                const std::string lw = at + " limbs[" + std::to_string(k) + "]";
+                if (!yyjson_is_obj(e)) fail(lw + " must be an object");
+                Limb l;
+                l.upper = str_field(e, "upper", lw, true);
+                l.mid = str_field(e, "mid", lw, true);
+                l.end = str_field(e, "end", lw, true);
+                l.target = str_field(e, "target", lw, true);
+                l.pull = static_cast<float>(num_field(e, "pull", lw, 1.0));
+                l.reach = static_cast<float>(num_field(e, "reach", lw, 1.0));
+                if (l.pull < 0.f || l.pull > 1.f || l.reach < 0.f || l.reach > 1.f) fail(lw + ": pull and reach must be in [0, 1]");
+                m.limbs.push_back(std::move(l));
+            }
+            if (m.limbs.empty() || m.limbs.size() > 5) fail(at + ": a full-body modifier needs 1..5 limbs");
+            m.pole = str_field(v, "hipGoal", at, false);
+            m.hip_weight = static_cast<float>(num_field(v, "hipWeight", at, 1.0));
+            iterations();
+            break;
+        }
+    }
+    return m;
+}
+
+Collider parse_collider(yyjson_val* v, std::size_t i) {
+    const std::string at = "colliders[" + std::to_string(i) + "]";
+    if (!yyjson_is_obj(v)) fail(at + " must be an object");
+    Collider c;
+    c.joint = str_field(v, "joint", at, true);
+    vec3_field(v, "a", at, c.a);
+    if (field(v, "b") != nullptr) {
+        vec3_field(v, "b", at, c.b);
+        c.capsule = true;
+    } else {
+        std::copy(c.a, c.a + 3, c.b);
+    }
+    c.radius = static_cast<float>(num_field(v, "radius", at, 0.0));
+    if (!(c.radius > 0.f)) fail(at + ": radius must be > 0");
+    return c;
+}
+
 // The child node ids of a node, in slot order.
 std::vector<std::string> children(const Node& n) {
     std::vector<std::string> out;
@@ -440,6 +609,13 @@ int Graph::find_param(std::string_view n) const {
 int Graph::find_slot(std::string_view n) const {
     for (std::size_t i = 0; i < slots.size(); ++i) {
         if (slots[i] == n) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+int Graph::find_target(std::string_view n) const {
+    for (std::size_t i = 0; i < targets.size(); ++i) {
+        if (targets[i] == n) return static_cast<int>(i);
     }
     return -1;
 }
@@ -549,6 +725,46 @@ void validate(const Graph& g) {
                 break;
         }
     }
+    seen.clear();
+    for (const std::string& t : g.targets) {
+        if (t.empty() || t.find(':') != std::string::npos) fail("target names must be non-empty and hold no ':' (" + t + ")");
+        if (!seen.insert(t).second) fail("duplicate target " + t);
+    }
+    auto target_ref = [&](const std::string& ref, const std::string& at, bool required) {
+        if (ref.empty()) {
+            if (required) fail(at + ": missing target");
+            return;
+        }
+        for (const char* prefix : {"role:", "joint:", "socket:"}) {
+            if (ref.rfind(prefix, 0) == 0) {
+                if (ref.size() == std::strlen(prefix)) fail(at + ": empty target reference " + ref);
+                return;
+            }
+        }
+        if (g.find_target(ref) < 0) fail(at + ": unknown target " + ref);
+    };
+    for (const Collider& c : g.colliders) {
+        if (c.joint.empty()) fail("a collider needs a joint");
+    }
+    for (std::size_t i = 0; i < g.modifiers.size(); ++i) {
+        const Modifier& m = g.modifiers[i];
+        const std::string at = "modifier " + std::to_string(i) + " (" + mod_type_name(m.type) + ")";
+        if (!m.weight_param.empty()) param_of(m.weight_param, at, {ParamType::Float});
+        switch (m.type) {
+            case ModType::TwoBone:
+                target_ref(m.target, at, true);
+                target_ref(m.pole, at, false);
+                break;
+            case ModType::FullBody:
+                for (const Limb& l : m.limbs) target_ref(l.target, at, true);
+                target_ref(m.pole, at, false);
+                break;
+            case ModType::Spring:
+                break;
+            default:
+                target_ref(m.target, at, true);
+        }
+    }
     // Every node reachable from the root sits in a tree (parents are unique, the root has none); a cycle can
     // only hide among unreachable nodes: walk up from each node.
     for (const Node& n : g.nodes) {
@@ -592,10 +808,23 @@ Graph read(std::string_view text) {
     g.root = str_field(root, "root", "graph", true);
     yyjson_val* nodes = arr_field(root, "nodes", "graph", true);
     for (std::size_t i = 0, n = yyjson_arr_size(nodes); i < n; ++i) g.nodes.push_back(parse_node(yyjson_arr_get(nodes, i), i));
+    if (yyjson_val* ts = arr_field(root, "targets", "graph", false)) {
+        for (std::size_t i = 0, n = yyjson_arr_size(ts); i < n; ++i) {
+            yyjson_val* t = yyjson_arr_get(ts, i);
+            if (!yyjson_is_str(t)) fail("targets must be strings");
+            g.targets.push_back(str(t));
+        }
+    }
+    if (yyjson_val* cs = arr_field(root, "colliders", "graph", false)) {
+        for (std::size_t i = 0, n = yyjson_arr_size(cs); i < n; ++i) g.colliders.push_back(parse_collider(yyjson_arr_get(cs, i), i));
+    }
+    if (yyjson_val* ms = arr_field(root, "modifiers", "graph", false)) {
+        for (std::size_t i = 0, n = yyjson_arr_size(ms); i < n; ++i) g.modifiers.push_back(parse_modifier(yyjson_arr_get(ms, i), i));
+    }
 
     static const std::unordered_set<std::string> known = {"format", "version", "name", "description", "profile",
                                                           "notifyThreshold", "parameters", "slots", "masks", "root",
-                                                          "nodes"};
+                                                          "nodes", "targets", "colliders", "modifiers"};
     std::unordered_set<std::string> keys;
     yyjson_obj_iter it = yyjson_obj_iter_with(root);
     yyjson_val* key;
@@ -788,6 +1017,112 @@ std::string write(const Graph& g) {
         yyjson_mut_arr_append(nodes, o);
     }
     put(d, root, "nodes", nodes);
+
+    auto vec3 = [&](const float* f) {
+        yyjson_mut_val* arr = yyjson_mut_arr(d);
+        for (int c = 0; c < 3; ++c) yyjson_mut_arr_append(arr, yyjson_mut_float(d, f[c]));
+        return arr;
+    };
+    auto is = [](const float* f, float x, float y, float z) { return f[0] == x && f[1] == y && f[2] == z; };
+    if (!g.targets.empty()) {
+        yyjson_mut_val* ts = yyjson_mut_arr(d);
+        for (const std::string& t : g.targets) yyjson_mut_arr_append(ts, mstr(d, t));
+        put(d, root, "targets", ts);
+    }
+    if (!g.colliders.empty()) {
+        yyjson_mut_val* cs = yyjson_mut_arr(d);
+        for (const Collider& c : g.colliders) {
+            yyjson_mut_val* o = yyjson_mut_obj(d);
+            put(d, o, "joint", mstr(d, c.joint));
+            put(d, o, "a", vec3(c.a));
+            if (c.capsule) put(d, o, "b", vec3(c.b));
+            put(d, o, "radius", yyjson_mut_float(d, c.radius));
+            yyjson_mut_arr_append(cs, o);
+        }
+        put(d, root, "colliders", cs);
+    }
+    if (!g.modifiers.empty()) {
+        yyjson_mut_val* ms = yyjson_mut_arr(d);
+        for (const Modifier& m : g.modifiers) {
+            yyjson_mut_val* o = yyjson_mut_obj(d);
+            put(d, o, "type", yyjson_mut_str(d, mod_type_name(m.type)));
+            if (m.weight != 1.f) put(d, o, "weight", yyjson_mut_float(d, m.weight));
+            put_str(d, o, "weightParam", m.weight_param);
+            put_str(d, o, "weightCurve", m.weight_curve);
+            switch (m.type) {
+                case ModType::TwoBone:
+                    put(d, o, "upper", mstr(d, m.upper));
+                    put(d, o, "mid", mstr(d, m.mid));
+                    put(d, o, "end", mstr(d, m.end));
+                    put(d, o, "target", mstr(d, m.target));
+                    put_str(d, o, "pole", m.pole);
+                    if (m.soft != 0.f) put(d, o, "soft", yyjson_mut_float(d, m.soft));
+                    if (m.match_rotation) put(d, o, "matchRotation", yyjson_mut_bool(d, true));
+                    break;
+                case ModType::Fabrik:
+                case ModType::Ccd:
+                    put(d, o, "start", mstr(d, m.start));
+                    put(d, o, "end", mstr(d, m.end));
+                    put(d, o, "target", mstr(d, m.target));
+                    if (m.iterations != 0) put(d, o, "iterations", yyjson_mut_sint(d, m.iterations));
+                    if (m.tolerance != 0.f) put(d, o, "tolerance", yyjson_mut_float(d, m.tolerance));
+                    break;
+                case ModType::Aim: {
+                    yyjson_mut_val* js = yyjson_mut_arr(d);
+                    for (const AimJoint& a : m.aim) {
+                        yyjson_mut_val* jo = yyjson_mut_obj(d);
+                        put(d, jo, "joint", mstr(d, a.joint));
+                        if (a.weight != 1.f) put(d, jo, "weight", yyjson_mut_float(d, a.weight));
+                        yyjson_mut_arr_append(js, jo);
+                    }
+                    put(d, o, "joints", js);
+                    put(d, o, "target", mstr(d, m.target));
+                    if (!is(m.axis, 0.f, 0.f, -1.f)) put(d, o, "axis", vec3(m.axis));
+                    if (m.each) put(d, o, "each", yyjson_mut_bool(d, true));
+                    if (!m.limits) put(d, o, "limits", yyjson_mut_bool(d, false));
+                    break;
+                }
+                case ModType::Constraint:
+                    put(d, o, "kind", yyjson_mut_str(d, kind_name(m.kind)));
+                    put(d, o, "joint", mstr(d, m.joint));
+                    put(d, o, "target", mstr(d, m.target));
+                    if (!is(m.offset, 0.f, 0.f, 0.f)) put(d, o, "offset", vec3(m.offset));
+                    if (!is(m.offset_rot, 0.f, 0.f, 0.f)) put(d, o, "offsetRot", vec3(m.offset_rot));
+                    if (!is(m.axis, 0.f, 0.f, -1.f)) put(d, o, "axis", vec3(m.axis));
+                    break;
+                case ModType::Spring:
+                    put(d, o, "start", mstr(d, m.start));
+                    put(d, o, "end", mstr(d, m.end));
+                    if (m.stiffness != 1.f) put(d, o, "stiffness", yyjson_mut_float(d, m.stiffness));
+                    if (m.drag != 0.4f) put(d, o, "drag", yyjson_mut_float(d, m.drag));
+                    if (!is(m.gravity, 0.f, 0.f, 0.f)) put(d, o, "gravity", vec3(m.gravity));
+                    if (m.radius != 0.f) put(d, o, "radius", yyjson_mut_float(d, m.radius));
+                    if (m.step != 0.f) put(d, o, "step", yyjson_mut_float(d, m.step));
+                    break;
+                case ModType::FullBody: {
+                    put(d, o, "body", mstr(d, m.body));
+                    yyjson_mut_val* ls = yyjson_mut_arr(d);
+                    for (const Limb& l : m.limbs) {
+                        yyjson_mut_val* lo = yyjson_mut_obj(d);
+                        put(d, lo, "upper", mstr(d, l.upper));
+                        put(d, lo, "mid", mstr(d, l.mid));
+                        put(d, lo, "end", mstr(d, l.end));
+                        put(d, lo, "target", mstr(d, l.target));
+                        if (l.pull != 1.f) put(d, lo, "pull", yyjson_mut_float(d, l.pull));
+                        if (l.reach != 1.f) put(d, lo, "reach", yyjson_mut_float(d, l.reach));
+                        yyjson_mut_arr_append(ls, lo);
+                    }
+                    put(d, o, "limbs", ls);
+                    put_str(d, o, "hipGoal", m.pole);
+                    if (m.hip_weight != 1.f) put(d, o, "hipWeight", yyjson_mut_float(d, m.hip_weight));
+                    if (m.iterations != 0) put(d, o, "iterations", yyjson_mut_sint(d, m.iterations));
+                    break;
+                }
+            }
+            yyjson_mut_arr_append(ms, o);
+        }
+        put(d, root, "modifiers", ms);
+    }
 
     for (const UnknownSection& u : g.unknown_sections) {
         yyjson_read_err err{};

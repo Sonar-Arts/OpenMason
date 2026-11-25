@@ -68,6 +68,10 @@ public final class CendaAnimGraph {
     static final MethodHandle STATE_NAME;
     static final MethodHandle MONTAGE_SLOT_COUNT;
     static final MethodHandle MONTAGE_SLOT_NAME;
+    static final MethodHandle TARGET_COUNT;
+    static final MethodHandle TARGET_NAME;
+    static final MethodHandle MODIFIER_COUNT;
+    static final MethodHandle SET_TARGET;
     static final MethodHandle INSTANCE_CREATE;
     static final MethodHandle INSTANCE_DESTROY;
     static final MethodHandle INSTANCE_RESET;
@@ -146,6 +150,10 @@ public final class CendaAnimGraph {
         STATE_NAME = handle(lookup, "cg_graph_state_name", FunctionDescriptor.of(ADDR, ADDR, I32, I32));
         MONTAGE_SLOT_COUNT = handle(lookup, "cg_graph_montage_slot_count", FunctionDescriptor.of(I32, ADDR));
         MONTAGE_SLOT_NAME = handle(lookup, "cg_graph_montage_slot_name", FunctionDescriptor.of(ADDR, ADDR, I32));
+        TARGET_COUNT = handle(lookup, "cg_graph_target_count", FunctionDescriptor.of(I32, ADDR));
+        TARGET_NAME = handle(lookup, "cg_graph_target_name", FunctionDescriptor.of(ADDR, ADDR, I32));
+        MODIFIER_COUNT = handle(lookup, "cg_graph_modifier_count", FunctionDescriptor.of(I32, ADDR));
+        SET_TARGET = handle(lookup, "cg_instance_set_target", FunctionDescriptor.of(I32, ADDR, I32, I32, ADDR, ADDR));
         INSTANCE_CREATE = handle(lookup, "cg_instance_create", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR, ADDR));
         INSTANCE_DESTROY = handle(lookup, "cg_instance_destroy", FunctionDescriptor.ofVoid(ADDR));
         INSTANCE_RESET = handle(lookup, "cg_instance_reset", FunctionDescriptor.of(I32, ADDR));

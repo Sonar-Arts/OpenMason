@@ -218,6 +218,11 @@ struct cg_instance {
     std::vector<float> curve_values;
     std::vector<double> curve_acc;
     cr_root_motion root_motion{};
+    // pose modifiers (#158)
+    cr_modstack* mods = nullptr;
+    std::vector<int> mod_index;          // graph modifier -> stack modifier (-1 = left out)
+    std::vector<cr_target> host_targets; // by graph target
+    std::vector<std::pair<int, int>> aliases;  // (stack slot, host target) copied each frame
     // scratch
     std::vector<cm_sync_member> sync_members;
     std::vector<int> sync_nodes;
@@ -233,6 +238,7 @@ struct cg_instance {
             if (s.inertia != nullptr) cr_inertia_destroy(s.inertia);
         }
         for (cr_mask* m : masks) cr_mask_destroy(m);
+        if (mods != nullptr) cr_modstack_destroy(mods);
         if (poses != nullptr) cr_poses_destroy(poses);
     }
 };
@@ -357,7 +363,7 @@ void compile(cg_graph& cg) {
             queue.push_back(ch);
         }
     }
-    int ops = 4;
+    int ops = 5;  // + the modifier stack
     for (int i : cg.order) {
         CNode& c = cg.nodes[static_cast<size_t>(i)];
         switch (c.type) {
@@ -968,6 +974,204 @@ int32_t bind_clip(cg_instance& inst, const cm_clip* clip, BoundClip& out, int32_
     return CG_OK;
 }
 
+// ---- pose modifiers --------------------------------------------------------------------------------------
+
+int resolve_joint(const cg_instance& inst, const std::string& ref) {
+    if (ref.rfind("role:", 0) == 0) {
+        if (inst.character == nullptr) return -1;
+        const char* j = cc_char_role_joint(inst.character, ref.c_str() + 5);
+        return j == nullptr ? -1 : cr_rig_find(inst.rig, j);
+    }
+    return cr_rig_find(inst.rig, ref.c_str());
+}
+
+// A target reference -> a stack slot (-1 = none); static joint / socket targets get their own slots.
+bool resolve_target(const cg_instance& inst, const std::string& ref, std::vector<cr_target>& statics, int& slot) {
+    slot = -1;
+    if (ref.empty()) return true;
+    const int hosts = static_cast<int>(inst.g->doc.targets.size());
+    cr_target t{};
+    if (ref.rfind("socket:", 0) == 0) {
+        if (inst.character == nullptr) return false;
+        const std::string want = ref.substr(7);
+        for (int32_t i = 0, n = cc_char_socket_count(inst.character); i < n; ++i) {
+            const char* name = nullptr;
+            const char* joint = nullptr;
+            float pos[3], rot[3], scale[3];
+            if (cc_char_socket_get(inst.character, i, &name, &joint, pos, rot, scale) != CC_OK || want != name) continue;
+            const int j = cr_rig_find(inst.rig, joint);
+            if (j < 0 || cr_target_from_socket(inst.rig, j, pos, rot, &t) != CR_OK) return false;
+            statics.push_back(t);
+            slot = hosts + static_cast<int>(statics.size()) - 1;
+            return true;
+        }
+        return false;
+    }
+    if (ref.rfind("role:", 0) == 0 || ref.rfind("joint:", 0) == 0) {
+        const int j = resolve_joint(inst, ref.rfind("role:", 0) == 0 ? ref : ref.substr(6));
+        if (j < 0) return false;
+        t.kind = CR_TARGET_JOINT;
+        t.joint = j;
+        statics.push_back(t);
+        slot = hosts + static_cast<int>(statics.size()) - 1;
+        return true;
+    }
+    slot = inst.g->doc.find_target(ref);
+    return slot >= 0;
+}
+
+// Builds the instance's modifier stack; returns the number of colliders / modifiers left out.
+int32_t build_modifiers(cg_instance& inst) {
+    const og::Graph& d = inst.g->doc;
+    inst.host_targets.assign(d.targets.size(), cr_target{});
+    inst.mod_index.assign(d.modifiers.size(), -1);
+    if (d.modifiers.empty()) return 0;
+    int32_t unresolved = 0;
+    std::vector<cr_modifier_desc> descs;
+    std::vector<cr_target> statics;
+    std::vector<std::pair<int, int>> aliases;  // (static index, host target)
+    for (size_t i = 0; i < d.modifiers.size(); ++i) {
+        const og::Modifier& m = d.modifiers[i];
+        cr_modifier_desc c{};
+        for (int& j : c.joints) j = -1;
+        c.target = c.pole = -1;
+        c.weight = m.weight;
+        bool ok = true;
+        auto joint = [&](const std::string& ref) {
+            const int j = resolve_joint(inst, ref);
+            ok &= j >= 0;
+            c.joints[c.joint_count++] = j;
+        };
+        auto target = [&](const std::string& ref, int32_t& slot) {
+            int s = -1;
+            ok &= resolve_target(inst, ref, statics, s);
+            slot = s;
+        };
+        switch (m.type) {
+            case og::ModType::TwoBone:
+                c.type = CR_MOD_TWO_BONE;
+                joint(m.upper);
+                joint(m.mid);
+                joint(m.end);
+                target(m.target, c.target);
+                target(m.pole, c.pole);
+                c.p[0] = m.soft;
+                if (m.match_rotation) c.flags |= CR_MOD_MATCH_ROTATION;
+                break;
+            case og::ModType::Fabrik:
+            case og::ModType::Ccd:
+                c.type = m.type == og::ModType::Fabrik ? CR_MOD_FABRIK : CR_MOD_CCD;
+                joint(m.start);
+                joint(m.end);
+                target(m.target, c.target);
+                c.p[0] = static_cast<float>(m.iterations);
+                c.p[1] = m.tolerance;
+                break;
+            case og::ModType::Aim:
+                c.type = CR_MOD_AIM;
+                for (const og::AimJoint& a : m.aim) {
+                    c.joint_weights[c.joint_count] = a.weight;
+                    joint(a.joint);
+                }
+                target(m.target, c.target);
+                std::copy(m.axis, m.axis + 3, c.p);
+                if (m.each) c.flags |= CR_MOD_AIM_EACH;
+                if (m.limits) c.flags |= CR_MOD_LIMITS;
+                break;
+            case og::ModType::Constraint:
+                c.type = CR_MOD_CONSTRAINT;
+                c.kind = static_cast<int32_t>(m.kind);
+                joint(m.joint);
+                target(m.target, c.target);
+                if (m.kind == og::ConstraintKind::Aim) {
+                    std::copy(m.axis, m.axis + 3, c.p);
+                } else {
+                    std::copy(m.offset, m.offset + 3, c.p);
+                    std::copy(m.offset_rot, m.offset_rot + 3, c.p + 3);
+                }
+                break;
+            case og::ModType::Spring:
+                c.type = CR_MOD_SPRING;
+                joint(m.start);
+                joint(m.end);
+                c.p[0] = m.stiffness;
+                c.p[1] = m.drag;
+                std::copy(m.gravity, m.gravity + 3, c.p + 2);
+                c.p[5] = m.radius;
+                c.p[6] = m.step;
+                break;
+            case og::ModType::FullBody: {
+                c.type = CR_MOD_FULL_BODY;
+                joint(m.body);
+                c.joint_weights[0] = m.hip_weight;
+                // One consecutive slot per limb: static targets go straight in, host targets are aliased.
+                const size_t first = statics.size();
+                for (const og::Limb& l : m.limbs) {
+                    c.joint_weights[c.joint_count] = l.pull;
+                    c.joint_weights[c.joint_count + 1] = l.reach;
+                    joint(l.upper);
+                    joint(l.mid);
+                    joint(l.end);
+                    statics.push_back(cr_target{});
+                }
+                for (size_t k = 0; k < m.limbs.size(); ++k) {
+                    const std::string& ref = m.limbs[k].target;
+                    const int host = d.find_target(ref);
+                    if (host >= 0) {
+                        aliases.emplace_back(static_cast<int>(first + k), host);
+                    } else {
+                        std::vector<cr_target> one;
+                        int s = -1;
+                        ok &= resolve_target(inst, ref, one, s);
+                        if (!one.empty()) statics[first + k] = one[0];
+                    }
+                }
+                c.target = static_cast<int32_t>(d.targets.size() + first);
+                target(m.pole, c.pole);
+                c.p[0] = static_cast<float>(m.iterations);
+                break;
+            }
+        }
+        if (!ok) {
+            ++unresolved;
+            continue;
+        }
+        inst.mod_index[i] = static_cast<int>(descs.size());
+        descs.push_back(c);
+    }
+    const int32_t slots = static_cast<int32_t>(d.targets.size() + statics.size());
+    inst.mods = cr_modstack_create(inst.rig, descs.data(), static_cast<int32_t>(descs.size()), slots);
+    if (inst.mods == nullptr) return unresolved + static_cast<int32_t>(descs.size());
+    for (size_t k = 0; k < statics.size(); ++k) {
+        if (statics[k].kind != CR_TARGET_NONE) {
+            cr_modstack_set_target(inst.mods, static_cast<int32_t>(d.targets.size() + k), &statics[k]);
+        }
+    }
+    for (const auto& [st, host] : aliases) inst.aliases.emplace_back(static_cast<int>(d.targets.size()) + st, host);
+    for (const og::Collider& col : d.colliders) {
+        const int j = resolve_joint(inst, col.joint);
+        if (j < 0) {
+            ++unresolved;
+            continue;
+        }
+        cr_modstack_add_collider(inst.mods, j, col.a, col.b, col.radius);
+    }
+    // Joint limits from the character, relative to its reference pose.
+    if (inst.character != nullptr) {
+        const int32_t joints = cr_rig_joint_count(inst.rig);
+        std::vector<float> ref(static_cast<size_t>(joints) * 9);
+        cr_poses_get(inst.poses, inst.g->ref_slot, ref.data(), nullptr);
+        for (int32_t i = 0, n = cc_char_limit_count(inst.character); i < n; ++i) {
+            const char* jid = nullptr;
+            float mn[3], mx[3];
+            if (cc_char_limit_get(inst.character, i, &jid, mn, mx) != CC_OK) continue;
+            const int j = cr_rig_find(inst.rig, jid);
+            if (j >= 0) cr_modstack_set_limit(inst.mods, j, ref.data() + static_cast<size_t>(j) * 9 + 3, mn, mx);
+        }
+    }
+    return unresolved;
+}
+
 void reset_instance(cg_instance& inst) {
     const og::Graph& d = inst.g->doc;
     for (size_t p = 0; p < d.params.size(); ++p) {
@@ -982,6 +1186,7 @@ void reset_instance(cg_instance& inst) {
         s.seg_count = 0;
         cr_inertia_reset(s.inertia);
     }
+    if (inst.mods != nullptr) cr_modstack_reset(inst.mods);
     inst.notifies.clear();
     std::fill(inst.curve_values.begin(), inst.curve_values.end(), 0.f);
     inst.root_motion = cr_root_motion{};
@@ -1151,6 +1356,19 @@ int32_t cg_graph_montage_slot_find(const cg_graph* g, const char* name) {
     return -1;
 }
 
+int32_t cg_graph_target_count(const cg_graph* g) { return g == nullptr ? 0 : static_cast<int32_t>(g->doc.targets.size()); }
+
+const char* cg_graph_target_name(const cg_graph* g, int32_t index) {
+    if (g == nullptr || index < 0 || static_cast<size_t>(index) >= g->doc.targets.size()) return nullptr;
+    return g->doc.targets[static_cast<size_t>(index)].c_str();
+}
+
+int32_t cg_graph_target_find(const cg_graph* g, const char* name) {
+    return g == nullptr || name == nullptr ? -1 : g->doc.find_target(name);
+}
+
+int32_t cg_graph_modifier_count(const cg_graph* g) { return g == nullptr ? 0 : static_cast<int32_t>(g->doc.modifiers.size()); }
+
 // ---- instance -----------------------------------------------------------------------------------------
 
 cg_instance* cg_instance_create(const cg_graph* g, const cr_rig* rig, const cc_char* character, int32_t* out_unresolved) {
@@ -1237,6 +1455,8 @@ cg_instance* cg_instance_create(const cg_graph* g, const cr_rig* rig, const cc_c
         }
         cr_poses_set(inst->poses, g->ref_slot, local.data(), nullptr);
     }
+    unresolved += build_modifiers(*inst);
+    set_out(out_unresolved, unresolved);
     reset_instance(*inst);
     return inst;
 }
@@ -1335,6 +1555,23 @@ int32_t cg_instance_get_param(const cg_instance* inst, int32_t param, float* out
     if (bad_param(inst, param) || out == nullptr) return fail(CG_ERR_ARG, "cg_instance_get_param: bad parameter");
     out[0] = static_cast<float>(inst->params[static_cast<size_t>(param) * 2]);
     out[1] = static_cast<float>(inst->params[static_cast<size_t>(param) * 2 + 1]);
+    return CG_OK;
+}
+
+int32_t cg_instance_set_target(cg_instance* inst, int32_t target, int32_t kind, const float* pos, const float* rot) {
+    if (inst == nullptr || target < 0 || static_cast<size_t>(target) >= inst->host_targets.size()
+        || (kind != CR_TARGET_NONE && kind != CR_TARGET_MODEL && kind != CR_TARGET_WORLD)
+        || (kind != CR_TARGET_NONE && pos == nullptr)) {
+        return fail(CG_ERR_ARG, "cg_instance_set_target: bad target, kind or position");
+    }
+    cr_target t{};
+    t.kind = kind;
+    if (pos != nullptr) std::copy(pos, pos + 3, t.pos);
+    if (rot != nullptr) std::copy(rot, rot + 4, t.rot);
+    if (inst->mods != nullptr && cr_modstack_set_target(inst->mods, target, &t) != CR_OK) {
+        return fail(CG_ERR_ARG, std::string("cg_instance_set_target: ") + cr_last_error());
+    }
+    inst->host_targets[static_cast<size_t>(target)] = t;
     return CG_OK;
 }
 
@@ -1641,16 +1878,58 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         }
     }
 
+    // Curves (they weigh the modifiers below).
+    double total = 0.0;
+    for (int i : g.order) {
+        const CNode& c = g.nodes[static_cast<size_t>(i)];
+        if (c.type != og::NodeType::Clip) continue;
+        const NodeRt& r = inst->rt[static_cast<size_t>(i)];
+        if (!r.active || r.influence <= 0.f) continue;
+        const BoundClip& b = inst->slots[static_cast<size_t>(c.clip_slot)];
+        if (b.rig_clip != nullptr) sample_curves(*inst, b, inst->players[static_cast<size_t>(i)].time, r.influence, total);
+    }
+    for (int i : g.montage_slots) {
+        const CNode& c = g.nodes[static_cast<size_t>(i)];
+        const NodeRt& r = inst->rt[static_cast<size_t>(i)];
+        const SlotRt& s = inst->mslots[static_cast<size_t>(c.montage_slot)];
+        if (!r.active || s.seg_count == 0 || s.montage < 0) continue;
+        const float w = r.influence * s.weight;
+        if (w > 0.f) sample_curves(*inst, inst->montages[static_cast<size_t>(s.montage)].clip, s.time, w, total);
+    }
+    for (size_t k = 0; k < inst->curve_values.size(); ++k) {
+        inst->curve_values[k] = total > 0.0 ? static_cast<float>(inst->curve_acc[k] / total) : 0.f;
+    }
+
     // 3. pose
     inst->ops.clear();
     emit(*inst, g.root);
+    if (inst->mods != nullptr) {
+        for (size_t m = 0; m < g.doc.modifiers.size(); ++m) {
+            const int si = inst->mod_index[m];
+            if (si < 0) continue;
+            const og::Modifier& md = g.doc.modifiers[m];
+            float w = md.weight;
+            if (!md.weight_param.empty()) w *= static_cast<float>(param_value(*inst, g.doc.find_param(md.weight_param)));
+            if (!md.weight_curve.empty()) {
+                const int32_t cv = cg_instance_curve_find(inst, md.weight_curve.c_str());
+                w *= cv >= 0 ? inst->curve_values[static_cast<size_t>(cv)] : 0.f;
+            }
+            cr_modstack_set_weight(inst->mods, si, std::clamp(w, 0.f, 1.f));
+        }
+        for (const auto& [slot, host] : inst->aliases) {
+            cr_modstack_set_target(inst->mods, slot, &inst->host_targets[static_cast<size_t>(host)]);
+        }
+        cr_modstack_set_frame(inst->mods, base_matrix);
+        cr_pose_op& op = push(*inst, CR_OP_MODIFY, g.nodes[static_cast<size_t>(g.root)].out_slot);
+        op.object = inst->mods;
+        op.param = dt;
+    }
     const int32_t rc = cr_poses_evaluate(inst->poses, inst->ops.data(), static_cast<int32_t>(inst->ops.size()),
                                          g.nodes[static_cast<size_t>(g.root)].out_slot, extras, extra_count,
                                          base_matrix, out_skin, out_world, out_child);
     if (rc != CR_OK) return fail(CG_ERR_ARG, std::string("cg_instance_evaluate: ") + cr_last_error());
 
     // 4. outputs
-    double total = 0.0;
     const float threshold = g.doc.notify_threshold;
     for (int i : g.order) {
         const CNode& c = g.nodes[static_cast<size_t>(i)];
@@ -1661,7 +1940,6 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         if (b.rig_clip == nullptr) continue;
         const PlayerRt& p = inst->players[static_cast<size_t>(i)];
         if (r.influence >= threshold && r.influence > 0.f) fire(*inst, b, c.clip_slot, -1, p.prev, p.advanced, r.influence);
-        if (r.influence > 0.f) sample_curves(*inst, b, p.time, r.influence, total);
         if (r.root_path && r.influence > 0.f && b.root_joint >= 0 && b.root_axes != 0 && p.advanced != 0.f) {
             cr_root_motion m{};
             cr_clip_root_motion(b.rig_clip, inst->rig, b.root_joint, b.root_axes, p.prev, p.advanced, &m);
@@ -1685,10 +1963,6 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
                 add_motion(inst->root_motion, m, w);
             }
         }
-        if (w > 0.f) sample_curves(*inst, b, s.time, w, total);
-    }
-    for (size_t k = 0; k < inst->curve_values.size(); ++k) {
-        inst->curve_values[k] = total > 0.0 ? static_cast<float>(inst->curve_acc[k] / total) : 0.f;
     }
     return CG_OK;
 }

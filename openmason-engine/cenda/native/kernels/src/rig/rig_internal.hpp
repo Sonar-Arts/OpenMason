@@ -74,6 +74,13 @@ void pose_sample(const cr_rig& rig, const cr_clip& clip, float elapsed, bool cli
 void pose_layer_override(const cr_rig& rig, PoseBuf& dst, const PoseBuf& src, float weight, const float* mask,
                          uint32_t flags);
 
+// Runs a pose-modifier stack on a pose (modifiers.cpp).
+int32_t modstack_apply(cr_modstack& stack, PoseBuf& pose, float dt);
+
+// One joint's local matrix L for a pose (no extras) and the frame its children inherit (rig.cpp).
+Mat4 joint_local_matrix(const Joint& j, const Pose& p);
+Mat4 joint_child_frame(const Joint& j, const Mat4& world);
+
 // Composes local poses into skin / world / child matrices (rig.cpp). who = the API name for errors.
 int32_t compose_pose(const cr_rig* rig, const std::vector<Pose>& poses, const cr_joint_extra* extras,
                      int32_t extra_count, const float* base_matrix, float* out_skin, float* out_world,

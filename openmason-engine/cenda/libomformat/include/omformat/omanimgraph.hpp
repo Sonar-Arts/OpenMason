@@ -30,6 +30,24 @@
 //                     (an additive layer whose node is not an additive clip is made a delta against
 //                     `reference`)
 //     slot            name, source, mask?   a montage slot: the host plays one-shot clips into it
+//   targets           [ "lookAt", "handGoalR", ... ]   transforms the host sets each frame (#158)
+//   colliders         [ {joint, a: [x,y,z], b?: [x,y,z], radius} ]   spheres / capsules for spring bones, in
+//                     the joint's posed frame
+//   modifiers         the pose-modifier stack applied to the root's pose, in order (#158; cenda/rig.h "Pose
+//                     modifiers" defines each solver). Every modifier: type, weight?: 1, weightParam?: float
+//                     param multiplied in, weightCurve?: curve name multiplied in.
+//     twoBone         upper, mid, end, target, pole?, soft?: 0, matchRotation?: false
+//     fabrik | ccd    start, end, target, iterations?: 10, tolerance?: 1e-4
+//     aim             joints: [ {joint, weight?: 1} ] parents first, target, axis?: [0,0,-1], each?: false,
+//                     limits?: true (the .omchar joint limits)
+//     constraint      kind: point | orient | parent | aim | copy, joint, target, offset?: [x,y,z],
+//                     offsetRot?: [x,y,z] degrees, axis?: [x,y,z] (aim)
+//     spring          start, end, stiffness?: 1, drag?: 0.4, gravity?: [x,y,z], radius?: 0, step?: 1/60
+//     fullBody        body, limbs: [ {upper, mid, end, target, pull?: 1, reach?: 1} ] (1..5), hipGoal?,
+//                     hipWeight?: 1, iterations?: 3
+//                     JOINT references: "role:<role>" (through the character) or a joint id / name.
+//                     TARGET references: a name from `targets`, or "role:<r>" / "joint:<j>" (that joint's posed
+//                     frame) / "socket:<s>" (a .omchar socket).
 //   <other keys>      unknown top-level sections, kept verbatim
 //
 // The nodes form a TREE under `root`: every node is used by at most one parent and never by itself, the
@@ -150,6 +168,57 @@ struct Node {
     std::string mask;
 };
 
+enum class ModType : int { TwoBone = 0, Fabrik = 1, Ccd = 2, Aim = 3, Constraint = 4, Spring = 5, FullBody = 6 };
+enum class ConstraintKind : int { Point = 0, Orient = 1, Parent = 2, Aim = 3, Copy = 4 };
+
+struct AimJoint {
+    std::string joint;
+    float weight = 1.f;
+};
+
+struct Limb {
+    std::string upper, mid, end, target;
+    float pull = 1.f;
+    float reach = 1.f;
+};
+
+struct Modifier {
+    ModType type = ModType::TwoBone;
+    float weight = 1.f;
+    std::string weight_param;
+    std::string weight_curve;
+    // joint references
+    std::string upper, mid, end, start, joint, body;
+    // target references
+    std::string target, pole;
+    float soft = 0.f;
+    bool match_rotation = false;
+    int iterations = 0;     // 0 = the solver's default
+    float tolerance = 0.f;  // 0 = default
+    std::vector<AimJoint> aim;
+    float axis[3]{0.f, 0.f, -1.f};
+    bool each = false;
+    bool limits = true;
+    ConstraintKind kind = ConstraintKind::Point;
+    float offset[3]{0.f, 0.f, 0.f};
+    float offset_rot[3]{0.f, 0.f, 0.f};
+    float stiffness = 1.f;
+    float drag = 0.4f;
+    float gravity[3]{0.f, 0.f, 0.f};
+    float radius = 0.f;
+    float step = 0.f;  // 0 = 1/60
+    std::vector<Limb> limbs;
+    float hip_weight = 1.f;
+};
+
+struct Collider {
+    std::string joint;
+    float a[3]{0.f, 0.f, 0.f};
+    float b[3]{0.f, 0.f, 0.f};
+    bool capsule = false;
+    float radius = 0.f;
+};
+
 struct UnknownSection {
     std::string key;
     std::string json;
@@ -165,12 +234,16 @@ struct Graph {
     std::vector<Mask> masks;
     std::string root;
     std::vector<Node> nodes;
+    std::vector<std::string> targets;
+    std::vector<Collider> colliders;
+    std::vector<Modifier> modifiers;
     std::vector<UnknownSection> unknown_sections;
 
     [[nodiscard]] int find_node(std::string_view id) const;
     [[nodiscard]] int find_param(std::string_view name) const;
     [[nodiscard]] int find_slot(std::string_view name) const;
     [[nodiscard]] int find_mask(std::string_view name) const;
+    [[nodiscard]] int find_target(std::string_view name) const;
 };
 
 // Parses and validates (see the header comment). Throws format_error / version_error.

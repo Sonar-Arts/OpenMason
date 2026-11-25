@@ -7,6 +7,7 @@
 // is rounded once into the float Euler degrees a pose holds.
 
 #include "rig_internal.hpp"
+#include "rig_quat.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,109 +20,9 @@ using namespace cenda::rig;
 namespace {
 
 constexpr int32_t MAX_SLOTS = 1024;
-constexpr double RAD_TO_DEG = 180.0 / 3.14159265358979323846;
 // A rotation delta below this angle (radians) is an exact zero (float Euler degrees cannot hold less
 // than ~1e-7 degrees of meaning anyway).
 constexpr double IDENTITY_EPS = 1e-9;
-
-// ---- quaternions (w, x, y, z), Hamilton product, column-vector convention -------------------------
-
-struct Quat {
-    double w = 1.0, x = 0.0, y = 0.0, z = 0.0;
-};
-
-Quat qmul(const Quat& a, const Quat& b) {
-    return Quat{a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-                a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-                a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-                a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
-}
-
-Quat qconj(const Quat& q) { return Quat{q.w, -q.x, -q.y, -q.z}; }
-
-double qdot(const Quat& a, const Quat& b) { return a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z; }
-
-Quat qnormalize(const Quat& q) {
-    const double len = std::sqrt(qdot(q, q));
-    if (len <= 0.0) return Quat{};
-    return Quat{q.w / len, q.x / len, q.y / len, q.z / len};
-}
-
-Quat qaxis(double ax, double ay, double az, double angle) {
-    const double s = std::sin(angle * 0.5);
-    return Quat{std::cos(angle * 0.5), ax * s, ay * s, az * s};
-}
-
-// R = Rx·Ry·Rz (rig.h) -> q = qx·qy·qz.
-Quat from_euler_deg(const float rot[3]) {
-    const Quat qx = qaxis(1, 0, 0, rot[0] * DEG_TO_RAD);
-    const Quat qy = qaxis(0, 1, 0, rot[1] * DEG_TO_RAD);
-    const Quat qz = qaxis(0, 0, 1, rot[2] * DEG_TO_RAD);
-    return qmul(qmul(qx, qy), qz);
-}
-
-// Row-major 3x3 of a unit quaternion.
-void qmatrix(const Quat& q, double r[9]) {
-    const double xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
-    const double xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
-    const double wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
-    r[0] = 1 - 2 * (yy + zz); r[1] = 2 * (xy - wz);     r[2] = 2 * (xz + wy);
-    r[3] = 2 * (xy + wz);     r[4] = 1 - 2 * (xx + zz); r[5] = 2 * (yz - wx);
-    r[6] = 2 * (xz - wy);     r[7] = 2 * (yz + wx);     r[8] = 1 - 2 * (xx + yy);
-}
-
-// Euler XYZ degrees of R = Rx·Ry·Rz: r02 = sin y, r12 = -sin x cos y, r22 = cos x cos y,
-// r01 = -cos y sin z, r00 = cos y cos z.
-void to_euler_deg(const Quat& qin, float out[3]) {
-    double r[9];
-    qmatrix(qnormalize(qin), r);
-    const double sy = std::clamp(r[2], -1.0, 1.0);
-    double x, y, z;
-    if (std::fabs(sy) < 0.9999999) {
-        y = std::asin(sy);
-        x = std::atan2(-r[5], r[8]);
-        z = std::atan2(-r[1], r[0]);
-    } else {  // gimbal lock: put everything in x
-        y = sy > 0 ? 1.5707963267948966 : -1.5707963267948966;
-        x = std::atan2(r[7], r[4]);
-        z = 0.0;
-    }
-    out[0] = static_cast<float>(x * RAD_TO_DEG);
-    out[1] = static_cast<float>(y * RAD_TO_DEG);
-    out[2] = static_cast<float>(z * RAD_TO_DEG);
-}
-
-Quat qslerp(const Quat& a, Quat b, double t) {
-    double d = qdot(a, b);
-    if (d < 0.0) {
-        b = Quat{-b.w, -b.x, -b.y, -b.z};
-        d = -d;
-    }
-    if (d > 0.9999995) {  // nearly equal: nlerp
-        return qnormalize(Quat{a.w + (b.w - a.w) * t, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
-                               a.z + (b.z - a.z) * t});
-    }
-    const double theta = std::acos(std::clamp(d, -1.0, 1.0));
-    const double s = std::sin(theta);
-    const double wa = std::sin((1.0 - t) * theta) / s;
-    const double wb = std::sin(t * theta) / s;
-    return Quat{a.w * wa + b.w * wb, a.x * wa + b.x * wb, a.y * wa + b.y * wb, a.z * wa + b.z * wb};
-}
-
-// Angle (radians, >= 0) and unit axis of q (shortest arc). Angle 0 -> axis (1,0,0).
-double qangle_axis(Quat q, double axis[3]) {
-    if (q.w < 0.0) q = Quat{-q.w, -q.x, -q.y, -q.z};
-    const double s = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z);
-    if (s <= 0.0) {
-        axis[0] = 1.0;
-        axis[1] = axis[2] = 0.0;
-        return 0.0;
-    }
-    axis[0] = q.x / s;
-    axis[1] = q.y / s;
-    axis[2] = q.z / s;
-    return 2.0 * std::atan2(s, q.w);
-}
 
 bool same3(const float a[3], const float b[3]) { return std::memcmp(a, b, sizeof(float) * 3) == 0; }
 
@@ -685,6 +586,13 @@ int32_t run_ops(cr_poses& p, const cr_pose_op* ops, int32_t count) {
             }
             break;
         }
+        case CR_OP_MODIFY: {
+            cr_modstack* stack = const_cast<cr_modstack*>(static_cast<const cr_modstack*>(op.object));
+            if (stack == nullptr) return op_fail(CR_ERR_ARG, k, "MODIFY needs a modifier stack");
+            const int32_t rc = modstack_apply(*stack, dst, op.param);
+            if (rc != CR_OK) return op_fail(rc, k, cr_last_error());
+            break;
+        }
         default:
             return op_fail(CR_ERR_ARG, k, "unknown op");
         }
@@ -921,6 +829,16 @@ int32_t cr_inertia_reset(cr_inertia* inertia) {
 
 int32_t cr_inertia_active(const cr_inertia* inertia) {
     return inertia != nullptr && (inertia->active || inertia->pending) ? 1 : 0;
+}
+
+// ---- modifiers ---------------------------------------------------------------------------------------
+
+int32_t cr_modstack_apply(cr_modstack* stack, cr_poses* poses, int32_t slot, float dt) {
+    if (stack == nullptr || poses == nullptr || bad_slot(*poses, slot) || !std::isfinite(dt) || dt < 0.f) {
+        set_error("cr_modstack_apply: bad arguments");
+        return CR_ERR_ARG;
+    }
+    return modstack_apply(*stack, poses->slots[static_cast<size_t>(slot)], dt);
 }
 
 // ---- root motion -----------------------------------------------------------------------------------

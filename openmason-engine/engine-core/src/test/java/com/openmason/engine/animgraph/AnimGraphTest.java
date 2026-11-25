@@ -290,6 +290,54 @@ class AnimGraphTest {
     }
 
     @Test
+    void poseModifiersWorkOnACharacterizedRig() throws IOException {
+        assumeTrue(Files.isDirectory(MOBS), "Stonebreak fixtures missing");
+        String json = """
+            {"format": "omanimgraph", "version": "1.0",
+             "parameters": [{"name": "look", "type": "float", "default": 1}],
+             "slots": ["idle"], "targets": ["footGoal", "lookAt"], "root": "idle",
+             "nodes": [{"id": "idle", "type": "clip", "slot": "idle"}],
+             "modifiers": [
+               {"type": "twoBone", "upper": "role:upper_leg_l", "mid": "role:lower_leg_l", "end": "role:foot_l",
+                "target": "footGoal"},
+               {"type": "aim", "target": "lookAt", "weightParam": "look",
+                "joints": [{"joint": "role:spine", "weight": 0.4}, {"joint": "role:head", "weight": 0.6}]}
+             ]}""";
+        Map<String, AnimClipDocument> clips = clips();
+        try (AnimGraph graph = AnimGraph.read(json); Character ch = Character.of("SB_Player.sbe");
+             AnimGraphInstance inst = AnimGraphInstance.create(graph, ch.rig(), ch.definition())) {
+            assertEquals(List.of("footGoal", "lookAt"), graph.targets());
+            assertEquals(2, graph.modifierCount());
+            assertEquals(0, inst.unresolvedMaskEntries(), "roles: " + new java.util.TreeMap<>(ch.definition().roles()).keySet());
+            inst.bindSlot("idle", clips.get("idle"));
+            JointPalette palette = new JointPalette();
+            int foot = ch.joint("foot_l"), head = ch.joint("head");
+            Matrix4f m = new Matrix4f();
+            inst.evaluate(0f, null, palette);
+            Vector3f rest = palette.worldMatrix(foot, m).getTranslation(new Vector3f());
+            Matrix4f headRest = palette.worldMatrix(head, new Matrix4f());
+            // Lift the foot and bring it forward: the leg bends and the foot lands on the goal.
+            Vector3f goal = new Vector3f(rest).add(0f, 0.25f, -0.15f);
+            inst.setTarget(graph.target("footGoal"), AnimGraphInstance.TARGET_MODEL, goal.x, goal.y, goal.z);
+            inst.evaluate(0f, null, palette);  // time frozen: the idle clip sways the spine
+            Vector3f reached = palette.worldMatrix(foot, m).getTranslation(new Vector3f());
+            assertTrue(reached.distance(goal) < 1e-3f, "foot at " + reached + ", goal " + goal);
+            // Look somewhere to the side: the head turns; with the look weight at 0 it is back at rest.
+            inst.setTarget(graph.target("lookAt"), AnimGraphInstance.TARGET_MODEL, 3f, 1.6f, -3f);
+            inst.evaluate(0f, null, palette);  // time frozen: the idle clip sways the spine
+            assertFalse(palette.worldMatrix(head, new Matrix4f()).equals(headRest, 1e-3f), "the head turned");
+            inst.setFloat(graph.param("look"), 0f);
+            inst.evaluate(0f, null, palette);  // time frozen: the idle clip sways the spine
+            assertTrue(palette.worldMatrix(head, new Matrix4f()).equals(headRest, 1e-5f), "look weight 0 = rest");
+            inst.clearTarget(graph.target("footGoal"));
+            inst.evaluate(0f, null, palette);  // time frozen: the idle clip sways the spine
+            assertTrue(palette.worldMatrix(foot, m).getTranslation(new Vector3f()).distance(rest) < 1e-5f);
+        } finally {
+            clips.values().forEach(AnimClipDocument::close);
+        }
+    }
+
+    @Test
     void aFrameIsOneAllocationFreeCallAndTheBenchFitsAFrame() throws IOException {
         assumeTrue(Files.isDirectory(MOBS), "Stonebreak fixtures missing");
         Map<String, AnimClipDocument> clips = clips();

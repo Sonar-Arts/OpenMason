@@ -54,6 +54,8 @@ public final class AnimGraph implements AutoCloseable {
     private final List<String> slots;
     private final List<Node> nodes;
     private final List<String> montageSlots;
+    private final List<String> targets;
+    private final int modifierCount;
 
     private static final class State implements Runnable {
         volatile MemorySegment handle;
@@ -85,6 +87,7 @@ public final class AnimGraph implements AutoCloseable {
         List<Node> ns = new ArrayList<>();
         List<String> ss = new ArrayList<>();
         List<String> ms = new ArrayList<>();
+        List<String> ts = new ArrayList<>();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment strOut = arena.allocate(CendaAnimGraph.ADDR);
             MemorySegment i1 = arena.allocate(CendaAnimGraph.I32);
@@ -103,6 +106,9 @@ public final class AnimGraph implements AutoCloseable {
                 ns.add(new Node(i, CendaAnimGraph.string(strOut.get(CendaAnimGraph.ADDR, 0)),
                     NodeType.values()[i1.get(CendaAnimGraph.I32, 0)], i2.get(CendaAnimGraph.I32, 0)));
             }
+            int tc = (int) CendaAnimGraph.TARGET_COUNT.invokeExact(handle);
+            for (int i = 0; i < tc; i++) ts.add(CendaAnimGraph.string((MemorySegment) CendaAnimGraph.TARGET_NAME.invokeExact(handle, i)));
+            this.modifierCount = (int) CendaAnimGraph.MODIFIER_COUNT.invokeExact(handle);
             int mc = (int) CendaAnimGraph.MONTAGE_SLOT_COUNT.invokeExact(handle);
             for (int i = 0; i < mc; i++) {
                 ms.add(CendaAnimGraph.string((MemorySegment) CendaAnimGraph.MONTAGE_SLOT_NAME.invokeExact(handle, i)));
@@ -112,6 +118,7 @@ public final class AnimGraph implements AutoCloseable {
         this.slots = Collections.unmodifiableList(ss);
         this.nodes = Collections.unmodifiableList(ns);
         this.montageSlots = Collections.unmodifiableList(ms);
+        this.targets = Collections.unmodifiableList(ts);
     }
 
     /** Parses and compiles {@code .omanimgraph} JSON. */
@@ -230,6 +237,20 @@ public final class AnimGraph implements AutoCloseable {
 
     public int montageSlot(String slotName) {
         return montageSlots.indexOf(slotName);
+    }
+
+    /** Pose-modifier targets the host sets ({@link AnimGraphInstance#setTarget}), in index order. */
+    public List<String> targets() {
+        return targets;
+    }
+
+    public int target(String targetName) {
+        return targets.indexOf(targetName);
+    }
+
+    /** Number of pose modifiers in the graph's stack (#158). */
+    public int modifierCount() {
+        return modifierCount;
     }
 
     @Override
