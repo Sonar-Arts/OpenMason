@@ -3,7 +3,6 @@ package com.openmason.engine.rendering.sky;
 // Standard Library Imports
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 
 // JOML Math Library
 import org.joml.Matrix4f;
@@ -20,7 +19,10 @@ import static org.lwjgl.opengl.GL30.*;
 // Project Imports
 import com.openmason.engine.rendering.RenderOrigin;
 import com.openmason.engine.rendering.shaders.ShaderProgram;
+import com.openmason.engine.rendering.shaders.ShaderResourceLoader;
 import com.openmason.engine.rendering.gl.PngTextureUploader;
+import com.openmason.engine.rendering.sky.atmosphere.AtmosphereLuts;
+import com.openmason.engine.rendering.sky.atmosphere.AtmosphereSettings;
 
 /**
  * Renderer for procedural sky with sun and moon.
@@ -45,7 +47,17 @@ public class SkyRenderer {
     private static final String MOON_TEXTURE = "/textures/sky/moon.png";
     /** Texture unit the moon is bound on while the sky draws (restored afterwards). */
     private static final int MOON_TEXTURE_UNIT = 0;
+    /** Units the atmosphere's LUTs are bound on while the sky draws: transmittance, sun and moon sky views. */
+    private static final int TRANSMITTANCE_UNIT = 1, SUN_SKY_VIEW_UNIT = 2, MOON_SKY_VIEW_UNIT = 3;
     private int moonTexture;
+
+    /** The hand-painted sky's uniforms (sky.frag paintedSkyColor). */
+    private static final String[] PAINTED_UNIFORMS = {"paintedSky", "horizonColor", "sunsetColor",
+            "sunsetCoverage", "sunGlow", "sunColor", "earthShadowColor", "earthShadowHeight", "twilightBand",
+            "aerosol", "aureole"};
+
+    private AtmosphereLuts atmosphereLuts;
+    private AtmosphereSettings atmosphere = AtmosphereSettings.earth();
 
     // Sky dome vertices (cube that will be expanded in vertex shader)
     private static final float[] SKY_VERTICES = {
@@ -82,6 +94,12 @@ public class SkyRenderer {
         initializeOpenGLResources();
         initializeShaders();
         initializeMoonTexture();
+        atmosphereLuts = new AtmosphereLuts();
+    }
+
+    /** The atmosphere the sky is drawn through; the LUTs that depend on it rebuild on the next frame. */
+    public void setAtmosphere(AtmosphereSettings atmosphere) {
+        this.atmosphere = atmosphere;
     }
 
     /**
@@ -151,20 +169,19 @@ public class SkyRenderer {
             skyShaderProgram.createUniform("moonDirection");
             skyShaderProgram.createUniform("moonLight");
             skyShaderProgram.createUniform("zenithColor");
-            skyShaderProgram.createUniform("horizonColor");
-            skyShaderProgram.createUniform("sunGlow");
-            skyShaderProgram.createUniform("sunsetColor");
-            skyShaderProgram.createUniform("sunsetCoverage");
-            skyShaderProgram.createUniform("sunColor");
-            skyShaderProgram.createUniform("earthShadowColor");
-            skyShaderProgram.createUniform("earthShadowHeight");
-            skyShaderProgram.createUniform("twilightBand");
             skyShaderProgram.createUniform("daylight");
             skyShaderProgram.createUniform("seaHorizon");
             skyShaderProgram.createUniform("celestialPole");
             skyShaderProgram.createUniform("skyAngle");
             skyShaderProgram.createUniform("time");
-            skyShaderProgram.createUniform("aerosol");
+            skyShaderProgram.createUniform("exposure");
+            skyShaderProgram.createUniform("viewHeight");
+            for (String painted : PAINTED_UNIFORMS) {
+                skyShaderProgram.createUniform(painted);
+            }
+            skyShaderProgram.createUniform("transmittanceLut");
+            skyShaderProgram.createUniform("sunSkyView");
+            skyShaderProgram.createUniform("moonSkyView");
             skyShaderProgram.createUniform("moonTexture");
 
         } catch (Exception e) {
@@ -175,13 +192,9 @@ public class SkyRenderer {
     /**
      * Load shader source code from resources.
      */
-    private String loadShaderSource(String resourcePath) throws IOException {
-        try (InputStream inputStream = getClass().getResourceAsStream(resourcePath)) {
-            if (inputStream == null) {
-                throw new IOException("Shader resource not found: " + resourcePath);
-            }
-            return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
-        }
+    private String loadShaderSource(String resourcePath) {
+        // Resolves #include, which sky.frag uses for the shared tone curve.
+        return ShaderResourceLoader.load(resourcePath);
     }
 
     /**
@@ -195,6 +208,9 @@ public class SkyRenderer {
      */
     public void renderSky(Matrix4f projectionMatrix, Matrix4f viewMatrix, Vector3f cameraPosition,
                           SkyParams sky) {
+        float viewHeight = atmosphere.bottomRadius() + Math.max(sky.viewAltitude(), 0.001f);
+        atmosphereLuts.update(atmosphere, sky.sunDirection(), sky.moonDirection(), viewHeight);
+
         // Save current OpenGL state
         boolean depthTestEnabled = glIsEnabled(GL_DEPTH_TEST);
         boolean cullFaceEnabled = glIsEnabled(GL_CULL_FACE);
@@ -229,33 +245,50 @@ public class SkyRenderer {
         skyShaderProgram.setUniform("moonDirection", sky.moonDirection());
         skyShaderProgram.setUniform("moonLight", sky.moonLight());
         skyShaderProgram.setUniform("zenithColor", sky.zenithColor());
-        skyShaderProgram.setUniform("horizonColor", sky.horizonColor());
-        skyShaderProgram.setUniform("sunGlow", sky.sunGlow());
-        skyShaderProgram.setUniform("sunsetColor", sky.sunsetColor());
-        skyShaderProgram.setUniform("sunsetCoverage", sky.sunsetCoverage());
-        skyShaderProgram.setUniform("sunColor", sky.sunColor());
-        skyShaderProgram.setUniform("earthShadowColor", sky.earthShadowColor());
-        skyShaderProgram.setUniform("earthShadowHeight", sky.earthShadowHeight());
-        skyShaderProgram.setUniform("twilightBand", sky.twilightBand());
         skyShaderProgram.setUniform("daylight", sky.daylight());
         skyShaderProgram.setUniform("seaHorizon", sky.seaHorizon());
         skyShaderProgram.setUniform("celestialPole", sky.celestialPole());
         skyShaderProgram.setUniform("skyAngle", sky.skyAngle());
         skyShaderProgram.setUniform("time", sky.time());
+        skyShaderProgram.setUniform("exposure", sky.exposure());
+        skyShaderProgram.setUniform("viewHeight", viewHeight);
+        skyShaderProgram.setUniform("paintedSky", sky.paintedSky());
+        skyShaderProgram.setUniform("horizonColor", sky.horizonColor());
+        skyShaderProgram.setUniform("sunsetColor", sky.sunsetColor());
+        skyShaderProgram.setUniform("sunsetCoverage", sky.sunsetCoverage());
+        skyShaderProgram.setUniform("sunGlow", sky.sunGlow());
+        skyShaderProgram.setUniform("sunColor", sky.sunColor());
+        skyShaderProgram.setUniform("earthShadowColor", sky.earthShadowColor());
+        skyShaderProgram.setUniform("earthShadowHeight", sky.earthShadowHeight());
+        skyShaderProgram.setUniform("twilightBand", sky.twilightBand());
         skyShaderProgram.setUniform("aerosol", sky.aerosol());
+        skyShaderProgram.setUniform("aureole", sky.aureole());
+        atmosphere.applyTo(skyShaderProgram);
         skyShaderProgram.setUniform("moonTexture", MOON_TEXTURE_UNIT);
+        skyShaderProgram.setUniform("transmittanceLut", TRANSMITTANCE_UNIT);
+        skyShaderProgram.setUniform("sunSkyView", SUN_SKY_VIEW_UNIT);
+        skyShaderProgram.setUniform("moonSkyView", MOON_SKY_VIEW_UNIT);
 
         int previousUnit = glGetInteger(GL_ACTIVE_TEXTURE);
-        glActiveTexture(GL_TEXTURE0 + MOON_TEXTURE_UNIT);
-        int previousTexture = glGetInteger(GL_TEXTURE_BINDING_2D);
-        glBindTexture(GL_TEXTURE_2D, moonTexture);
+        int[] units = {MOON_TEXTURE_UNIT, TRANSMITTANCE_UNIT, SUN_SKY_VIEW_UNIT, MOON_SKY_VIEW_UNIT};
+        int[] textures = {moonTexture, atmosphereLuts.transmittanceTexture(),
+                atmosphereLuts.sunSkyViewTexture(), atmosphereLuts.moonSkyViewTexture()};
+        int[] previousTextures = new int[units.length];
+        for (int i = 0; i < units.length; i++) {
+            glActiveTexture(GL_TEXTURE0 + units[i]);
+            previousTextures[i] = glGetInteger(GL_TEXTURE_BINDING_2D);
+            glBindTexture(GL_TEXTURE_2D, textures[i]);
+        }
 
         // Bind sky VAO and render
         glBindVertexArray(skyVAO);
         glDrawElements(GL_TRIANGLES, SKY_INDICES.length, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
 
-        glBindTexture(GL_TEXTURE_2D, previousTexture);
+        for (int i = 0; i < units.length; i++) {
+            glActiveTexture(GL_TEXTURE0 + units[i]);
+            glBindTexture(GL_TEXTURE_2D, previousTextures[i]);
+        }
         glActiveTexture(previousUnit);
 
         // Unbind shader
@@ -294,6 +327,9 @@ public class SkyRenderer {
         }
         if (moonTexture != 0) {
             glDeleteTextures(moonTexture);
+        }
+        if (atmosphereLuts != null) {
+            atmosphereLuts.cleanup();
         }
 
         if (skyVAO != 0) {

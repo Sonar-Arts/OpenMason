@@ -17,6 +17,10 @@ import org.joml.Vector3f;
  * @param skyTransmittanceTexture texture whose alpha is how much of the sky's light reaches the
  *                         eye at each screen position through what lies in front of it (cloud,
  *                         rain), at any resolution; 0 when nothing does
+ * @param exposure         multiplier on the scene's linear light before the tone map: about 0.8
+ *                         by day, rising as the scene darkens so the curve's toe does not crush it
+ * @param nightAdaptation  0..1: how dark-adapted the eye is. At 1, dim light is seen by the rods,
+ *                         desaturated and blue-shifted (the Purkinje shift); bright light stays in colour
  */
 public record PostFxFrameParams(
         Matrix4f viewMatrix,
@@ -24,5 +28,7 @@ public record PostFxFrameParams(
         Vector3f sunDirection,
         Vector3f sunColor,
         float effectStrength,
-        int skyTransmittanceTexture) {
+        int skyTransmittanceTexture,
+        float exposure,
+        float nightAdaptation) {
 }

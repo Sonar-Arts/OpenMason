@@ -14,6 +14,7 @@ import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
 import static org.lwjgl.opengl.GL13.GL_TEXTURE1;
 import static org.lwjgl.opengl.GL13.glActiveTexture;
+import static org.lwjgl.opengl.GL30.GL_DRAW_FRAMEBUFFER_BINDING;
 import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER;
 import static org.lwjgl.opengl.GL30.glBindFramebuffer;
 
@@ -23,7 +24,7 @@ import static org.lwjgl.opengl.GL30.glBindFramebuffer;
  * <p>Pass A renders a half-resolution occlusion mask: a sun glow where the scene depth equals
  * the far plane (the sky dome writes depth exactly 1.0), black where geometry occludes the sun.
  * Pass B radially blurs the mask toward the sun's projected screen position and composites it
- * additively onto the default framebuffer.</p>
+ * additively into the output framebuffer (the HDR scene, before the tone map).</p>
  *
  * <p>Whatever veils the sky (cloud, rain) comes in as a transmittance texture
  * ({@link PostFxFrameParams#skyTransmittanceTexture()}): the mask is scaled by how much of the
@@ -119,6 +120,8 @@ public class GodRaysEffect implements PostProcessingEffect {
 
         sunUv.set(ndcX * 0.5f + 0.5f, ndcY * 0.5f + 0.5f);
 
+        // The HDR scene the shafts are added into; pass A binds its own target first.
+        int outputFbo = glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
         boolean depthTestWasEnabled = glIsEnabled(GL_DEPTH_TEST);
         glDisable(GL_DEPTH_TEST);
         glDepthMask(false);
@@ -141,8 +144,8 @@ public class GodRaysEffect implements PostProcessingEffect {
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE0);
 
-        // Pass B: radial blur, composited additively onto the default framebuffer.
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        // Pass B: radial blur, composited additively into the output (the HDR scene).
+        glBindFramebuffer(GL_FRAMEBUFFER, outputFbo);
         glViewport(0, 0, outputWidth, outputHeight);
         glEnable(GL_BLEND);
         glBlendFunc(GL_ONE, GL_ONE);

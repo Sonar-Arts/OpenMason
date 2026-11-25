@@ -12,18 +12,19 @@ import static org.lwjgl.opengl.GL20.glUseProgram;
 import static org.lwjgl.opengl.GL30.*;
 
 /**
- * Coordinates offscreen scene rendering and screen-space post-processing effects.
+ * Coordinates the HDR scene target, screen-space effects and the final tone-mapping pass.
  *
  * <p>Usage per frame: {@link #beginFrame()} → render the 3D scene normally →
- * {@link #endFrame(PostFxFrameParams)}. {@code endFrame} blits the scene (color + depth) to the
- * default framebuffer, then lets each registered {@link PostProcessingEffect} composite on top.
- * Additive effects (god rays, bloom) draw straight onto the default framebuffer; a future
- * full-chain effect (color grading, SSAO) would upgrade this to ping-pong targets without
- * changing the effect interface.</p>
+ * {@link #endFrame(PostFxFrameParams)}. The scene renders into a {@code GL_R11F_G11F_B10F}
+ * target: the scene shaders' own (display-referred, gamma 2.2) colour, unclamped, so light
+ * brighter than white survives. {@code endFrame} lets each registered
+ * {@link PostProcessingEffect} composite into that HDR scene (god rays add to it), blits the
+ * scene's depth to the default framebuffer, and finally draws the scene there through
+ * exposure, the night grade and the fitted ACES curve ({@link ToneMapPass}).</p>
  *
  * <p>After {@code endFrame} returns, GL state matches what overlay/UI code expects following a
  * world render: default framebuffer bound, window viewport, depth test on (GL_LESS), depth
- * writes on, blending off, no program/VAO/texture bound.</p>
+ * writes on, blending off, no program/VAO/texture bound. UI drawn after it is not tone mapped.</p>
  */
 public class PostProcessingPipeline {
 
@@ -31,19 +32,21 @@ public class PostProcessingPipeline {
 
     private final RenderTarget sceneTarget;
     private final FullscreenQuad quad;
+    private final ToneMapPass toneMap;
     private final List<PostProcessingEffect> effects = new ArrayList<>();
 
     /**
-     * Whether the combined color+depth blit to the default framebuffer is supported.
-     * Depth blits fail with GL_INVALID_OPERATION when the default framebuffer's depth format
-     * differs from the scene target's; in that case only color is blitted from then on.
+     * Whether the depth blit to the default framebuffer is supported. Depth blits fail with
+     * GL_INVALID_OPERATION when the default framebuffer's depth format differs from the scene
+     * target's; in that case depth is not copied from then on.
      */
     private boolean depthBlitSupported = true;
     private boolean depthBlitProbed = false;
 
     public PostProcessingPipeline(int width, int height) {
-        sceneTarget = new RenderTarget(width, height, true);
+        sceneTarget = new RenderTarget(width, height, true, GL_R11F_G11F_B10F);
         quad = new FullscreenQuad();
+        toneMap = new ToneMapPass();
     }
 
     /**
@@ -63,22 +66,25 @@ public class PostProcessingPipeline {
     }
 
     /**
-     * Blits the scene to the default framebuffer, runs all effects, and restores the GL state
-     * contract expected by overlay/UI rendering.
+     * Composites the effects into the HDR scene, copies its depth to the default framebuffer,
+     * tone maps it there, and restores the GL state contract expected by overlay/UI rendering.
      */
     public void endFrame(PostFxFrameParams params) {
         int width = sceneTarget.getWidth();
         int height = sceneTarget.getHeight();
 
-        blitSceneToDefaultFramebuffer(width, height);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, width, height);
-
+        // Effects add into the HDR scene, so they pass through the tone map with it.
+        sceneTarget.bind();
         for (PostProcessingEffect effect : effects) {
             effect.apply(sceneTarget.getColorTexture(), sceneTarget.getDepthTexture(),
                     width, height, quad, params);
         }
+
+        blitDepthToDefaultFramebuffer(width, height);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, width, height);
+        toneMap.draw(sceneTarget.getColorTexture(), quad, params);
 
         // State contract: leave GL exactly as overlay/UI code expects after a world render.
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -93,7 +99,14 @@ public class PostProcessingPipeline {
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
-    private void blitSceneToDefaultFramebuffer(int width, int height) {
+    /**
+     * Copies the scene's depth to the default framebuffer, for overlays that depth-test
+     * against the world (the pause menu's depth curtain).
+     */
+    private void blitDepthToDefaultFramebuffer(int width, int height) {
+        if (!depthBlitSupported) {
+            return;
+        }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneTarget.getFboId());
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
@@ -104,22 +117,17 @@ public class PostProcessingPipeline {
             }
         }
 
-        int mask = depthBlitSupported
-                ? GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT
-                : GL_COLOR_BUFFER_BIT;
-        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, mask, GL_NEAREST);
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 
         if (!depthBlitProbed) {
             depthBlitProbed = true;
             if (glGetError() != GL_NO_ERROR) {
-                // Depth format mismatch with the default framebuffer — retry color-only and
-                // skip depth from now on. Downstream depth-dependent draws (pause-menu depth
-                // curtain) then see the pre-frame default depth buffer.
+                // Depth format mismatch with the default framebuffer: skip depth from now on.
+                // Downstream depth-dependent draws (pause-menu depth curtain) then see the
+                // pre-frame default depth buffer.
                 depthBlitSupported = false;
                 LOGGER.log(Level.WARNING,
-                        "Combined color+depth blit rejected by driver; falling back to color-only blits");
-                glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
-                        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                        "Depth blit to the default framebuffer rejected by driver; overlays will not see scene depth");
             }
         }
     }
@@ -143,6 +151,7 @@ public class PostProcessingPipeline {
             effect.cleanup();
         }
         effects.clear();
+        toneMap.cleanup();
         quad.cleanup();
         sceneTarget.cleanup();
     }

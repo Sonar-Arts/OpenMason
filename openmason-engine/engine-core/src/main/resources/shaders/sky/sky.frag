@@ -1,5 +1,10 @@
 #version 330 core
 
+// The sky: Hillaire's physically based atmosphere (EGSR 2020), looked up from the
+// sky-view LUTs AtmosphereLuts renders each frame (one lit by the sun, one by the
+// moon), with the sun's disc seen through the transmittance LUT, and the stars,
+// Milky Way, airglow and pixel-art moon painted over the night.
+
 in vec3 worldPos;
 in vec3 viewDirection;
 in vec3 cameraPos;
@@ -7,7 +12,16 @@ in vec3 cameraPos;
 uniform vec3 sunDirection;
 uniform vec3 moonDirection;
 uniform float moonLight;      // moonlight relative to a full moon overhead (0..1)
-uniform vec3 zenithColor;
+uniform vec3 zenithColor;     // the zenith's screen colour the sky's brightness is matched to (see brightnessGain)
+uniform float daylight;       // 0 sun down .. 1 full day
+uniform float seaHorizon;     // the sea's edge seen from the eye (sine of elevation, <= 0)
+uniform vec3 celestialPole;   // the point the sky turns about (unit)
+uniform float skyAngle;       // how far the sky has turned about it (radians; 0 with the sun on the meridian)
+uniform float time;           // seconds, for the stars' twinkle
+uniform float exposure;       // the final pass's exposure
+uniform float viewHeight;     // the eye's distance from the planet's centre, km
+uniform float paintedSky;     // 0..1: how much of the sky is the hand-painted one (the golden hour to the blue hour)
+// The hand-painted sky's palette and shapes (SkyLight), drawn where paintedSky is above 0.
 uniform vec3 horizonColor;
 uniform vec3 sunGlow;         // the afterglow: red horizon band toward the set sun, premultiplied
 uniform vec3 sunColor;        // sunlight's hue: white high up, gold low, orange on the horizon
@@ -16,15 +30,29 @@ uniform float earthShadowHeight; // its edge's height straight opposite the sun 
 uniform float twilightBand;   // 0..1: how strongly the shadow and the Belt of Venus show
 uniform vec3 sunsetColor;     // evening gold at the horizon × strength (0 = none)
 uniform float sunsetCoverage; // how far round from the sun the gold reaches
-uniform float daylight;       // 0 sun down .. 1 full day
-uniform float seaHorizon;     // the sea's edge seen from the eye (sine of elevation, <= 0)
-uniform vec3 celestialPole;   // the point the sky turns about (unit)
-uniform float skyAngle;       // how far the sky has turned about it (radians; 0 with the sun on the meridian)
-uniform float time;           // seconds, for the stars' twinkle
 uniform float aerosol;        // haze relative to a clear day's: more at dusk, less at dawn
-uniform sampler2D moonTexture; // 64x64 pixel art, alpha = disc
+uniform float aureole;        // 0..1: how much of the painted sun's aureole is drawn (0 = bloom off)
+uniform sampler2D moonTexture;      // 64x64 pixel art, alpha = disc
+uniform sampler2D transmittanceLut; // AtmosphereLuts
+uniform sampler2D sunSkyView;
+uniform sampler2D moonSkyView;
 
 out vec4 FragColor;
+
+#include "/shaders/postfx/tone_curve.glsl"
+#include "/shaders/sky/atmosphere/atmosphere.glsl"
+
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+
+// The lights, in the LUTs' units (the sun's illuminance is 1). A full moon gives the
+// ground about 1/400,000 of the sun's light.
+const float SUN_ILLUMINANCE = 1.0;
+const float FULL_MOON_ILLUMINANCE = 2.5e-6;
+// The moonless night sky's own glow (airglow, zodiacal light, unresolved stars), about
+// 2e-4 cd/m2 against a noon zenith of ~6000: a floor under the sky once both lights are gone.
+const vec3 NIGHT_SKY_GLOW = vec3(2.2e-9, 2.1e-9, 1.9e-9);
+// The lowest direction (sine of elevation) the sky is looked up at; just above the horizon.
+const float HORIZON_FLOOR = 0.002;
 
 // Moon disc angular radius: ~5 degrees, so its 64 texels land on ~2 screen pixels each.
 const float MOON_RADIUS = 0.0873;
@@ -33,7 +61,15 @@ const float MOON_TEXELS = 64.0;
 const float MOON_INTENSITY = 1.05;
 // Earth lit by the sun lights the moon's night side (earthshine), most at new moon.
 const float EARTHSHINE = 0.035;
-const vec3 MOON_HALO = vec3(0.55, 0.62, 0.80);
+// The disc's angular radius, radians: ~1.5 degrees, three times the real sun's,
+// so it reads as a disc and not a point (cos = 0.99966).
+const float SUN_RADIUS = 0.0262;
+// Limb-darkening coefficients (red, green, blue): the limb is ~45-65% dimmer than
+// the centre, most in blue, so the edge reads warmer, as the real sun's does.
+const vec3 LIMB_DARKENING = vec3(0.45, 0.55, 0.65);
+// ---- The hand-painted sky (the golden hour through the blue hour) ----
+// Moonlight scattered round the disc, near neutral: the final pass's Purkinje grade blues it.
+const vec3 MOON_HALO = vec3(0.587, 0.621, 0.717);
 // Soft edge of the sunset gold; SkyLight.SUNSET_SOFTNESS.
 const float SUNSET_SOFTNESS = 0.3;
 // Scale heights (sine of elevation) of the gold opposite the sun and toward it;
@@ -49,12 +85,6 @@ const float SUNSET_BELOW = 0.67;
 const vec3 BELT_PINK = vec3(1.0, 0.58, 0.56);
 // The sun disc's own tint over sunlight's hue: a touch yellow at noon.
 const vec3 SUN_DISC = vec3(1.0, 0.95, 0.7);
-// The disc's angular radius, radians: ~1.5 degrees, three times the real sun's,
-// so it reads as a disc and not a point (cos = 0.99966).
-const float SUN_RADIUS = 0.0262;
-// Limb-darkening coefficients (red, green, blue): the limb is ~45-65% dimmer than
-// the centre, most in blue, so the edge reads warmer, as the real sun's does.
-const vec3 LIMB_DARKENING = vec3(0.45, 0.55, 0.65);
 // The width of the sun's aureole (1 - cos of the angle from it) with a clear day's
 // aerosol; SunsetFog.AUREOLE_WIDTH. Haze scatters forward in a lobe that widens
 // with how much of it there is, so it scales with `aerosol`.
@@ -77,6 +107,70 @@ float hash12(vec2 p) {
 // the signal, so the grain is equally fine in every tone.
 float ditherTpdf(vec2 fragCoord) {
     return (hash12(fragCoord) + hash12(fragCoord + vec2(57.31, 113.97)) - 1.0) / 255.0;
+}
+
+
+// The sky's radiance in `dir` from the sky-view LUT lit from `lightDir`, per unit illuminance.
+vec3 skyView(sampler2D lut, vec3 dir, vec3 lightDir) {
+    vec3 origin = vec3(0.0, viewHeight, 0.0);
+    bool hitsGround = raySphere(origin, dir, uBottomRadius) >= 0.0;
+    float lightFlat = length(lightDir.xz), dirFlat = length(dir.xz);
+    float lightViewCos = lightFlat > 1e-5 && dirFlat > 1e-5
+            ? dot(dir.xz / dirFlat, lightDir.xz / lightFlat) : 1.0;
+    return texture(lut, skyViewParamsToUv(hitsGround, dir.y, lightViewCos, viewHeight)).rgb;
+}
+
+// All the sky's light in `dir`, in the LUTs' units: scattered sunlight and moonlight
+// and the night's own glow. Below the horizon the dome shows only where nothing was drawn
+// (beyond the sea's edge, unloaded land), so it keeps the horizon's colour there rather
+// than the dim air in front of the ground.
+vec3 skyRadiance(vec3 dir) {
+    if (dir.y < HORIZON_FLOOR) {
+        dir = normalize(vec3(dir.x, 0.0, dir.z) * sqrt(1.0 - HORIZON_FLOOR * HORIZON_FLOOR)
+                / max(length(dir.xz), 1e-5) + vec3(0.0, HORIZON_FLOOR, 0.0));
+    }
+    return skyView(sunSkyView, dir, sunDirection) * SUN_ILLUMINANCE
+         + skyView(moonSkyView, dir, moonDirection) * FULL_MOON_ILLUMINANCE * moonLight
+         + NIGHT_SKY_GLOW;
+}
+
+// From the LUTs' units to the scene's linear light. Until SkyLight's lighting is physical
+// too (the fog, clouds and terrain still take SkyLight's painted palette), the sky keeps
+// that palette's brightness, so it sits with them: the zenith's strongest channel is
+// matched to zenithColor's, read as linear light at this exposure. Not through the tone
+// curve's inverse, and not by luminance: the painted day zenith is far brighter than a
+// physical sky of that blue, and either way the blue lands in the curve's shoulder,
+// which washes it out. The colour, and everything else's brightness relative to the
+// zenith, is the atmosphere's own.
+float brightnessGain() {
+    vec3 target = pow(max(zenithColor, vec3(0.0)), vec3(TONE_WORKING_GAMMA)) / exposure;
+    vec3 zenith = skyRadiance(vec3(0.0, 1.0, 0.0));
+    return max(target.r, max(target.g, target.b)) / max(max(zenith.r, max(zenith.g, zenith.b)), 1e-12);
+}
+
+// The sun's disc, in the LUTs' units: its light through the air between it and the eye
+// (red low in the sky, gone behind the planet), spread over the disc, darker and redder
+// toward the limb. `pixel` is the angle one pixel spans.
+vec3 sunDisc(vec3 direction, float pixel) {
+    float sunDot = dot(direction, sunDirection);
+    // The angle from the sun's centre; the sine is exact enough at these sizes and,
+    // unlike acos near 1, does not lose precision.
+    float angle = sunDot > 0.0 ? length(cross(direction, sunDirection)) : 3.1416;
+    // The disc, its edge antialiased over a pixel. It sinks into the sea: the part
+    // below the sea's edge is hidden, and it fades out SUN_SINK below it.
+    float disc = 1.0 - smoothstep(SUN_RADIUS - pixel, SUN_RADIUS + pixel, angle);
+    disc *= smoothstep(seaHorizon - pixel, seaHorizon + pixel, direction.y);
+    disc *= smoothstep(seaHorizon - SUN_SINK, seaHorizon, sunDirection.y);
+    if (disc <= 0.0) return vec3(0.0);
+    // Limb darkening: toward the edge we see shallower, cooler layers of the sun,
+    // dimmer and redder. I(mu) = 1 - u (1 - mu), mu the cosine on the disc's sphere.
+    float r = min(angle / SUN_RADIUS, 1.0);
+    float mu = sqrt(1.0 - r * r);
+    vec3 limb = 1.0 - LIMB_DARKENING * (1.0 - mu);
+    // The air's transmittance; the sea's edge, not the planet, hides it (it lies lower).
+    vec3 transmittance = texture(transmittanceLut, transmittanceParamsToUv(viewHeight, sunDirection.y)).rgb;
+    float solidAngle = 2.0 * PI * (1.0 - cos(SUN_RADIUS));
+    return transmittance * (SUN_ILLUMINANCE / solidAngle) * limb * disc;
 }
 
 vec3 getTimedSkyColor(vec3 direction) {
@@ -164,33 +258,52 @@ vec3 applyEarthShadow(vec3 direction, vec3 sky) {
     return mix(sky, earthShadowColor, inShadow * twilightBand * 0.85);
 }
 
-// The sun: a small disc, darker and redder toward its limb, in the aureole the
-// haze scatters round it. `pixel` is the angle one pixel spans.
-vec3 getSunContribution(vec3 direction, float pixel) {
+// The painted sun: a small disc, darker and redder toward its limb, in the aureole the
+// haze scatters round it. `pixel` is the angle one pixel spans. The disc is light
+// (returned in `discLight`, added to the scene unconverted); the aureole is part of the
+// sky's painted colour (the return value).
+vec3 paintedSun(vec3 direction, float pixel, out vec3 discLight) {
     float sunDot = dot(direction, sunDirection);
-    // The angle from the sun's centre; the sine is exact enough at these sizes and,
-    // unlike acos near 1, does not lose precision.
     float angle = sunDot > 0.0 ? length(cross(direction, sunDirection)) : 3.1416;
-
-    // The disc, its edge antialiased over a pixel. It sinks into the sea: the part
-    // below the sea's edge is hidden.
     float disc = 1.0 - smoothstep(SUN_RADIUS - pixel, SUN_RADIUS + pixel, angle);
     disc *= smoothstep(seaHorizon - pixel, seaHorizon + pixel, direction.y);
-    // Limb darkening: toward the edge we see shallower, cooler layers of the sun,
-    // dimmer and redder. I(mu) = 1 - u (1 - mu), mu the cosine on the disc's sphere.
     float r = min(angle / SUN_RADIUS, 1.0);
     float mu = sqrt(1.0 - r * r);
     vec3 limb = 1.0 - LIMB_DARKENING * (1.0 - mu);
     vec3 discColor = SUN_DISC * sunColor * limb;
-
     // The aureole: sunlight the haze scatters a little off its path, wider in hazy air.
     float glowRadius = AUREOLE_WIDTH * aerosol;
-    float glowIntensity = exp(-pow((1.0 - sunDot) / glowRadius, 1.5)) * 0.4;
+    float glowIntensity = exp(-pow((1.0 - sunDot) / glowRadius, 1.5)) * 0.4 * aureole;
     vec3 glowColor = vec3(1.0, 0.8, 0.5) * sunColor;
-
     // The aureole is full until the sun reaches the sea's edge, then fades as it sinks below it.
     float lit = smoothstep(seaHorizon - SUN_SINK, seaHorizon, sunDirection.y);
-    return discColor * disc + glowColor * glowIntensity * lit;
+    discLight = discColor * disc;
+    return glowColor * glowIntensity * lit;
+}
+
+// The hand-painted sky in `direction`, as the screen shows it (the game's sky before it was
+// physical, kept for its sunset): the gradient, the evening gold, the Earth's shadow and the
+// Belt of Venus, the afterglow, the horizon haze, the sun's aureole and the moon's halo.
+// The sun's disc goes to `discLight`.
+vec3 paintedSkyColor(vec3 direction, float pixel, out vec3 discLight) {
+    vec3 sky = getTimedSkyColor(direction);
+    sky = applySunset(direction, sky);
+    sky = applyEarthShadow(direction, sky);
+    sky = applyAfterglow(direction, sky);
+    float cosMoon = dot(direction, moonDirection);
+    float halo = exp(-(1.0 - cosMoon) / 0.004) * 0.10 + exp(-(1.0 - cosMoon) / 0.04) * 0.04;
+    sky += MOON_HALO * halo * moonLight * (1.0 - daylight);
+    // Atmospheric perspective with horizon softening. The pale haze is sunlit air:
+    // it fades out with the daylight, or it would light the night horizon up. The
+    // horizon is hazier in the evening's dusty air than in the morning's.
+    float distance = length(worldPos - cameraPos);
+    float haze = exp(-distance * 0.00001);
+    float horizonSoft = 1.0 - smoothstep(-0.1, 0.1, abs(direction.y));
+    float hazeAmount = mix(0.1, 0.3 * aerosol, horizonSoft);
+    vec3 hazeColor = mix(horizonColor, vec3(0.8, 0.85, 0.9), daylight);
+    sky = mix(hazeColor, sky, haze * (1.0 - hazeAmount));
+    // The sun goes over the haze: the horizon haze would wash it out before it set.
+    return sky + paintedSun(direction, pixel, discLight);
 }
 
 // ---------------------------------------------------------------------------
@@ -360,9 +473,7 @@ vec3 applyNight(vec3 direction, vec3 sky, float pixel) {
 vec3 applyMoon(vec3 direction, vec3 sky) {
     vec3 f = moonDirection;
     float cosAngle = dot(direction, f);
-    // Halo: moonlight scattered in the air around the disc.
-    float halo = exp(-(1.0 - cosAngle) / 0.004) * 0.10 + exp(-(1.0 - cosAngle) / 0.04) * 0.04;
-    sky += MOON_HALO * halo * moonLight * (1.0 - daylight);
+    // (The glow the air scatters round it is in the sky itself: the moon's sky-view LUT.)
 
     if (cosAngle < cos(MOON_RADIUS * 1.5)) {
         return sky;
@@ -406,27 +517,33 @@ vec3 applyMoon(vec3 direction, vec3 sky) {
 
 void main() {
     vec3 direction = normalize(viewDirection);
-
-    vec3 finalColor = getTimedSkyColor(direction);
-    finalColor = applySunset(direction, finalColor);
-    finalColor = applyEarthShadow(direction, finalColor);
-    finalColor = applyAfterglow(direction, finalColor);
     // The angle one pixel spans, for the stars and the sun's edge; here, in uniform control flow.
     float pixel = max(length(dFdx(direction)), length(dFdy(direction)));
-    finalColor = applyNight(direction, finalColor, pixel);
-    finalColor = applyMoon(direction, finalColor);
+    vec3 dither = vec3(ditherTpdf(gl_FragCoord.xy));
 
-    // Atmospheric perspective with horizon softening. The pale haze is sunlit air:
-    // it fades out with the daylight, or it would light the night horizon up. The
-    // horizon is hazier in the evening's dusty air than in the morning's.
-    float distance = length(worldPos - cameraPos);
-    float haze = exp(-distance * 0.00001);
-    float horizonSoft = 1.0 - smoothstep(-0.1, 0.1, abs(direction.y));
-    float hazeAmount = mix(0.1, 0.3 * aerosol, horizonSoft);
-    vec3 hazeColor = mix(horizonColor, vec3(0.8, 0.85, 0.9), daylight);
-    finalColor = mix(hazeColor, finalColor, haze * (1.0 - hazeAmount));
-    // The sun goes over the haze: the horizon haze would wash it out before it set.
-    finalColor += getSunContribution(direction, pixel);
+    // The physical sky (Hillaire's atmosphere): the day and the night.
+    float gain = brightnessGain();
+    vec3 working = pow(max(skyRadiance(direction) * gain, vec3(0.0)), vec3(1.0 / TONE_WORKING_GAMMA));
+    vec3 paintedDisc = vec3(0.0);
+    if (paintedSky > 0.0) {
+        // The hand-painted sky: the golden hour, the sunset and the blue hour. Painted as
+        // screen colour, stored as the scene value the final pass's tone map turns back into it.
+        vec3 painted = displayToScene(paintedSkyColor(direction, pixel, paintedDisc) + dither, exposure);
+        working = mix(working, painted, paintedSky);
+    }
+    working += dither * (1.0 - paintedSky);
 
-    FragColor = vec4(finalColor + ditherTpdf(gl_FragCoord.xy), 1.0);
+    // The stars, the Milky Way, airglow and the moon are painted as screen colour: lay
+    // them on the sky as it will be shown, and bring the result back to the scene.
+    vec3 shown = sceneToDisplay(working, exposure);
+    vec3 night = applyMoon(direction, applyNight(direction, shown, pixel));
+    if (any(notEqual(night, shown))) {
+        working = displayToScene(night, exposure);
+    }
+
+    // The sun is light, not paint: added to the scene, where the tone map rolls it off.
+    working += paintedDisc * paintedSky;
+    vec3 linear = pow(max(working, vec3(0.0)), vec3(TONE_WORKING_GAMMA))
+            + sunDisc(direction, pixel) * gain * (1.0 - paintedSky);
+    FragColor = vec4(pow(linear, vec3(1.0 / TONE_WORKING_GAMMA)), 1.0);
 }
