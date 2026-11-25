@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * The goblin re-rig (OpenMason #160; Stonebreak goblin-combat/README.md "Skeleton") changed only its skeleton:
+ * The goblin re-rig (OpenMason #160; OpenMason CLAUDE.md "Retargeting") changed only its skeleton:
  * every shipped clip poses every part of the re-rigged asset exactly as the frozen pre-re-rig copy did (skin and
  * world matrices of all 21 parts, with the mob head look applied, at many times per clip), while the new bones
  * form a real limb skeleton (knees between hips and ankles, tails along the limbs).
