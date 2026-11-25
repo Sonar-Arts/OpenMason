@@ -41,6 +41,7 @@ module openmason.engine.core {
     exports com.openmason.engine.audio.emitters;
     exports com.openmason.engine.cearl;
     exports com.openmason.engine.cenda;
+    exports com.openmason.engine.character;
     exports com.openmason.engine.diagnostics;
     exports com.openmason.engine.entity;
     exports com.openmason.engine.entity.model;

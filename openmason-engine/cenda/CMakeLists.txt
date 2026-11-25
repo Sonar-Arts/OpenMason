@@ -29,10 +29,9 @@ endif()
 option(CENDA_BUILD_KERNELS "Build the native chunk-kernels shared lib (FastNoise2 via FetchContent)" ON)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
-if(CENDA_BUILD_KERNELS)
-    include(CendaDepsGuard)
-    cenda_require_out_of_tree_deps()
-endif()
+# libomformat fetches yyjson + miniz, so the guard applies with or without the kernels.
+include(CendaDepsGuard)
+cenda_require_out_of_tree_deps()
 
 include(CTest)
 

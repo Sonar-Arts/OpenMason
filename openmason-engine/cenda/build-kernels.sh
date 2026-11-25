@@ -195,5 +195,8 @@ check_abi "voxel world" "$HERE/native/kernels/include/cenda/voxel_world.h" CV_AB
 # The rig (cr_*, skeletons/posing/skinning) has no Java fallback either: Rig.create throws with this diagnostic.
 check_abi "rig" "$HERE/native/kernels/include/cenda/rig.h" CR_ABI_VERSION \
   "$HERE/../engine-core/src/main/java/com/openmason/engine/rig/CendaRig.java"
+# The character definition (cc_*, .omchar, #153) has no Java fallback either.
+check_abi "character" "$HERE/native/kernels/include/cenda/character.h" CC_ABI_VERSION \
+  "$HERE/../engine-core/src/main/java/com/openmason/engine/character/CendaCharacter.java"
 
 echo "[cenda] kernels ready: $LIB"

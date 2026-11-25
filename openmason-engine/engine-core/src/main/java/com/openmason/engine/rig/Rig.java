@@ -117,6 +117,15 @@ public final class Rig implements AutoCloseable {
         return h;
     }
 
+    /**
+     * The native {@code cr_rig*}, for other Cenda bindings that take a rig argument (for example
+     * {@code com.openmason.engine.character}). Valid while this rig is open; the caller must keep the rig
+     * reachable for the duration of its native call and must never free the handle.
+     */
+    public MemorySegment nativeHandle() {
+        return handle();
+    }
+
     /** The joints this rig was built from, in index order. */
     public List<RigJoint> joints() {
         return joints;

@@ -111,11 +111,12 @@ add_library(cenda_kernels SHARED
         src/nav/nav_world.cpp
         src/nav/nav_agents.cpp
         src/rig/rig.cpp
-        src/rig/skin.cpp)
+        src/rig/skin.cpp
+        src/character/character.cpp)
 
 target_include_directories(cenda_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cenda_kernels
-        PRIVATE FastNoise libzstd_static cenda_lua yogacore cenda_miniaudio cenda_warnings)
+        PRIVATE FastNoise libzstd_static cenda_lua yogacore cenda_miniaudio cenda::omformat cenda_warnings)
 
 # Float-op portability: the mesher's lighting math must match Java's IEEE
 # single ops exactly (parity-tested). FMA contraction (-ffp-contract=fast, GCC's -O default) would
