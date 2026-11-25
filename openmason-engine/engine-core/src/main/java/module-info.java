@@ -37,6 +37,7 @@ module openmason.engine.core {
     requires java.logging;
     requires java.management; // JVM memory/GC beans for MemoryProfiler (diagnostics)
 
+    exports com.openmason.engine.anim;
     exports com.openmason.engine.audio;
     exports com.openmason.engine.audio.emitters;
     exports com.openmason.engine.cearl;

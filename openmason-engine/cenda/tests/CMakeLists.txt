@@ -5,7 +5,7 @@ target_link_libraries(omformat_smoke PRIVATE cenda::omformat cenda_warnings)
 add_test(NAME omformat_smoke COMMAND omformat_smoke)
 
 if(CENDA_BUILD_KERNELS)
-    set(_kernel_tests kernels_smoke kernels_chunk lua_host flex_host audio_engine entity_world physics_world behavior_scheduler nav_world rig character characterize)
+    set(_kernel_tests kernels_smoke kernels_chunk lua_host flex_host audio_engine entity_world physics_world behavior_scheduler nav_world rig character characterize anim_clip)
     foreach(_test IN LISTS _kernel_tests)
         add_executable(${_test} ${_test}_test.cpp)
         target_link_libraries(${_test} PRIVATE cenda_kernels cenda_warnings)
@@ -24,6 +24,10 @@ if(CENDA_BUILD_KERNELS)
 
     # The character test also builds hand-made archives with libomformat (unknown sections, future versions).
     target_link_libraries(character PRIVATE cenda::omformat)
+    # anim_clip round-trips every clip of the Stonebreak fixture SBEs (skips them when the folder is absent).
+    target_link_libraries(anim_clip PRIVATE cenda::omformat)
+    target_compile_definitions(anim_clip PRIVATE
+            CENDA_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/../../test-fixtures/stonebreak/resources/sbe")
 
     # Windows has no rpath: the test exes (tests/<Config>/) cannot see cenda_kernels.dll
     # (native/kernels/<Config>/), and the loader's "DLL not found" box then blocks a headless

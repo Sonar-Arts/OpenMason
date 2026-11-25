@@ -215,6 +215,14 @@ public final class CharacterDefinition implements AutoCloseable {
         cleanable.clean();
     }
 
+    /**
+     * The native {@code cc_char*}, for other Cenda bindings that take a character (for example
+     * {@code com.openmason.engine.anim}). Valid while this definition is open; keep it reachable for the call.
+     */
+    public MemorySegment nativeHandle() {
+        return handle();
+    }
+
     MemorySegment handle() {
         MemorySegment h = state.handle;
         if (h == null) throw new IllegalStateException("CharacterDefinition is closed");

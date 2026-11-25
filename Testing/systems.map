@@ -20,6 +20,7 @@ mesh-editing	openmason-engine/engine-core	com/openmason/engine/rendering/model/*
 model-draw	openmason-engine/engine-core	com/openmason/engine/rendering/model/draw/**/*Test
 rig	openmason-engine/engine-core	com/openmason/engine/rig/**/*Test
 character	openmason-engine/engine-core	com/openmason/engine/character/**/*Test
+anim-clips	openmason-engine/engine-core	com/openmason/engine/anim/**/*Test
 viewer	openmason-engine/engine-modeling	com/openmason/engine/rendering/viewer/**/*Test
 cco	openmason-engine/engine-voxel	com/openmason/engine/voxel/cco/**/*Test
 mms	openmason-engine/engine-voxel	com/openmason/engine/voxel/mms/**/*Test
