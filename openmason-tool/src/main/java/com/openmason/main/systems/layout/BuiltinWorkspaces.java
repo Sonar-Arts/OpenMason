@@ -19,6 +19,12 @@ public final class BuiltinWorkspaces {
     /** The Particle Editor: closable, present while it is open. */
     public static final String PARTICLES = "PARTICLES";
 
+    /** The Character workspace (.omchar, OM #163): closable, present while it is open. */
+    public static final String CHARACTER = "CHARACTER";
+
+    /** The Animation Graph workspace (.omanimgraph, OM #164): closable, present while it is open. */
+    public static final String ANIMGRAPH = "ANIMGRAPH";
+
     private BuiltinWorkspaces() {
     }
 }

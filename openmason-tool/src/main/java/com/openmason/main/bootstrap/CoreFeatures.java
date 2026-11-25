@@ -88,6 +88,8 @@ public final class CoreFeatures {
         animationEditor(context);
         scripting(context);
         particles(context);
+        character(context);
+        animGraph(context);
         logger.info("[core] registered: {}", contributionSummary(registries));
     }
 
@@ -333,6 +335,86 @@ public final class CoreFeatures {
             @Override
             public void shuttingDown() {
                 editor.cleanup();
+            }
+        });
+    }
+
+    /**
+     * The Character workspace (OM #163): a closable tab building .omchar character definitions, the .omchar file
+     * type, and the char_* MCP tools, which edit the same open character (one shared native undo history).
+     */
+    private static void character(PluginContext context) {
+        ServiceRegistry services = context.services();
+        WorkspaceState workspaces = services.require(WorkspaceState.class);
+        WorkspaceLayouts layouts = services.require(WorkspaceLayouts.class);
+        com.openmason.main.systems.character.CharacterSessions sessions =
+                new com.openmason.main.systems.character.CharacterSessions();
+        sessions.setProjectRoot(() -> services.find(ProjectDirectory.class).map(ProjectDirectory::get)
+                .filter(d -> d != null && !d.isBlank()).map(Path::of).orElse(null));
+        services.publish(com.openmason.main.systems.character.CharacterSessions.class, sessions);
+        com.openmason.main.systems.character.CharacterWorkspace editor =
+                new com.openmason.main.systems.character.CharacterWorkspace(services.require(FileDialogService.class),
+                        services.require(StatusService.class), workspaces, sessions);
+        services.publish(com.openmason.main.systems.character.CharacterWorkspace.class, editor);
+        context.workspaces().register(WorkspaceDescriptor.builder(BuiltinWorkspaces.CHARACTER, "Character")
+                .description("Character: characterize a model into an .omchar (roles, reference pose, chains, sockets, metrics)")
+                .closable(true)
+                .minSize(900f, 560f)
+                .layoutVersion(com.openmason.main.systems.character.CharacterWorkspace.LAYOUT_VERSION)
+                .dockspaceName(MainDockLayout.CHARACTER_DOCKSPACE_ID)
+                .dock(editor)
+                .build());
+        editor.setResetLayoutAction(() -> layouts.requestReset(BuiltinWorkspaces.CHARACTER));
+        context.menuEntries().register(MenuItem.of("character.tools.open", TopMenu.TOOLS, 145, "Character Editor",
+                editor::show));
+        context.fileTypes().register(BuiltinFileTypes.OMCHAR);
+        context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMCHAR.id(), editor::openFile));
+        context.mcpTools().register(BuiltinMcpTools.CHARACTER);
+        context.guideTopics().register(BuiltinKnowledge.topic("character"));
+        context.lifecycle().register(new LifecycleListener() {
+            @Override
+            public void shuttingDown() {
+                editor.cleanup();
+                sessions.close();
+            }
+        });
+    }
+
+    /**
+     * The Animation Graph workspace (OM #164): a closable tab authoring and debugging .omanimgraph graphs, the file
+     * type, and the animgraph_* MCP tools, which edit the same open graph (one shared native undo history).
+     */
+    private static void animGraph(PluginContext context) {
+        ServiceRegistry services = context.services();
+        WorkspaceState workspaces = services.require(WorkspaceState.class);
+        WorkspaceLayouts layouts = services.require(WorkspaceLayouts.class);
+        com.openmason.main.systems.animgraph.AnimGraphSessions sessions = new com.openmason.main.systems.animgraph.AnimGraphSessions();
+        sessions.setProjectRoot(() -> services.find(ProjectDirectory.class).map(ProjectDirectory::get)
+                .filter(d -> d != null && !d.isBlank()).map(Path::of).orElse(null));
+        services.publish(com.openmason.main.systems.animgraph.AnimGraphSessions.class, sessions);
+        com.openmason.main.systems.animgraph.AnimGraphWorkspace editor = new com.openmason.main.systems.animgraph.AnimGraphWorkspace(
+                services.require(FileDialogService.class), services.require(StatusService.class), workspaces, sessions);
+        services.publish(com.openmason.main.systems.animgraph.AnimGraphWorkspace.class, editor);
+        context.workspaces().register(WorkspaceDescriptor.builder(BuiltinWorkspaces.ANIMGRAPH, "Animation Graph")
+                .description("Animation Graph: state machines, blend spaces and layers with a live preview and debugger")
+                .closable(true)
+                .minSize(900f, 560f)
+                .layoutVersion(com.openmason.main.systems.animgraph.AnimGraphWorkspace.LAYOUT_VERSION)
+                .dockspaceName(MainDockLayout.ANIMGRAPH_DOCKSPACE_ID)
+                .dock(editor)
+                .build());
+        editor.setResetLayoutAction(() -> layouts.requestReset(BuiltinWorkspaces.ANIMGRAPH));
+        context.menuEntries().register(MenuItem.of("animgraph.tools.open", TopMenu.TOOLS, 146, "Animation Graph Editor",
+                editor::show));
+        context.fileTypes().register(BuiltinFileTypes.OMANIMGRAPH);
+        context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMANIMGRAPH.id(), editor::openFile));
+        context.mcpTools().register(BuiltinMcpTools.ANIMGRAPH);
+        context.guideTopics().register(BuiltinKnowledge.topic("animgraph"));
+        context.lifecycle().register(new LifecycleListener() {
+            @Override
+            public void shuttingDown() {
+                editor.cleanup();
+                sessions.close();
             }
         });
     }

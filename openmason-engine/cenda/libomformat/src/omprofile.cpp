@@ -155,7 +155,32 @@ Role parse_role(yyjson_val* r, std::size_t index) {
         rule.position = static_cast<int>(yyjson_get_sint(pos));
         role.chain = std::move(rule);
     }
+    if (yyjson_val* g = yyjson_obj_get(r, "diagram"); g != nullptr && !yyjson_is_null(g)) {
+        if (!yyjson_is_arr(g) || yyjson_arr_size(g) != 2) fail(at + ": \"diagram\" must be [x, y]");
+        for (std::size_t i = 0; i < 2; ++i) {
+            yyjson_val* c = yyjson_arr_get(g, i);
+            if (!yyjson_is_num(c)) fail(at + ": diagram must be numbers");
+            const double v = yyjson_get_num(c);
+            if (!(v >= 0.0 && v <= 1.0)) fail(at + ": diagram coordinates are in [0, 1]");
+            role.diagram[i] = static_cast<float>(v);
+        }
+        role.has_diagram = true;
+    }
     return role;
+}
+
+// A unit direction [x, y, z] (fails on a malformed or zero vector).
+void parse_direction(yyjson_val* d, const std::string& at, float out[3]) {
+    if (!yyjson_is_arr(d) || yyjson_arr_size(d) != 3) fail(at + " must be [x, y, z]");
+    double v[3];
+    for (std::size_t i = 0; i < 3; ++i) {
+        yyjson_val* c = yyjson_arr_get(d, i);
+        if (!yyjson_is_num(c) || !std::isfinite(yyjson_get_num(c))) fail(at + " must be numbers");
+        v[i] = yyjson_get_num(c);
+    }
+    const double len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (len < 1e-9) fail(at + " is zero");
+    for (std::size_t i = 0; i < 3; ++i) out[i] = static_cast<float>(v[i] / len);
 }
 
 void validate(const Profile& p) {
@@ -199,6 +224,16 @@ void validate(const Profile& p) {
         for (const std::string& r : c.roles) known(r, "chain " + c.name);
         if (!c.goal.empty() && !goals.contains(c.goal)) fail("chain " + c.name + " names unknown ik goal " + c.goal);
     }
+    std::unordered_map<std::string, int> pose_names;
+    for (const NamedPose& pose : p.poses) {
+        if (pose.name.empty()) fail("a pose needs a name");
+        if (!pose_names.emplace(pose.name, 0).second) fail("duplicate pose " + pose.name);
+        std::unordered_map<std::string, int> seen;
+        for (const PoseDirection& d : pose.directions) {
+            known(d.role, "pose " + pose.name);
+            if (!seen.emplace(d.role, 0).second) fail("pose " + pose.name + " lists role " + d.role + " twice");
+        }
+    }
     for (const std::string& f : p.facing.roles) known(f, "facing.roles");
     if (!p.facing.from.empty()) known(p.facing.from, "facing.from");
     if (!p.facing.to.empty()) known(p.facing.to, "facing.to");
@@ -227,6 +262,13 @@ std::string join(const std::vector<std::string>& tokens) {
 }
 
 }  // namespace
+
+int Profile::find_pose(std::string_view pose_name) const {
+    for (std::size_t i = 0; i < poses.size(); ++i) {
+        if (poses[i].name == pose_name) return static_cast<int>(i);
+    }
+    return -1;
+}
 
 int Profile::find(std::string_view role) const {
     for (std::size_t i = 0; i < roles.size(); ++i) {
@@ -293,6 +335,26 @@ Profile read(std::string_view text) {
             p.ik_goals.push_back({str_field(g, "name", at, true), str_field(g, "role", at, true)});
         }
     }
+    if (yyjson_val* ps = yyjson_obj_get(root, "poses"); ps != nullptr && !yyjson_is_null(ps)) {
+        if (!yyjson_is_arr(ps)) fail("\"poses\" must be an array");
+        for (std::size_t i = 0, n = yyjson_arr_size(ps); i < n; ++i) {
+            yyjson_val* o = yyjson_arr_get(ps, i);
+            const std::string at = "poses[" + std::to_string(i) + "]";
+            if (!yyjson_is_obj(o)) fail(at + " must be an object");
+            NamedPose pose;
+            pose.name = str_field(o, "name", at, true);
+            yyjson_val* dirs = yyjson_obj_get(o, "directions");
+            if (dirs == nullptr || !yyjson_is_obj(dirs)) fail(at + ": \"directions\" must be an object");
+            yyjson_obj_iter it = yyjson_obj_iter_with(dirs);
+            for (yyjson_val* key = yyjson_obj_iter_next(&it); key != nullptr; key = yyjson_obj_iter_next(&it)) {
+                PoseDirection d;
+                d.role = str(key);
+                parse_direction(yyjson_obj_iter_get_val(key), at + "." + d.role, d.direction);
+                pose.directions.push_back(std::move(d));
+            }
+            p.poses.push_back(std::move(pose));
+        }
+    }
     validate(p);
     return p;
 }
@@ -348,6 +410,11 @@ std::string write(const Profile& p) {
             put(d, c, "position", yyjson_mut_sint(d, r.chain->position));
             put(d, o, "chain", c);
         }
+        if (r.has_diagram) {
+            yyjson_mut_val* g = yyjson_mut_arr(d);
+            for (float v : r.diagram) yyjson_mut_arr_append(g, yyjson_mut_float(d, v));
+            put(d, o, "diagram", g);
+        }
         yyjson_mut_arr_append(roles, o);
     }
     put(d, root, "roles", roles);
@@ -376,6 +443,22 @@ std::string write(const Profile& p) {
             yyjson_mut_arr_append(gs, o);
         }
         put(d, root, "ikGoals", gs);
+    }
+    if (!p.poses.empty()) {
+        yyjson_mut_val* ps = yyjson_mut_arr(d);
+        for (const NamedPose& pose : p.poses) {
+            yyjson_mut_val* o = yyjson_mut_obj(d);
+            put(d, o, "name", mstr(d, pose.name));
+            yyjson_mut_val* dirs = yyjson_mut_obj(d);
+            for (const PoseDirection& pd : pose.directions) {
+                yyjson_mut_val* v = yyjson_mut_arr(d);
+                for (float c : pd.direction) yyjson_mut_arr_append(v, yyjson_mut_float(d, c));
+                put(d, dirs, pd.role.c_str(), v);
+            }
+            put(d, o, "directions", dirs);
+            yyjson_mut_arr_append(ps, o);
+        }
+        put(d, root, "poses", ps);
     }
 
     std::size_t len = 0;

@@ -3,6 +3,7 @@
 // cenda/anim_graph.h. Only public cr_* / cm_* / cc_* calls are used for the rig, clips and characters.
 
 #include "cenda/anim_graph.h"
+#include "cenda/anim_graph_edit.h"
 
 #include "../character/character_internal.hpp"
 #include "omformat/omanimgraph.hpp"
@@ -31,6 +32,15 @@ template <typename T>
 void set_out(T* out, T value) {
     if (out != nullptr) *out = value;
 }
+
+}  // namespace
+
+namespace cenda::graph {
+// cg_last_error for the graph editing ABI (anim_graph_edit.cpp).
+void set_error(const std::string& message) { g_error = message; }
+}  // namespace cenda::graph
+
+namespace {
 
 constexpr int kMaxFired = 64;
 constexpr int kMaxNotifies = 256;
@@ -73,8 +83,11 @@ struct CLayer {
 struct CNode {
     std::string id;
     og::NodeType type = og::NodeType::Clip;
-    int parent = -1;
+    int parent = -1;           // the first parent (a DAG node may have several, #164)
+    std::vector<int> parents;  // every use, one entry per edge
     std::vector<int> children;
+    std::vector<int> child_slots;  // the pose slot each child edge reads (consecutive per node; a shared child's
+                                   // later edges get a COPY of its own slot)
     bool reachable = false;
     int out_slot = -1;
     int scratch = -1;
@@ -161,6 +174,9 @@ struct MontageClip {
 
 struct NodeRt {
     float influence = 0.f;
+    float root_influence = 0.f;  // the share of the influence that reaches it along root paths (root motion)
+    uint32_t emitted = 0;        // frame stamp: a shared node's ops are emitted once per frame
+    bool emitted_delta = false;
     bool active = false;
     bool was_active = false;
     bool root_path = false;
@@ -238,6 +254,7 @@ struct cg_instance {
     std::vector<BoundClip> slots;
     std::vector<MontageClip> montages;
     std::vector<NodeRt> rt;
+    uint32_t frame = 0;  // emit stamp (shared nodes emit once per frame)
     std::vector<PlayerRt> players;  // per node
     std::vector<MachineRt> machines;
     std::vector<SlotRt> mslots;
@@ -371,7 +388,11 @@ void compile(cg_graph& cg) {
                 c.mask = src.mask.empty() ? -1 : d.find_mask(src.mask);
                 break;
         }
-        for (int ch : c.children) cg.nodes[static_cast<size_t>(ch)].parent = static_cast<int>(i);
+        for (int ch : c.children) {
+            CNode& k = cg.nodes[static_cast<size_t>(ch)];
+            if (k.parent < 0) k.parent = static_cast<int>(i);
+            k.parents.push_back(static_cast<int>(i));
+        }
     }
     // Blend-space clip samples without their own group are synced as the blend's own group.
     for (size_t i = 0; i < n; ++i) {
@@ -390,23 +411,52 @@ void compile(cg_graph& cg) {
     }
     cg.sync_groups = static_cast<int>(sync_ids.size());
 
-    // BFS from the root: parents first; the children of each node get consecutive pose slots.
+    // Parents first: Kahn's topological order over the nodes reachable from the root, FIFO (for a tree this is
+    // the BFS order of 1.0). The children of each node get consecutive pose slots (one per edge); a node's own slot
+    // is its first edge's, later edges of a shared node COPY it.
     cg.root = d.find_node(d.root);
+    {
+        std::vector<int> stack{cg.root};
+        cg.nodes[static_cast<size_t>(cg.root)].reachable = true;
+        while (!stack.empty()) {
+            const int i = stack.back();
+            stack.pop_back();
+            for (int ch : cg.nodes[static_cast<size_t>(i)].children) {
+                CNode& k = cg.nodes[static_cast<size_t>(ch)];
+                if (!k.reachable) {
+                    k.reachable = true;
+                    stack.push_back(ch);
+                }
+            }
+        }
+    }
+    std::vector<int> indegree(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        if (!cg.nodes[i].reachable) continue;
+        for (int ch : cg.nodes[i].children) ++indegree[static_cast<size_t>(ch)];
+    }
     std::deque<int> queue{cg.root};
     int next_slot = 1;
+    int extra_edges = 0;
     cg.nodes[static_cast<size_t>(cg.root)].out_slot = 0;
     while (!queue.empty()) {
         const int i = queue.front();
         queue.pop_front();
         CNode& c = cg.nodes[static_cast<size_t>(i)];
-        c.reachable = true;
         cg.order.push_back(i);
         for (int ch : c.children) {
-            cg.nodes[static_cast<size_t>(ch)].out_slot = next_slot++;
-            queue.push_back(ch);
+            CNode& k = cg.nodes[static_cast<size_t>(ch)];
+            const int slot = next_slot++;
+            c.child_slots.push_back(slot);
+            if (k.out_slot < 0) {
+                k.out_slot = slot;
+            } else {
+                ++extra_edges;
+            }
+            if (--indegree[static_cast<size_t>(ch)] == 0) queue.push_back(ch);
         }
     }
-    int ops = 5;  // + the modifier stack
+    int ops = 5 + extra_edges;  // + the modifier stack; one COPY per extra edge of a shared node
     for (int i : cg.order) {
         CNode& c = cg.nodes[static_cast<size_t>(i)];
         switch (c.type) {
@@ -784,6 +834,9 @@ cr_pose_op& push(cg_instance& inst, int32_t op, int32_t dst) {
 }
 
 bool emit(cg_instance& inst, int node);
+// Emits child edge k of `c` (once per frame for a shared child) and copies it into the edge's slot when that is not
+// the child's own; returns whether the child's pose is a delta.
+bool use_child(cg_instance& inst, const CNode& c, size_t k);
 
 int32_t retarget_into(cg_instance& inst, BoundClip& b, float time, int32_t slot);
 
@@ -837,8 +890,8 @@ void emit_layer(cg_instance& inst, const CNode& c, size_t k, int32_t dst) {
     const int ch = c.children[k + 1];
     if (!inst.rt[static_cast<size_t>(ch)].active) return;
     const CLayer& l = c.layers[k];
-    const bool child_delta = emit(inst, ch);
-    int src = inst.g->nodes[static_cast<size_t>(ch)].out_slot;
+    const bool child_delta = use_child(inst, c, k + 1);
+    int src = c.child_slots[k + 1];
     const float w = inst.weights[static_cast<size_t>(c.weights_at) + k];
     cr_mask* mask = l.mask >= 0 ? inst.masks[static_cast<size_t>(l.mask)] : nullptr;
     if (l.mode == og::LayerMode::Additive) {
@@ -886,11 +939,11 @@ bool emit(cg_instance& inst, int node) {
         case og::NodeType::Blend2D:
         case og::NodeType::StateMachine: {
             bool all_delta = true;
-            for (int ch : c.children) {
-                if (inst.rt[static_cast<size_t>(ch)].active) all_delta &= emit(inst, ch);
+            for (size_t k = 0; k < c.children.size(); ++k) {
+                if (inst.rt[static_cast<size_t>(c.children[k])].active) all_delta &= use_child(inst, c, k);
             }
             cr_pose_op& b = push(inst, CR_OP_BLEND, c.out_slot);
-            b.a = inst.g->nodes[static_cast<size_t>(c.children[0])].out_slot;
+            b.a = c.child_slots[0];
             b.b = static_cast<int32_t>(c.children.size());
             b.object = inst.weights.data() + c.weights_at;
             if (c.type == og::NodeType::StateMachine) {
@@ -901,20 +954,18 @@ bool emit(cg_instance& inst, int node) {
             return all_delta;
         }
         case og::NodeType::Layer: {
-            const int base = c.children[0];
-            const bool delta = emit(inst, base);
+            const bool delta = use_child(inst, c, 0);
             cr_pose_op& cp = push(inst, CR_OP_COPY, c.out_slot);
-            cp.a = inst.g->nodes[static_cast<size_t>(base)].out_slot;
+            cp.a = c.child_slots[0];
             for (size_t k = 0; k < c.layers.size(); ++k) {
                 if (!c.layers[k].first_person) emit_layer(inst, c, k, c.out_slot);
             }
             return delta;
         }
         case og::NodeType::Slot: {
-            const int src = c.children[0];
-            const bool delta = emit(inst, src);
+            const bool delta = use_child(inst, c, 0);
             cr_pose_op& cp = push(inst, CR_OP_COPY, c.out_slot);
-            cp.a = inst.g->nodes[static_cast<size_t>(src)].out_slot;
+            cp.a = c.child_slots[0];
             SlotRt& s = inst.mslots[static_cast<size_t>(c.montage_slot)];
             if (s.montage >= 0 && s.weight > 0.f) {
                 const BoundClip& b = inst.montages[static_cast<size_t>(s.montage)].clip;
@@ -940,6 +991,21 @@ bool emit(cg_instance& inst, int node) {
         }
     }
     return false;
+}
+
+bool use_child(cg_instance& inst, const CNode& c, size_t k) {
+    const int ch = c.children[k];
+    NodeRt& r = inst.rt[static_cast<size_t>(ch)];
+    if (r.emitted != inst.frame) {
+        r.emitted = inst.frame;
+        r.emitted_delta = emit(inst, ch);
+    }
+    const int own = inst.g->nodes[static_cast<size_t>(ch)].out_slot;
+    if (c.child_slots[k] != own) {
+        cr_pose_op& cp = push(inst, CR_OP_COPY, c.child_slots[k]);
+        cp.a = own;
+    }
+    return r.emitted_delta;
 }
 
 // ---- outputs ----------------------------------------------------------------------------------------
@@ -1201,18 +1267,21 @@ bool resolve_target(const cg_instance& inst, const std::string& ref, std::vector
     return slot >= 0;
 }
 
-// The clip nodes under `node` (itself included).
+// The clip nodes under `node` (itself included; every path, the graph is a DAG since #164).
 std::vector<int> clips_under(const cg_graph& g, int node) {
     std::vector<int> out;
-    for (size_t i = 0; i < g.nodes.size(); ++i) {
-        if (g.nodes[i].type != og::NodeType::Clip) continue;
-        for (int n = static_cast<int>(i); n >= 0; n = g.nodes[static_cast<size_t>(n)].parent) {
-            if (n == node) {
-                out.push_back(static_cast<int>(i));
-                break;
-            }
-        }
+    std::vector<uint8_t> seen(g.nodes.size(), 0);
+    std::vector<int> stack{node};
+    while (!stack.empty()) {
+        const int i = stack.back();
+        stack.pop_back();
+        if (seen[static_cast<size_t>(i)] != 0) continue;
+        seen[static_cast<size_t>(i)] = 1;
+        const CNode& c = g.nodes[static_cast<size_t>(i)];
+        if (c.type == og::NodeType::Clip) out.push_back(i);
+        for (int ch : c.children) stack.push_back(ch);
     }
+    std::sort(out.begin(), out.end());
     return out;
 }
 
@@ -2101,12 +2170,14 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         r.was_active = r.active;
         r.active = false;
         r.influence = 0.f;
+        r.root_influence = 0.f;
         r.root_path = false;
     }
     {
         NodeRt& root = inst->rt[static_cast<size_t>(g.root)];
         root.active = true;
         root.influence = 1.f;
+        root.root_influence = 1.f;
         root.root_path = true;
     }
     for (int i : g.order) {
@@ -2116,11 +2187,16 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
             r.progress = 0.f;
             continue;
         }
+        // A shared node (#164) sums what its uses give it; a tree node is given exactly once (1.0 results).
         auto give = [&](int child, bool active, float influence, bool root_path) {
             NodeRt& k = inst->rt[static_cast<size_t>(child)];
-            k.active = active;
-            k.influence = active ? influence : 0.f;
-            k.root_path = root_path;
+            if (!active) return;
+            k.active = true;
+            k.influence += influence;
+            if (root_path) {
+                k.root_path = true;
+                k.root_influence += influence;
+            }
         };
         float* w = c.weights_at >= 0 ? inst->weights.data() + c.weights_at : nullptr;
         switch (c.type) {
@@ -2316,6 +2392,11 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
 
     // 3. pose
     inst->ops.clear();
+    ++inst->frame;
+    if (inst->frame == 0) {  // wrapped: stale stamps could match
+        for (NodeRt& r : inst->rt) r.emitted = 0;
+        inst->frame = 1;
+    }
     emit(*inst, g.root);
     if (inst->mods != nullptr) {
         for (size_t m = 0; m < g.doc.modifiers.size(); ++m) {
@@ -2351,7 +2432,7 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         if (b.rig_clip == nullptr) continue;
         const PlayerRt& p = inst->players[static_cast<size_t>(i)];
         if (r.influence >= threshold && r.influence > 0.f) fire(*inst, b, c.clip_slot, -1, p.prev, p.advanced, r.influence);
-        if (r.root_path && r.influence > 0.f && b.root_joint >= 0 && b.root_axes != 0 && p.advanced != 0.f) {
+        if (r.root_path && r.root_influence > 0.f && b.root_joint >= 0 && b.root_axes != 0 && p.advanced != 0.f) {
             cr_root_motion m{};
             if (b.retarget != nullptr) {
                 cr_clip_root_motion(b.rig_clip, cc_retarget_source_rig(b.retarget), b.root_joint, b.root_axes, p.prev,
@@ -2360,7 +2441,7 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
             } else {
                 cr_clip_root_motion(b.rig_clip, inst->rig, b.root_joint, b.root_axes, p.prev, p.advanced, &m);
             }
-            add_motion(inst->root_motion, m, r.influence);
+            add_motion(inst->root_motion, m, r.root_influence);
         }
     }
     for (int i : g.montage_slots) {
@@ -2480,6 +2561,30 @@ int32_t cg_instance_debug(const cg_instance* inst, cg_node_debug* out) {
         out[i] = d;
     }
     return CG_OK;
+}
+
+int32_t cg_instance_debug_weights(const cg_instance* inst, int32_t node, float* out, int32_t capacity) {
+    if (inst == nullptr || node < 0 || static_cast<size_t>(node) >= inst->g->nodes.size()) {
+        return fail(CG_ERR_ARG, "cg_instance_debug_weights: bad node");
+    }
+    const CNode& c = inst->g->nodes[static_cast<size_t>(node)];
+    if (c.weights_at < 0) return fail(CG_ERR_ARG, "cg_instance_debug_weights: node " + c.id + " has no weighted inputs");
+    const float* w = inst->weights.data() + c.weights_at;
+    std::vector<float> v;
+    if (c.type == og::NodeType::Layer) {
+        float base = 1.f;
+        for (size_t k = 0; k < c.layers.size(); ++k) {
+            const CLayer& l = c.layers[k];
+            if (l.mode == og::LayerMode::Override && l.mask < 0 && !l.first_person) base *= 1.f - w[k];
+        }
+        v.push_back(base);
+        v.insert(v.end(), w, w + c.layers.size());
+    } else {
+        v.assign(w, w + c.children.size());
+    }
+    const auto n = static_cast<int32_t>(v.size());
+    if (out != nullptr) std::memcpy(out, v.data(), static_cast<size_t>(std::min(n, std::max(capacity, 0))) * sizeof(float));
+    return n;
 }
 
 }  // extern "C"

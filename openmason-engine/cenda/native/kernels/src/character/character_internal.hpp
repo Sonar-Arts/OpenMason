@@ -108,6 +108,10 @@ inline std::string role_joint(const oc::Character& def, std::string_view role) {
     return {};
 }
 
+// The reference pose as rig locals (9 floats per joint: pos, rot_deg, scale): rest locals with the definition's
+// reference rotations (character_edit.cpp).
+void reference_locals(const oc::Character& def, const cr_rig* rig, float* out);
+
 }  // namespace cenda::character
 
 #define CC_GUARD_BEGIN try {

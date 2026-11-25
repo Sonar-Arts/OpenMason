@@ -22,6 +22,17 @@ using json::MutDocPtr;
 
 std::string str(yyjson_val* v) { return {yyjson_get_str(v), yyjson_get_len(v)}; }
 
+// Draft reading (#164, read_draft): required members may be missing and lists empty; malformed values still fail.
+thread_local bool t_draft = false;
+
+struct DraftScope {
+    bool saved;
+    explicit DraftScope(bool on) : saved(t_draft) { t_draft = on; }
+    ~DraftScope() { t_draft = saved; }
+    DraftScope(const DraftScope&) = delete;
+    DraftScope& operator=(const DraftScope&) = delete;
+};
+
 yyjson_val* field(yyjson_val* obj, const char* key) {
     yyjson_val* v = yyjson_obj_get(obj, key);
     return v == nullptr || yyjson_is_null(v) ? nullptr : v;
@@ -30,7 +41,7 @@ yyjson_val* field(yyjson_val* obj, const char* key) {
 std::string str_field(yyjson_val* obj, const char* key, const std::string& where, bool required) {
     yyjson_val* v = field(obj, key);
     if (v == nullptr) {
-        if (required) fail(where + ": missing \"" + key + "\"");
+        if (required && !t_draft) fail(where + ": missing \"" + key + "\"");
         return {};
     }
     if (!yyjson_is_str(v)) fail(where + ": \"" + key + "\" must be a string");
@@ -54,7 +65,7 @@ bool bool_field(yyjson_val* obj, const char* key, const std::string& where, bool
 yyjson_val* arr_field(yyjson_val* obj, const char* key, const std::string& where, bool required) {
     yyjson_val* v = field(obj, key);
     if (v == nullptr) {
-        if (required) fail(where + ": missing \"" + key + "\"");
+        if (required && !t_draft) fail(where + ": missing \"" + key + "\"");
         return nullptr;
     }
     if (!yyjson_is_arr(v)) fail(where + ": \"" + key + "\" must be an array");
@@ -194,7 +205,7 @@ Mask parse_mask(yyjson_val* m, std::size_t i) {
         MaskEntry me;
         me.role = str_field(e, "role", ew, false);
         me.joint = str_field(e, "joint", ew, false);
-        if (me.role.empty() == me.joint.empty()) fail(ew + ": give exactly one of \"role\" or \"joint\"");
+        if (!t_draft && (me.role.empty() == me.joint.empty())) fail(ew + ": give exactly one of \"role\" or \"joint\"");
         me.weight = static_cast<float>(num_field(e, "weight", ew, 1.0));
         if (me.weight < 0.f || me.weight > 1.f) fail(ew + ": weight must be in [0, 1]");
         me.branch = bool_field(e, "branch", ew, true);
@@ -253,7 +264,7 @@ Node parse_node(yyjson_val* v, std::size_t i) {
                     }
                     n.param = px;
                 } else if (n.param.empty()) {
-                    fail(at + ": missing \"param\"");
+                    if (!t_draft) { fail(at + ": missing \"param\""); }
                 }
                 const std::string mode = str_field(v, "mode", at, false);
                 if (mode.empty() || mode == "cartesian") {
@@ -272,16 +283,16 @@ Node parse_node(yyjson_val* v, std::size_t i) {
                 Sample smp;
                 smp.node = str_field(s, "node", sw, true);
                 if (two) {
-                    if (field(s, "x") == nullptr || field(s, "y") == nullptr) fail(sw + ": needs x and y");
+                    if (field(s, "x") == nullptr || field(s, "y") == nullptr) if (!t_draft) { fail(sw + ": needs x and y"); }
                     smp.x = static_cast<float>(num_field(s, "x", sw, 0.0));
                     smp.y = static_cast<float>(num_field(s, "y", sw, 0.0));
                 } else {
-                    if (field(s, "value") == nullptr) fail(sw + ": needs a value");
+                    if (field(s, "value") == nullptr) if (!t_draft) { fail(sw + ": needs a value"); }
                     smp.x = static_cast<float>(num_field(s, "value", sw, 0.0));
                 }
                 n.samples.push_back(std::move(smp));
             }
-            if (n.samples.empty()) fail(at + ": a blend needs samples");
+            if (!t_draft && (n.samples.empty())) fail(at + ": a blend needs samples");
             if (!two) {
                 std::stable_sort(n.samples.begin(), n.samples.end(), [](const Sample& a, const Sample& b) { return a.x < b.x; });
             }
@@ -476,7 +487,7 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                 if (aj.weight < 0.f) fail(ew + ": weight must be >= 0");
                 m.aim.push_back(std::move(aj));
             }
-            if (m.aim.empty() || m.aim.size() > 16) fail(at + ": aim needs 1..16 joints");
+            if (!t_draft && (m.aim.empty() || m.aim.size() > 16)) fail(at + ": aim needs 1..16 joints");
             m.target = str_field(v, "target", at, true);
             vec3_field(v, "axis", at, m.axis);
             m.each = bool_field(v, "each", at, false);
@@ -529,7 +540,7 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                 if (l.pull < 0.f || l.pull > 1.f || l.reach < 0.f || l.reach > 1.f) fail(lw + ": pull and reach must be in [0, 1]");
                 m.limbs.push_back(std::move(l));
             }
-            if (m.limbs.empty() || m.limbs.size() > 5) fail(at + ": a full-body modifier needs 1..5 limbs");
+            if (!t_draft && (m.limbs.empty() || m.limbs.size() > 5)) fail(at + ": a full-body modifier needs 1..5 limbs");
             m.pole = str_field(v, "hipGoal", at, false);
             m.hip_weight = static_cast<float>(num_field(v, "hipWeight", at, 1.0));
             iterations();
@@ -585,7 +596,7 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                 }
                 m.legs.push_back(std::move(l));
             }
-            if (m.legs.empty() || m.legs.size() > 5) fail(at + ": needs 1..5 legs");
+            if (!t_draft && (m.legs.empty() || m.legs.size() > 5)) fail(at + ": needs 1..5 legs");
             auto nonneg = [&](const char* key, double fallback) {
                 const double x = num_field(v, key, at, fallback);
                 if (x < 0.0) fail(at + ": " + key + " must be >= 0");
@@ -637,7 +648,7 @@ Collider parse_collider(yyjson_val* v, std::size_t i) {
         std::copy(c.a, c.a + 3, c.b);
     }
     c.radius = static_cast<float>(num_field(v, "radius", at, 0.0));
-    if (!(c.radius > 0.f)) fail(at + ": radius must be > 0");
+    if (!t_draft && (!(c.radius > 0.f))) fail(at + ": radius must be > 0");
     return c;
 }
 
@@ -756,7 +767,7 @@ void validate(const Graph& g) {
         if (!name.empty() && g.find_mask(name) < 0) fail(at + ": unknown mask " + name);
     };
 
-    std::unordered_map<std::string, std::string> parent;  // child id -> parent id
+    std::unordered_map<std::string, std::vector<std::string>> uses;  // node id -> the nodes it uses
     std::unordered_set<std::string> slot_names;
     for (const Node& n : g.nodes) {
         const std::string at = "node " + n.id;
@@ -764,7 +775,7 @@ void validate(const Graph& g) {
             if (g.find_node(c) < 0) fail(at + ": unknown node " + c);
             if (c == n.id) fail(at + " uses itself");
             if (c == g.root) fail(at + " uses the root node " + c);
-            if (!parent.emplace(c, n.id).second) fail("node " + c + " is used by both " + parent[c] + " and " + n.id);
+            uses[n.id].push_back(c);  // 1.1: a node may feed several parents (a DAG, evaluated once per frame)
         }
         switch (n.type) {
             case NodeType::Clip:
@@ -872,20 +883,33 @@ void validate(const Graph& g) {
                 target_ref(m.target, at, true);
         }
     }
-    // Every node reachable from the root sits in a tree (parents are unique, the root has none); a cycle can
-    // only hide among unreachable nodes: walk up from each node.
-    for (const Node& n : g.nodes) {
-        std::string cur = n.id;
-        for (std::size_t steps = 0; steps <= g.nodes.size(); ++steps) {
-            auto it = parent.find(cur);
-            if (it == parent.end()) break;
-            cur = it->second;
-            if (cur == n.id) fail("node " + n.id + " is part of a cycle");
+    // The nodes form a DAG (1.1; 1.0 required a tree): depth-first search with colours, iteratively.
+    std::unordered_map<std::string, int> colour;  // 0 new, 1 on the stack, 2 done
+    for (const Node& start : g.nodes) {
+        if (colour[start.id] != 0) continue;
+        std::vector<std::pair<std::string, std::size_t>> stack{{start.id, 0}};
+        colour[start.id] = 1;
+        while (!stack.empty()) {
+            auto& [id, next] = stack.back();
+            const auto it = uses.find(id);
+            if (it == uses.end() || next >= it->second.size()) {
+                colour[id] = 2;
+                stack.pop_back();
+                continue;
+            }
+            const std::string child = it->second[next++];
+            const int c = colour[child];
+            if (c == 1) fail("node " + child + " is part of a cycle");
+            if (c == 0) {
+                colour[child] = 1;
+                stack.emplace_back(child, 0);
+            }
         }
     }
 }
 
-Graph read(std::string_view text) {
+Graph read_impl(std::string_view text, bool draft) {
+    DraftScope scope(draft);
     yyjson_read_err err{};
     DocPtr doc(yyjson_read_opts(const_cast<char*>(text.data()), text.size(), YYJSON_READ_NOFLAG, nullptr, &err));
     if (!doc) fail(std::string("not valid JSON (") + err.msg + " at byte " + std::to_string(err.pos) + ")");
@@ -945,12 +969,11 @@ Graph read(std::string_view text) {
         if (!s) fail("out of memory");
         g.unknown_sections.push_back({std::move(k), std::string(s.get(), len)});
     }
-    validate(g);
+    if (!draft) validate(g);
     return g;
 }
 
-std::string write(const Graph& g) {
-    validate(g);
+std::string write_impl(const Graph& g) {
     MutDocPtr doc(yyjson_mut_doc_new(nullptr));
     if (!doc) fail("out of memory");
     yyjson_mut_doc* d = doc.get();
@@ -1311,5 +1334,18 @@ std::string write(const Graph& g) {
     if (!text) fail(std::string("write: ") + err.msg);
     return {text.get(), len};
 }
+
+Graph read(std::string_view text) { return read_impl(text, false); }
+
+Graph read_draft(std::string_view text) { return read_impl(text, true); }
+
+std::string write(const Graph& g) {
+    validate(g);
+    return write_impl(g);
+}
+
+std::string write_draft(const Graph& g) { return write_impl(g); }
+
+std::vector<std::string> node_children(const Node& n) { return children(n); }
 
 }  // namespace cenda::omformat::omanimgraph

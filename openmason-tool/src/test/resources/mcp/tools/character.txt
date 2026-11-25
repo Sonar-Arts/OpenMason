@@ -1,0 +1,12 @@
+char_auto_map
+char_close
+char_edit
+char_get
+char_lock
+char_mirror
+char_open
+char_reference_pose
+char_save
+char_sockets
+char_undo
+char_validate

@@ -1,6 +1,7 @@
 // Cenda character: characterization (OpenMason #154) — auto-map, validation against a profile, reference-pose
 // fitting (rest normalization), lock, and profiles exported from a rig. See cenda/character.h.
 #include "character_internal.hpp"
+#include "cenda/character_edit.h"
 
 #include <array>
 #include <cctype>
@@ -640,7 +641,8 @@ void validate(const oc::Character& def, const cr_rig* rig, const op::Profile& p,
 // ---------------------------------------------------------------------------------------------------------
 // Reference-pose fitting.
 
-int32_t fit_reference_pose(oc::Character& def, const cr_rig* rig, const op::Profile& p) {
+// pose: a named profile pose whose directions replace the roles' own (NULL = the roles' own).
+int32_t fit_reference_pose(oc::Character& def, const cr_rig* rig, const op::Profile& p, const op::NamedPose* pose = nullptr) {
     Skeleton s(rig);
     s.set_facing(def.facing.empty() ? "-z" : def.facing);
     const std::size_t n = rig->joints.size();
@@ -667,7 +669,13 @@ int32_t fit_reference_pose(oc::Character& def, const cr_rig* rig, const op::Prof
         const int ri = role_of[static_cast<std::size_t>(j)];
         if (ri < 0) continue;
         const op::Role& role = p.roles[static_cast<std::size_t>(ri)];
-        if (!role.has_direction) continue;
+        const float* direction = role.has_direction ? role.direction : nullptr;
+        if (pose != nullptr) {
+            for (const op::PoseDirection& d : pose->directions) {
+                if (d.role == role.name) direction = d.direction;
+            }
+        }
+        if (direction == nullptr) continue;
         if (cr_rig_pose_locals(rig, locals.data(), nullptr, 0, nullptr, nullptr, world.data(), child.data()) != CR_OK) {
             return error(CC_ERR_ARG, std::string("cc_char_fit_reference_pose: ") + cr_last_error());
         }
@@ -689,7 +697,7 @@ int32_t fit_reference_pose(oc::Character& def, const cr_rig* rig, const op::Prof
         }
         if (dir.length() < 1e-9) continue;
 
-        const Mat3 q = rotation_between(dir.normalized(), s.to_model(role.direction).normalized());
+        const Mat3 q = rotation_between(dir.normalized(), s.to_model(direction).normalized());
         const int32_t parent = rig->joints[static_cast<std::size_t>(j)].parent;
         const Mat3 rf = parent < 0 ? identity3() : rotation_of(child.data() + static_cast<std::size_t>(parent) * 16);
         float* rot = locals.data() + static_cast<std::size_t>(j) * 9 + 3;
@@ -704,6 +712,261 @@ int32_t fit_reference_pose(oc::Character& def, const cr_rig* rig, const op::Prof
         def.reference_pose.push_back({rig->joints[static_cast<std::size_t>(j)].id, {rot[0], rot[1], rot[2]}});
     }
     return static_cast<int32_t>(fitted.size());
+}
+
+
+// ---------------------------------------------------------------------------------------------------------
+// Mirroring (OpenMason #163, cenda/character_edit.h).
+
+// The other side's spelling of a side token, keeping its case ("L" -> "R", "Left" -> "Right"); "" = not one.
+std::string swapped_side_token(const std::string& t) {
+    std::string low = t;
+    for (char& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    static const std::pair<const char*, const char*> kPairs[] = {
+        {"l", "r"}, {"left", "right"}, {"lt", "rt"}, {"lft", "rgt"}};
+    std::string out;
+    for (const auto& [a, b] : kPairs) {
+        if (low == a) out = b;
+        else if (low == b) out = a;
+    }
+    if (out.empty()) return out;
+    const bool upper = std::all_of(t.begin(), t.end(), [](unsigned char ch) { return !std::islower(ch); });
+    const bool capital = std::isupper(static_cast<unsigned char>(t[0])) != 0;
+    if (upper && t.size() > 1) {
+        for (char& ch : out) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    } else if (upper || capital) {
+        out[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(out[0])));
+    }
+    return out;
+}
+
+// A name with its side token swapped (separators _ - . space, or a trailing camelCase Left/Right); *side gets the
+// side it named (1 left, 2 right). "" when it names no side.
+std::string swap_side_name(const std::string& name, int* side) {
+    std::size_t start = 0;
+    for (std::size_t i = 0; i <= name.size(); ++i) {
+        if (i == name.size() || name[i] == '_' || name[i] == '-' || name[i] == '.' || name[i] == ' ') {
+            const std::string seg = name.substr(start, i - start);
+            const std::string other = seg.empty() ? std::string() : swapped_side_token(seg);
+            if (!other.empty()) {
+                std::string low = seg;
+                for (char& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                *side = side_token(low);
+                return name.substr(0, start) + other + name.substr(i);
+            }
+            start = i + 1;
+        }
+    }
+    for (const char* suffix : {"Left", "Right"}) {
+        const std::size_t n = std::strlen(suffix);
+        if (name.size() > n && name.compare(name.size() - n, n, suffix) == 0) {
+            *side = suffix[0] == 'L' ? 1 : 2;
+            return name.substr(0, name.size() - n) + (suffix[0] == 'L' ? "Right" : "Left");
+        }
+    }
+    return {};
+}
+
+struct Mirror {
+    const cr_rig* rig;
+    Skeleton s;
+    Vec center;
+    Vec normal;  // the character's left axis
+
+    Mirror(const oc::Character& def, const cr_rig* r) : rig(r), s(r) {
+        s.set_facing(def.facing.empty() ? "-z" : def.facing);
+        normal = s.left.normalized();
+        center = s.center;
+        const std::string hips = role_joint(def, "hips");
+        if (const int32_t h = hips.empty() ? -1 : rig_index(rig, hips); h >= 0) center = head(h);
+    }
+
+    [[nodiscard]] Vec head(int32_t j) const {
+        double q[3];
+        joint_point(rig, j, s.world.data(), q);
+        return {q[0], q[1], q[2]};
+    }
+    [[nodiscard]] Vec tail(int32_t j) const {
+        if (rig->joints[static_cast<std::size_t>(j)].kind != CR_JOINT_BONE) return head(j);
+        return translation_of(s.child.data() + static_cast<std::size_t>(j) * 16);
+    }
+    [[nodiscard]] Vec reflect(const Vec& p) const { return p - normal * (2.0 * (p - center).dot(normal)); }
+    [[nodiscard]] Vec reflect_dir(const Vec& v) const { return v - normal * (2.0 * v.dot(normal)); }
+    [[nodiscard]] Mat3 reflect_rot(const Mat3& r) const {
+        Mat3 m = identity3();
+        const double n[3] = {normal.x, normal.y, normal.z};
+        for (std::size_t i = 0; i < 3; ++i)
+            for (std::size_t j = 0; j < 3; ++j) m[i][j] -= 2.0 * n[i] * n[j];
+        return mul(mul(m, r), m);
+    }
+
+    // The joint of j's kind nearest j's reflection (head and, for bones, tail), -1 when none lies within 5% of the
+    // skeleton height or the nearest is j itself (a midline joint).
+    [[nodiscard]] int32_t mirror_joint(int32_t j) const {
+        const int32_t kind = rig->joints[static_cast<std::size_t>(j)].kind;
+        const Vec h = reflect(head(j));
+        const Vec t = reflect(tail(j));
+        int32_t best = -1;
+        double best_d = 1e300;
+        for (std::size_t k = 0; k < rig->joints.size(); ++k) {
+            if (rig->joints[k].kind != kind) continue;
+            const auto kk = static_cast<int32_t>(k);
+            const double d = (head(kk) - h).length() + (tail(kk) - t).length();
+            if (d < best_d - 1e-9 * s.height) {
+                best_d = d;
+                best = kk;
+            }
+        }
+        if (best < 0 || best == j || best_d > 0.05 * s.height) return -1;
+        return best;
+    }
+};
+
+void mirror(oc::Character& def, const cr_rig* rig, const op::Profile& p, int from, uint32_t what, cc_report& report,
+            int32_t& count) {
+    Mirror m(def, rig);
+    const char* from_name = from == 1 ? "left" : "right";
+    auto joint_name = [&](int32_t j) {
+        const auto& joint = rig->joints[static_cast<std::size_t>(j)];
+        return joint.name.empty() ? joint.id : joint.name;
+    };
+
+    if ((what & CC_MIRROR_ROLES) != 0) {
+        for (const op::Role& role : p.roles) {
+            if (role_side(role) != from || role.mirror.empty()) continue;
+            const std::string id = role_joint(def, role.name);
+            if (id.empty()) continue;
+            const int32_t j = rig_index(rig, id);
+            if (j < 0) {
+                report.add(CC_SEVERITY_WARNING, CC_CHECK_UNKNOWN_JOINT, role.name, "role " + role.name + ": its joint is not in the rig");
+                continue;
+            }
+            const int32_t k = m.mirror_joint(j);
+            if (k < 0) {
+                report.add(CC_SEVERITY_WARNING, CC_CHECK_MIRROR_ASYMMETRIC, role.mirror,
+                           "role " + role.mirror + ": no joint at the mirror position of " + joint_name(j));
+                continue;
+            }
+            const std::string& kid = rig->joints[static_cast<std::size_t>(k)].id;
+            if (role_joint(def, role.mirror) == kid) continue;
+            bool found = false;
+            for (oc::RoleBinding& b : def.roles) {
+                if (b.role == role.mirror) {
+                    b.joint = kid;
+                    found = true;
+                }
+            }
+            if (!found) def.roles.push_back({role.mirror, kid});
+            ++count;
+            report.add(CC_SEVERITY_INFO, CC_CHECK_MIRROR_ASYMMETRIC, role.mirror,
+                       "role " + role.mirror + " -> " + joint_name(k) + " (mirror of " + role.name + ")");
+        }
+    }
+
+    if ((what & CC_MIRROR_LIMITS) != 0) {
+        // Joint frames in the reference pose.
+        const std::size_t n = rig->joints.size();
+        std::vector<float> locals(n * 9);
+        std::vector<float> world(n * 16);
+        reference_locals(def, rig, locals.data());
+        if (cr_rig_pose_locals(rig, locals.data(), nullptr, 0, nullptr, nullptr, world.data(), nullptr) != CR_OK) {
+            throw std::runtime_error(std::string("cc_char_mirror: reference pose: ") + cr_last_error());
+        }
+        for (const op::Role& role : p.roles) {
+            if (role_side(role) != from || role.mirror.empty()) continue;
+            const std::string src = role_joint(def, role.name);
+            const std::string dst = role_joint(def, role.mirror);
+            if (src.empty() || dst.empty()) continue;
+            const auto lim = std::find_if(def.limits.begin(), def.limits.end(), [&](const oc::JointLimit& l) { return l.joint == src; });
+            if (lim == def.limits.end()) continue;
+            const int32_t j = rig_index(rig, src);
+            const int32_t k = rig_index(rig, dst);
+            if (j < 0 || k < 0) continue;
+            const Mat3 a = rotation_of(world.data() + static_cast<std::size_t>(j) * 16);
+            const Mat3 b = rotation_of(world.data() + static_cast<std::size_t>(k) * 16);
+            const float smin[3] = {lim->min.x, lim->min.y, lim->min.z};
+            const float smax[3] = {lim->max.x, lim->max.y, lim->max.z};
+            float dmin[3]{};
+            float dmax[3]{};
+            bool used[3] = {false, false, false};
+            bool ok = true;
+            for (std::size_t i = 0; i < 3 && ok; ++i) {
+                const Vec d = m.reflect_dir(Vec{a[0][i], a[1][i], a[2][i]});
+                std::size_t best = 0;
+                double best_dot = 0;
+                for (std::size_t c = 0; c < 3; ++c) {
+                    const double dot = d.dot(Vec{b[0][c], b[1][c], b[2][c]});
+                    if (std::abs(dot) > std::abs(best_dot)) {
+                        best_dot = dot;
+                        best = c;
+                    }
+                }
+                if (std::abs(best_dot) < 0.9 || used[best]) {
+                    ok = false;
+                    break;
+                }
+                used[best] = true;
+                // M R(a, t) M = R(Ma, -t) and Ma = s e: the angle about e is -s t.
+                const float sgn = best_dot > 0 ? -1.f : 1.f;
+                const float x0 = sgn * smin[i];
+                const float x1 = sgn * smax[i];
+                dmin[best] = std::min(x0, x1);
+                dmax[best] = std::max(x0, x1);
+            }
+            if (!ok) {
+                report.add(CC_SEVERITY_WARNING, CC_CHECK_MIRROR_ASYMMETRIC, role.mirror,
+                           "limits of " + role.name + ": the joints' axes are not mirror images; not copied");
+                continue;
+            }
+            const oc::JointLimit copy{dst, {dmin[0], dmin[1], dmin[2]}, {dmax[0], dmax[1], dmax[2]}};
+            auto it = std::find_if(def.limits.begin(), def.limits.end(), [&](const oc::JointLimit& l) { return l.joint == dst; });
+            if (it != def.limits.end()) *it = copy;
+            else def.limits.push_back(copy);
+            ++count;
+            report.add(CC_SEVERITY_INFO, CC_CHECK_MIRROR_ASYMMETRIC, role.mirror, "limits of " + role.name + " copied to " + role.mirror);
+        }
+    }
+
+    if ((what & CC_MIRROR_SOCKETS) != 0) {
+        const std::vector<oc::Socket> sockets = def.sockets;
+        for (const oc::Socket& sock : sockets) {
+            int side = 0;
+            const std::string name = swap_side_name(sock.name, &side);
+            if (name.empty() || side != from) continue;
+            const int32_t j = rig_index(rig, sock.joint);
+            if (j < 0) continue;
+            // The mirror role's joint when the socket's joint plays a sided role, else the reflected joint.
+            int32_t k = -1;
+            for (const oc::RoleBinding& b : def.roles) {
+                if (b.joint != sock.joint) continue;
+                const int ri = p.find(b.role);
+                if (ri < 0 || p.roles[static_cast<std::size_t>(ri)].mirror.empty()) continue;
+                const std::string mj = role_joint(def, p.roles[static_cast<std::size_t>(ri)].mirror);
+                if (!mj.empty()) k = rig_index(rig, mj);
+            }
+            if (k < 0) k = m.mirror_joint(j);
+            if (k < 0) {
+                report.add(CC_SEVERITY_WARNING, CC_CHECK_MIRROR_ASYMMETRIC, name,
+                           "socket " + sock.name + ": no joint at the mirror position of " + joint_name(j));
+                continue;
+            }
+            oc::Socket out = sock;
+            out.name = name;
+            out.joint = rig->joints[static_cast<std::size_t>(k)].id;
+            const Vec pos = m.reflect(Vec{sock.pos.x, sock.pos.y, sock.pos.z});
+            out.pos = {static_cast<float>(pos.x), static_cast<float>(pos.y), static_cast<float>(pos.z)};
+            const float rot[3] = {sock.rot.x, sock.rot.y, sock.rot.z};
+            float r2[3];
+            to_euler_xyz(m.reflect_rot(euler_xyz(rot)), r2);
+            out.rot = {r2[0], r2[1], r2[2]};
+            auto it = std::find_if(def.sockets.begin(), def.sockets.end(), [&](const oc::Socket& x) { return x.name == name; });
+            if (it != def.sockets.end()) *it = out;
+            else def.sockets.push_back(out);
+            ++count;
+            report.add(CC_SEVERITY_INFO, CC_CHECK_MIRROR_ASYMMETRIC, name, "socket " + name + " mirrored from " + sock.name);
+        }
+    }
+    (void)from_name;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -859,6 +1122,59 @@ int32_t cc_char_fit_reference_pose(cc_char* c, const cr_rig* rig, const cc_profi
     clear_error();
     return fit_reference_pose(c->def, rig, profile->profile);
     CC_GUARD_END(CC_ERR_ARG)
+}
+
+int32_t cc_char_fit_reference_pose_named(cc_char* c, const cr_rig* rig, const cc_profile* profile, const char* pose) {
+    if (c == nullptr || rig == nullptr || profile == nullptr) {
+        return error(CC_ERR_ARG, "cc_char_fit_reference_pose_named: null argument");
+    }
+    if (c->def.locked) {
+        return error(CC_ERR_LOCKED, "cc_char_fit_reference_pose_named: the role mapping is locked (cc_char_unlock first)");
+    }
+    CC_GUARD_BEGIN
+    clear_error();
+    const op::Profile& p = profile->profile;
+    const op::NamedPose* named = nullptr;
+    if (pose != nullptr && pose[0] != '\0') {
+        const int pi = p.find_pose(pose);
+        if (pi >= 0) {
+            named = &p.poses[static_cast<std::size_t>(pi)];
+        } else if (std::string_view(pose) != "T") {
+            return error(CC_ERR_RANGE, std::string("cc_char_fit_reference_pose_named: profile ") + p.id + " has no pose " + pose);
+        }
+    }
+    return fit_reference_pose(c->def, rig, p, named);
+    CC_GUARD_END(CC_ERR_ARG)
+}
+
+cc_report* cc_char_mirror(cc_char* c, const cr_rig* rig, const cc_profile* profile, int32_t from_side, uint32_t what,
+                          int32_t* out_count) {
+    set_out(out_count, 0);
+    if (c == nullptr || rig == nullptr || profile == nullptr) {
+        error(CC_ERR_ARG, "cc_char_mirror: null argument");
+        return nullptr;
+    }
+    if (from_side != CC_SIDE_LEFT && from_side != CC_SIDE_RIGHT) {
+        error(CC_ERR_ARG, "cc_char_mirror: from_side must be CC_SIDE_LEFT or CC_SIDE_RIGHT");
+        return nullptr;
+    }
+    if ((what & CC_MIRROR_ROLES) != 0 && c->def.locked) {
+        error(CC_ERR_LOCKED, "cc_char_mirror: the role mapping is locked (cc_char_unlock first)");
+        return nullptr;
+    }
+    CC_GUARD_BEGIN
+    clear_error();
+    auto* report = new cc_report();
+    int32_t count = 0;
+    try {
+        mirror(c->def, rig, profile->profile, from_side, what, *report, count);
+    } catch (...) {
+        delete report;
+        throw;
+    }
+    set_out(out_count, count);
+    return report;
+    CC_GUARD_END(nullptr)
 }
 
 int32_t cc_char_lock(cc_char* c, const cr_rig* rig, const cc_profile* profile) {

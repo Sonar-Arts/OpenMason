@@ -120,8 +120,10 @@ add_library(cenda_kernels SHARED
         src/character/characterize.cpp
         src/character/retarget.cpp
         src/character/appearance.cpp
+        src/character/character_edit.cpp
         src/anim/anim_clip.cpp
-        src/graph/anim_graph.cpp)
+        src/graph/anim_graph.cpp
+        src/graph/anim_graph_edit.cpp)
 
 target_include_directories(cenda_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cenda_kernels

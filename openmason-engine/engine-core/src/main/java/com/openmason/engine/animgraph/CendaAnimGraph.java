@@ -110,6 +110,29 @@ public final class CendaAnimGraph {
     static final MethodHandle CURVE_VALUE;
     static final MethodHandle ROOT_MOTION;
     static final MethodHandle DEBUG;
+    // Graph editing (#164, cenda/anim_graph_edit.h; still CG ABI 1).
+    static final MethodHandle DOC_CREATE;
+    static final MethodHandle DOC_READ;
+    static final MethodHandle DOC_DESTROY;
+    static final MethodHandle DOC_JSON;
+    static final MethodHandle DOC_APPLY;
+    static final MethodHandle DOC_RESULTS;
+    static final MethodHandle DOC_VIEW;
+    static final MethodHandle DOC_PROBLEMS;
+    static final MethodHandle DOC_VALID;
+    static final MethodHandle DOC_COMPILE;
+    static final MethodHandle DOC_UNDO;
+    static final MethodHandle DOC_REDO;
+    static final MethodHandle DOC_CAN_UNDO;
+    static final MethodHandle DOC_CAN_REDO;
+    static final MethodHandle DOC_LABEL;
+    static final MethodHandle DOC_SEAL;
+    static final MethodHandle DOC_REVISION;
+    static final MethodHandle DOC_DIRTY;
+    static final MethodHandle DOC_MARK_SAVED;
+    static final MethodHandle DOC_STEP_COUNT;
+    static final MethodHandle DOC_RESET;
+    static final MethodHandle DEBUG_WEIGHTS;
 
     static {
         String failure = null;
@@ -201,6 +224,28 @@ public final class CendaAnimGraph {
         CURVE_VALUE = handle(lookup, "cg_instance_curve_value", FunctionDescriptor.of(F32, ADDR, I32), critical);
         ROOT_MOTION = handle(lookup, "cg_instance_root_motion", FunctionDescriptor.of(I32, ADDR, ADDR));
         DEBUG = handle(lookup, "cg_instance_debug", FunctionDescriptor.of(I32, ADDR, ADDR));
+        DOC_CREATE = handle(lookup, "cg_doc_create", FunctionDescriptor.of(ADDR, ADDR, ADDR));
+        DOC_READ = handle(lookup, "cg_doc_read", FunctionDescriptor.of(ADDR, ADDR, ValueLayout.JAVA_LONG, ADDR));
+        DOC_DESTROY = handle(lookup, "cg_doc_destroy", FunctionDescriptor.ofVoid(ADDR));
+        DOC_JSON = handle(lookup, "cg_doc_json", FunctionDescriptor.of(ADDR, ADDR));
+        DOC_APPLY = handle(lookup, "cg_doc_apply", FunctionDescriptor.of(I32, ADDR, ADDR, ValueLayout.JAVA_LONG, ADDR, ADDR));
+        DOC_RESULTS = handle(lookup, "cg_doc_results", FunctionDescriptor.of(ADDR, ADDR));
+        DOC_VIEW = handle(lookup, "cg_doc_view", FunctionDescriptor.of(ADDR, ADDR));
+        DOC_PROBLEMS = handle(lookup, "cg_doc_problems", FunctionDescriptor.of(ADDR, ADDR));
+        DOC_VALID = handle(lookup, "cg_doc_valid", FunctionDescriptor.of(I32, ADDR));
+        DOC_COMPILE = handle(lookup, "cg_doc_compile", FunctionDescriptor.of(ADDR, ADDR));
+        DOC_UNDO = handle(lookup, "cg_doc_undo", FunctionDescriptor.of(I32, ADDR));
+        DOC_REDO = handle(lookup, "cg_doc_redo", FunctionDescriptor.of(I32, ADDR));
+        DOC_CAN_UNDO = handle(lookup, "cg_doc_can_undo", FunctionDescriptor.of(I32, ADDR));
+        DOC_CAN_REDO = handle(lookup, "cg_doc_can_redo", FunctionDescriptor.of(I32, ADDR));
+        DOC_LABEL = handle(lookup, "cg_doc_label", FunctionDescriptor.of(ADDR, ADDR, I32));
+        DOC_SEAL = handle(lookup, "cg_doc_seal", FunctionDescriptor.of(I32, ADDR));
+        DOC_REVISION = handle(lookup, "cg_doc_revision", FunctionDescriptor.of(ValueLayout.JAVA_LONG, ADDR));
+        DOC_DIRTY = handle(lookup, "cg_doc_dirty", FunctionDescriptor.of(I32, ADDR));
+        DOC_MARK_SAVED = handle(lookup, "cg_doc_mark_saved", FunctionDescriptor.of(I32, ADDR));
+        DOC_STEP_COUNT = handle(lookup, "cg_doc_step_count", FunctionDescriptor.of(I32, ADDR));
+        DOC_RESET = handle(lookup, "cg_doc_reset", FunctionDescriptor.of(I32, ADDR));
+        DEBUG_WEIGHTS = handle(lookup, "cg_instance_debug_weights", FunctionDescriptor.of(I32, ADDR, I32, ADDR, I32));
     }
 
     private CendaAnimGraph() {

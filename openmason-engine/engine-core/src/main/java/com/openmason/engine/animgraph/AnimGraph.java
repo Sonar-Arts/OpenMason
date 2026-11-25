@@ -121,6 +121,20 @@ public final class AnimGraph implements AutoCloseable {
         this.targets = Collections.unmodifiableList(ts);
     }
 
+    /** Takes ownership of a compiled {@code cg_graph*} (from {@link AnimGraphDocument#compile()}). */
+    static AnimGraph adopt(MemorySegment handle) {
+        try {
+            return new AnimGraph(handle);
+        } catch (Throwable t) {
+            try {
+                CendaAnimGraph.GRAPH_DESTROY.invokeExact(handle);
+            } catch (Throwable ignored) {
+                // already failing
+            }
+            throw CendaAnimGraph.rethrow(t);
+        }
+    }
+
     /** Parses and compiles {@code .omanimgraph} JSON. */
     public static AnimGraph read(byte[] json) throws GraphFormatException {
         CendaAnimGraph.requireAvailable();

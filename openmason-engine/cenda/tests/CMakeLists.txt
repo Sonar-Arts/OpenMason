@@ -5,7 +5,7 @@ target_link_libraries(omformat_smoke PRIVATE cenda::omformat cenda_warnings)
 add_test(NAME omformat_smoke COMMAND omformat_smoke)
 
 if(CENDA_BUILD_KERNELS)
-    set(_kernel_tests kernels_smoke kernels_chunk lua_host flex_host audio_engine entity_world physics_world behavior_scheduler nav_world rig character characterize anim_clip anim_graph rig_modifiers locomotion retarget first_person appearance)
+    set(_kernel_tests kernels_smoke kernels_chunk lua_host flex_host audio_engine entity_world physics_world behavior_scheduler nav_world rig character characterize anim_clip anim_graph rig_modifiers locomotion retarget first_person appearance character_edit anim_graph_edit)
     foreach(_test IN LISTS _kernel_tests)
         add_executable(${_test} ${_test}_test.cpp)
         target_link_libraries(${_test} PRIVATE cenda_kernels cenda_warnings)
@@ -24,6 +24,8 @@ if(CENDA_BUILD_KERNELS)
 
     # The character test also builds hand-made archives with libomformat (unknown sections, future versions).
     target_link_libraries(character PRIVATE cenda::omformat)
+    target_compile_definitions(anim_graph_edit PRIVATE
+            CENDA_LOCOMOTION_GRAPH="${CMAKE_SOURCE_DIR}/../engine-core/src/test/resources/animgraph/humanoid_locomotion.omanimgraph")
     # anim_clip round-trips every clip of the Stonebreak fixture SBEs (skips them when the folder is absent).
     target_link_libraries(anim_clip PRIVATE cenda::omformat)
     target_compile_definitions(anim_clip PRIVATE

@@ -121,6 +121,26 @@ class WorkspaceDefaultLayoutTest {
     }
 
     @Test
+    void theCharacterLayoutDocksEveryPanel() {
+        Contributions<WorkspaceDescriptor> workspaces = WorkspaceFixtures.builtins();
+        com.openmason.main.systems.character.CharacterWorkspace character =
+                new com.openmason.main.systems.character.CharacterWorkspace(null, new StatusService(),
+                        new WorkspaceState(workspaces), new com.openmason.main.systems.character.CharacterSessions());
+        assertEquals(8, character.panelWindows().size());
+        assertDocksEveryPanel("Character", character.panelWindows(), character);
+    }
+
+    @Test
+    void theAnimationGraphLayoutDocksEveryPanel() {
+        Contributions<WorkspaceDescriptor> workspaces = WorkspaceFixtures.builtins();
+        com.openmason.main.systems.animgraph.AnimGraphWorkspace graph =
+                new com.openmason.main.systems.animgraph.AnimGraphWorkspace(null, new StatusService(),
+                        new WorkspaceState(workspaces), new com.openmason.main.systems.animgraph.AnimGraphSessions());
+        assertEquals(8, graph.panelWindows().size());
+        assertDocksEveryPanel("Animation Graph", graph.panelWindows(), graph);
+    }
+
+    @Test
     void theSceneLayoutDocksEveryPanel() {
         MainLayoutBuilder builder = new MainLayoutBuilder();
         assertDocksEveryPanel("Scene", MainLayoutBuilder.PANEL_WINDOWS, builder::build);

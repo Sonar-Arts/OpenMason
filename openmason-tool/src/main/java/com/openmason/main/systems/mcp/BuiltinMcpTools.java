@@ -113,9 +113,41 @@ public final class BuiltinMcpTools {
             new FxToolDefinitions(new FxDocumentService(McpSharedServices.of(c).writes()), new FxCaptureService(),
                     c.mapper()).registerAll(c.registry()));
 
+    // ── openmason.character ─────────────────────────────────────────────────
+
+    /** Characters (OM #163): .omchar characterization through the character open in the Character tab. */
+    public static final McpToolContribution CHARACTER = new McpToolContribution("character", c ->
+            new com.openmason.main.systems.character.mcp.CharacterToolDefinitions(
+                    new com.openmason.main.systems.character.mcp.CharacterEditingService(
+                            // The editor's registry holds the tab's session (the build context's own registry
+                            // only carries MCP services); tests may publish one in the build context instead.
+                            () -> {
+                                var editor = McpSharedServices.of(c).editor();
+                                var cls = com.openmason.main.systems.character.CharacterSessions.class;
+                                return (editor != null ? editor.registry().find(cls) : java.util.Optional.<
+                                        com.openmason.main.systems.character.CharacterSessions>empty())
+                                        .or(() -> c.services().find(cls)).orElse(null);
+                            },
+                            McpSharedServices.of(c).writes()),
+                    c.mapper()).registerAll(c.registry()));
+
+    /** Animation graphs (OM #164): .omanimgraph editing, preview and debugging through the Animation Graph tab. */
+    public static final McpToolContribution ANIMGRAPH = new McpToolContribution("animgraph", c ->
+            new com.openmason.main.systems.animgraph.mcp.AnimGraphToolDefinitions(
+                    new com.openmason.main.systems.animgraph.mcp.AnimGraphEditingService(
+                            () -> {
+                                var editor = McpSharedServices.of(c).editor();
+                                var cls = com.openmason.main.systems.animgraph.AnimGraphSessions.class;
+                                return (editor != null ? editor.registry().find(cls) : java.util.Optional.<
+                                        com.openmason.main.systems.animgraph.AnimGraphSessions>empty())
+                                        .or(() -> c.services().find(cls)).orElse(null);
+                            },
+                            McpSharedServices.of(c).writes()),
+                    c.mapper()).registerAll(c.registry()));
+
     /** Every built-in group, in the order the built-in plugins register them. */
     public static List<McpToolContribution> all() {
         return List.of(SAVE, PROJECTS, MODEL_FILES, MODEL, BONES, SKIN, ATTACHMENTS, VIEWPORT, SCENE, INSPECTION, KNOWLEDGE, META,
-                TEXTURE, FACE_TEXTURES, ANIMATION, UI, SCRIPTING, SCRIPT_LIBRARY, PARTICLES);
+                TEXTURE, FACE_TEXTURES, ANIMATION, UI, SCRIPTING, SCRIPT_LIBRARY, PARTICLES, CHARACTER, ANIMGRAPH);
     }
 }

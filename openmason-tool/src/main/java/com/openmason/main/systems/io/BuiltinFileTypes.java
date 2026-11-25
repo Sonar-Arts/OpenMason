@@ -46,6 +46,16 @@ public final class BuiltinFileTypes {
     public static final FileType OMFX = FileType.of("omfx", "Particle Library", ".omfx")
             .withSave("project", "Particles", "particles");
 
+    // ── openmason.character ─────────────────────────────────────────────────
+
+    /** Character definitions (OM #163, native .omchar), edited in the Character tab. */
+    public static final FileType OMCHAR = FileType.of("omchar", "Character", ".omchar")
+            .withSave("project", "Characters", "character");
+
+    /** Animation graphs (OM #157/#164, native .omanimgraph), edited in the Animation Graph tab. */
+    public static final FileType OMANIMGRAPH = FileType.of("omanimgraph", "Animation Graph", ".omanimgraph")
+            .withSave("project", "AnimGraphs", "graph");
+
     // ── openmason.ui ────────────────────────────────────────────────────────
 
     /** UI Editor source documents (#324); bare names land beside the convention tree {@code UI/}. */

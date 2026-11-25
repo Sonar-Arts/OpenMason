@@ -169,8 +169,9 @@ void test_format() {
     const std::string head = R"({"format": "omanimgraph", "version": "1.0", "slots": ["a"], "parameters": [{"name": "f", "type": "float"}, {"name": "b", "type": "bool"}], )";
     CHECK(refuse(head + R"("root": "x", "nodes": [{"id": "y", "type": "clip", "slot": "a"}]})") == CG_ERR_FORMAT);
     CHECK(refuse(head + R"("root": "s", "nodes": [{"id": "s", "type": "slot", "name": "m", "source": "s"}]})") == CG_ERR_FORMAT);
-    CHECK(refuse(head + R"("root": "b", "nodes": [{"id": "c", "type": "clip", "slot": "a"},
-        {"id": "b", "type": "blend1d", "param": "f", "samples": [{"node": "c", "value": 0}, {"node": "c", "value": 1}]}]})") == CG_ERR_FORMAT);
+    // 1.1 (#164): a node may feed several parents (a DAG); only cycles are refused.
+    cg_graph_destroy(graph(head + R"("root": "b", "nodes": [{"id": "c", "type": "clip", "slot": "a"},
+        {"id": "b", "type": "blend1d", "param": "f", "samples": [{"node": "c", "value": 0}, {"node": "c", "value": 1}]}]})"));
     CHECK(refuse(head + R"("root": "b", "nodes": [{"id": "c", "type": "clip", "slot": "a"},
         {"id": "b", "type": "blend1d", "param": "b", "samples": [{"node": "c", "value": 0}]}]})") == CG_ERR_FORMAT);
     CHECK(refuse(head + R"("root": "c", "nodes": [{"id": "c", "type": "clip", "slot": "nope"}]})") == CG_ERR_FORMAT);
@@ -737,9 +738,54 @@ void test_modifiers() {
 
 }  // namespace
 
+// #164: shared nodes (a DAG) are evaluated once per frame: one clip clock, influence summed over the uses.
+void test_shared_nodes() {
+    cr_rig* rig = make_rig();
+    cm_clip* clip = turn("spine", 0.f, 90.f, 1.f, true);
+    const std::string head = R"({"format": "omanimgraph", "version": "1.1", "slots": ["a"], "parameters": [{"name": "f", "type": "float"}], )";
+    cg_graph* shared = graph(head + R"("root": "b", "nodes": [{"id": "c", "type": "clip", "slot": "a"},
+        {"id": "b", "type": "blend1d", "param": "f", "samples": [{"node": "c", "value": 0}, {"node": "c", "value": 1}]}]})");
+    cg_graph* single = graph(head + R"("root": "c", "nodes": [{"id": "c", "type": "clip", "slot": "a"}]})");
+    // The same clip under a layer's base AND as its override layer (two different parents of one node).
+    cg_graph* layered = graph(head + R"("root": "l", "nodes": [{"id": "c", "type": "clip", "slot": "a"},
+        {"id": "m", "type": "blend1d", "param": "f", "samples": [{"node": "c", "value": 0}]},
+        {"id": "l", "type": "layer", "base": "m", "layers": [{"node": "c", "weight": 0.5}]}]})");
+    cg_instance* a = cg_instance_create(shared, rig, nullptr, nullptr);
+    cg_instance* b = cg_instance_create(single, rig, nullptr, nullptr);
+    cg_instance* l = cg_instance_create(layered, rig, nullptr, nullptr);
+    for (cg_instance* inst : {a, b, l}) CHECK(cg_instance_bind_slot(inst, 0, clip, nullptr) == CG_OK);
+    cg_instance_set_float(a, 0, 0.3f);
+    std::vector<float> pa(JOINTS * 9), pb(JOINTS * 9), pl(JOINTS * 9);
+    std::vector<cg_node_debug> dbg(2), dbl(3);
+    for (int f = 0; f < 50; ++f) {
+        const float dt = 1.f / 60.f + 0.001f * static_cast<float>(f % 3);
+        CHECK(cg_instance_evaluate(a, dt, nullptr, 0, nullptr, nullptr, nullptr, nullptr) == CG_OK);
+        CHECK(cg_instance_evaluate(b, dt, nullptr, 0, nullptr, nullptr, nullptr, nullptr) == CG_OK);
+        CHECK(cg_instance_evaluate(l, dt, nullptr, 0, nullptr, nullptr, nullptr, nullptr) == CG_OK);
+        cg_instance_local_pose(a, pa.data());
+        cg_instance_local_pose(b, pb.data());
+        cg_instance_local_pose(l, pl.data());
+        CHECK(std::memcmp(pa.data(), pb.data(), pa.size() * sizeof(float)) == 0);  // one clock, weights sum to 1
+        CHECK(std::memcmp(pl.data(), pb.data(), pl.size() * sizeof(float)) == 0);  // a layer of itself = itself
+        cg_instance_debug(a, dbg.data());
+        const int c = cg_graph_node_find(shared, "c");
+        CHECK(std::fabs(dbg[static_cast<size_t>(c)].influence - 1.f) < 1e-6f);
+        cg_instance_debug(l, dbl.data());
+        const int cl = cg_graph_node_find(layered, "c");
+        CHECK(std::fabs(dbl[static_cast<size_t>(cl)].influence - 1.f) < 1e-6f);  // 0.5 through the base + 0.5 layer
+    }
+    for (cg_instance* inst : {a, b, l}) cg_instance_destroy(inst);
+    cg_graph_destroy(shared);
+    cg_graph_destroy(single);
+    cg_graph_destroy(layered);
+    cm_clip_destroy(clip);
+    cr_rig_destroy(rig);
+}
+
 int main() {
     CHECK(cg_abi_version() == CG_ABI_VERSION);
     test_format();
+    test_shared_nodes();
     test_blend_spaces();
     test_state_machine();
     test_montages();

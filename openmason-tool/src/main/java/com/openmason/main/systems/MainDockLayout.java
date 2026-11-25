@@ -46,6 +46,12 @@ public final class MainDockLayout {
     /** Dockspace string id of the Particle Editor workspace. */
     public static final String PARTICLES_DOCKSPACE_ID = "OpenMasonParticleDockSpace";
 
+    /** Dockspace of the Character workspace tab (OM #163). */
+    public static final String CHARACTER_DOCKSPACE_ID = "OpenMasonCharacterDockSpace";
+
+    /** Dockspace of the Animation Graph workspace tab (OM #164). */
+    public static final String ANIMGRAPH_DOCKSPACE_ID = "OpenMasonAnimGraphDockSpace";
+
     private final WorkspaceState workspaceState;
     private final WorkspaceLayouts layouts;
     private final WorkspaceTabStrip tabStrip = new WorkspaceTabStrip();

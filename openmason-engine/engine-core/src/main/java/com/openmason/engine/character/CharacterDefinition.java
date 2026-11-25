@@ -937,6 +937,141 @@ public final class CharacterDefinition implements AutoCloseable {
         }
     }
 
+    // --- Editing (OpenMason #163, cenda/character_edit.h) ------------------------------------------
+
+    /** A standard socket and the role whose joint it rides. */
+    public record StandardSocket(String name, String role) {
+    }
+
+    /** What {@link #mirror} wrote, and its notes (INFO: done, WARNING: skipped). */
+    public record MirrorResult(int count, List<Issue> notes) {
+    }
+
+    public static final int MIRROR_ROLES = 1;
+    public static final int MIRROR_LIMITS = 1 << 1;
+    public static final int MIRROR_SOCKETS = 1 << 2;
+
+    /**
+     * The {@link CharacterOverlay}{@code .ROLE_*} state bits of every profile role (in profile order), from
+     * {@link #validate}; rig may be null (no geometry checks).
+     */
+    public int[] roleStates(Rig rig, CharacterProfile profile) {
+        Objects.requireNonNull(profile, "profile");
+        int n = profile.roles().size();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(CendaCharacter.I32, Math.max(1, n));
+            MemorySegment rigHandle = rig == null ? MemorySegment.NULL : rig.nativeHandle();
+            int rc = (int) CendaCharacter.ROLE_STATES.invokeExact(handle(), rigHandle, profile.handle(), out, n);
+            if (rc < 0) check(rc, "roleStates");
+            return out.asSlice(0, n * 4L).toArray(ValueLayout.JAVA_INT);
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+            Reference.reachabilityFence(profile);
+        }
+    }
+
+    /**
+     * {@link #fitReferencePose(Rig, CharacterProfile)} with a named profile pose ({@link CharacterProfile#poseNames()},
+     * e.g. "A"); null, "" or "T" = the roles' own directions.
+     *
+     * @return the number of joints turned
+     * @throws IllegalArgumentException for an unknown pose
+     */
+    public int fitReferencePose(Rig rig, CharacterProfile profile, String pose) {
+        Objects.requireNonNull(rig, "rig");
+        Objects.requireNonNull(profile, "profile");
+        try (Arena arena = Arena.ofConfined()) {
+            int rc = (int) CendaCharacter.FIT_NAMED.invokeExact(handle(), rig.nativeHandle(), profile.handle(), cstr(arena, pose));
+            if (rc < 0) check(rc, "fitReferencePose");
+            return rc;
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+            Reference.reachabilityFence(profile);
+        }
+    }
+
+    /** The reference pose as rig locals (9 floats per joint: pos, rot degrees, scale). */
+    public float[] referenceLocals(Rig rig) {
+        Objects.requireNonNull(rig, "rig");
+        int n = rig.joints().size();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(CendaCharacter.F32, Math.max(1, n * 9L));
+            check((int) CendaCharacter.REFERENCE_LOCALS.invokeExact(handle(), rig.nativeHandle(), out), "referenceLocals");
+            return out.asSlice(0, n * 36L).toArray(ValueLayout.JAVA_FLOAT);
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+        }
+    }
+
+    /**
+     * Copies one side onto the other by geometry (reflection through the body's midplane): roles, limits (axes
+     * reflected) and/or sockets named for the side ({@code MIRROR_*} bits).
+     *
+     * @param fromSide {@link CharacterProfile.Side#LEFT} or {@link CharacterProfile.Side#RIGHT}
+     * @throws IllegalStateException when roles are asked of a locked mapping
+     */
+    public MirrorResult mirror(Rig rig, CharacterProfile profile, CharacterProfile.Side fromSide, int what) {
+        Objects.requireNonNull(rig, "rig");
+        Objects.requireNonNull(profile, "profile");
+        int side = fromSide == CharacterProfile.Side.LEFT ? 1 : fromSide == CharacterProfile.Side.RIGHT ? 2 : 0;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment count = arena.allocate(CendaCharacter.I32);
+            MemorySegment r = (MemorySegment) CendaCharacter.MIRROR.invokeExact(handle(), rig.nativeHandle(), profile.handle(),
+                side, what, count);
+            if (r.equals(MemorySegment.NULL)) {
+                String why = CendaCharacter.lastError();
+                if (locked() && (what & MIRROR_ROLES) != 0) throw new IllegalStateException("mirror: " + why);
+                throw new IllegalArgumentException("mirror: " + why);
+            }
+            return new MirrorResult(count.get(CendaCharacter.I32, 0), takeReport(r, "cc_char_mirror"));
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+            Reference.reachabilityFence(profile);
+        }
+    }
+
+    /** The standard sockets ({@code grip_r}, {@code grip_l}, {@code head}, {@code eyes}, {@code back}). */
+    public static List<StandardSocket> standardSockets() {
+        CendaCharacter.requireAvailable();
+        try {
+            int n = (int) CendaCharacter.STD_SOCKET_COUNT.invokeExact();
+            List<StandardSocket> out = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                out.add(new StandardSocket(CendaCharacter.string((MemorySegment) CendaCharacter.STD_SOCKET_NAME.invokeExact(i)),
+                    CendaCharacter.string((MemorySegment) CendaCharacter.STD_SOCKET_ROLE.invokeExact(i))));
+            }
+            return List.copyOf(out);
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        }
+    }
+
+    /**
+     * Adds or replaces a standard socket at its default spot on its role's joint (grips mid-hand, eyes ahead of
+     * the head, back behind the chest).
+     *
+     * @throws IllegalArgumentException for an unknown name or an unmapped role
+     */
+    public void placeStandardSocket(Rig rig, String name) {
+        Objects.requireNonNull(rig, "rig");
+        try (Arena arena = Arena.ofConfined()) {
+            check((int) CendaCharacter.PLACE_STD_SOCKET.invokeExact(handle(), rig.nativeHandle(), cstr(arena, name)),
+                "placeStandardSocket");
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+        }
+    }
+
     /** Reads a report this call owns and destroys it. */
     private static List<Issue> takeReport(MemorySegment report, String what) throws Throwable {
         if (report.equals(MemorySegment.NULL)) throw new IllegalStateException(what + ": " + CendaCharacter.lastError());

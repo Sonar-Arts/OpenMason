@@ -1,0 +1,9 @@
+animgraph_apply
+animgraph_close
+animgraph_evaluate
+animgraph_get
+animgraph_new
+animgraph_open
+animgraph_preview
+animgraph_save
+animgraph_undo

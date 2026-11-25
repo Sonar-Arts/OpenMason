@@ -51,6 +51,8 @@ boundaries	openmason-engine/samples/core-consumer	com/openmason/samples/**/*Test
 
 # ---- tool ----
 particles	openmason-tool	com/openmason/main/systems/particles/**/*Test
+character-editor	openmason-tool	com/openmason/main/systems/character/**/*Test
+anim-graph-editor	openmason-tool	com/openmason/main/systems/animgraph/**/*Test
 mcp	openmason-tool	com/openmason/main/systems/mcp/**/*Test
 assets	openmason-tool	com/openmason/main/systems/assets/**/*Test
 tool-io	openmason-tool	com/openmason/main/systems/io/**/*Test

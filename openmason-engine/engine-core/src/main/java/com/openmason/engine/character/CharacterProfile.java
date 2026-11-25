@@ -233,4 +233,48 @@ public final class CharacterProfile implements AutoCloseable {
     private static String blankToNull(String s) {
         return s.isEmpty() ? null : s;
     }
+
+    // --- Editor data (.omprofile 1.1, OpenMason #163) ----------------------------------------------
+
+    /** Body-diagram slots, 2 floats per role (x right, y down, 0..1): authored, else laid out from the directions. */
+    public float[] diagram() {
+        int n = roles().size();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(ValueLayout.JAVA_FLOAT, Math.max(2, n * 2L));
+            int rc = (int) CendaCharacter.PROFILE_DIAGRAM.invokeExact(handle(), out, n * 2);
+            if (rc < 0) throw new IllegalStateException("diagram: " + CendaCharacter.lastError());
+            return out.asSlice(0, n * 8L).toArray(ValueLayout.JAVA_FLOAT);
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /** True when role index has an authored diagram slot. */
+    public boolean hasDiagram(int index) {
+        try {
+            return (int) CendaCharacter.PROFILE_HAS_DIAGRAM.invokeExact(handle(), index) != 0;
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /** The named reference poses ({@code "A"} for the humanoid); the roles' own directions are the default ("T"). */
+    public List<String> poseNames() {
+        try {
+            int n = (int) CendaCharacter.PROFILE_POSE_COUNT.invokeExact(handle());
+            List<String> out = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                out.add(CendaCharacter.string((MemorySegment) CendaCharacter.PROFILE_POSE_NAME.invokeExact(handle(), i)));
+            }
+            return List.copyOf(out);
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
 }

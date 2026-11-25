@@ -1,9 +1,9 @@
 {
   "format": "omprofile",
-  "version": "1.0",
+  "version": "1.1",
   "id": "humanoid",
   "name": "Humanoid",
-  "description": "Two-legged, two-armed character (Unity Humanoid / Godot SkeletonProfileHumanoid / HumanIK role set). Frame: +Y up, faces -Z, the character's left is -X. Reference pose: T-pose.",
+  "description": "Two-legged, two-armed character (Unity Humanoid / Godot SkeletonProfileHumanoid / HumanIK role set). Frame: +Y up, faces -Z, the character's left is -X. Reference pose: T-pose (the roles' directions); pose \"A\" lowers the arms 45 degrees.",
   "facing": {
     "roles": [
       "foot_l",
@@ -51,6 +51,10 @@
           "root",
           0.4
         ]
+      ],
+      "diagram": [
+        0.5,
+        0.5
       ]
     },
     {
@@ -98,6 +102,10 @@
           "belly",
           0.6
         ]
+      ],
+      "diagram": [
+        0.5,
+        0.43
       ]
     },
     {
@@ -136,6 +144,10 @@
           "rib cage",
           0.9
         ]
+      ],
+      "diagram": [
+        0.5,
+        0.36
       ]
     },
     {
@@ -169,6 +181,10 @@
           "spine 3",
           0.8
         ]
+      ],
+      "diagram": [
+        0.5,
+        0.3
       ]
     },
     {
@@ -193,6 +209,10 @@
           "neck 1",
           0.9
         ]
+      ],
+      "diagram": [
+        0.5,
+        0.215
       ]
     },
     {
@@ -214,6 +234,10 @@
           "skull",
           0.9
         ]
+      ],
+      "diagram": [
+        0.5,
+        0.13
       ]
     },
     {
@@ -234,6 +258,10 @@
           "mandible",
           0.9
         ]
+      ],
+      "diagram": [
+        0.5,
+        0.175
       ]
     },
     {
@@ -251,6 +279,10 @@
           "eyeball",
           1
         ]
+      ],
+      "diagram": [
+        0.535,
+        0.11
       ]
     },
     {
@@ -268,6 +300,10 @@
           "eyeball",
           1
         ]
+      ],
+      "diagram": [
+        0.465,
+        0.11
       ]
     },
     {
@@ -305,6 +341,10 @@
           "collar bone",
           1
         ]
+      ],
+      "diagram": [
+        0.565,
+        0.275
       ]
     },
     {
@@ -354,6 +394,10 @@
           "shoulder",
           0.5
         ]
+      ],
+      "diagram": [
+        0.63,
+        0.275
       ]
     },
     {
@@ -395,6 +439,10 @@
           "radius",
           0.7
         ]
+      ],
+      "diagram": [
+        0.735,
+        0.275
       ]
     },
     {
@@ -427,6 +475,10 @@
           "palm",
           0.7
         ]
+      ],
+      "diagram": [
+        0.84,
+        0.275
       ]
     },
     {
@@ -448,6 +500,10 @@
           "arm twist",
           0.9
         ]
+      ],
+      "diagram": [
+        0.68,
+        0.3
       ]
     },
     {
@@ -469,6 +525,10 @@
           "forearm twist",
           1
         ]
+      ],
+      "diagram": [
+        0.785,
+        0.3
       ]
     },
     {
@@ -506,6 +566,10 @@
           "collar bone",
           1
         ]
+      ],
+      "diagram": [
+        0.435,
+        0.275
       ]
     },
     {
@@ -555,6 +619,10 @@
           "shoulder",
           0.5
         ]
+      ],
+      "diagram": [
+        0.37,
+        0.275
       ]
     },
     {
@@ -596,6 +664,10 @@
           "radius",
           0.7
         ]
+      ],
+      "diagram": [
+        0.265,
+        0.275
       ]
     },
     {
@@ -628,6 +700,10 @@
           "palm",
           0.7
         ]
+      ],
+      "diagram": [
+        0.16,
+        0.275
       ]
     },
     {
@@ -649,6 +725,10 @@
           "arm twist",
           0.9
         ]
+      ],
+      "diagram": [
+        0.32,
+        0.3
       ]
     },
     {
@@ -670,6 +750,10 @@
           "forearm twist",
           1
         ]
+      ],
+      "diagram": [
+        0.215,
+        0.3
       ]
     },
     {
@@ -719,6 +803,10 @@
           "hip",
           0.7
         ]
+      ],
+      "diagram": [
+        0.55,
+        0.56
       ]
     },
     {
@@ -764,6 +852,10 @@
           "leg",
           0.5
         ]
+      ],
+      "diagram": [
+        0.555,
+        0.72
       ]
     },
     {
@@ -781,6 +873,10 @@
           "ankle",
           0.9
         ]
+      ],
+      "diagram": [
+        0.56,
+        0.89
       ]
     },
     {
@@ -806,6 +902,10 @@
           "ball",
           0.8
         ]
+      ],
+      "diagram": [
+        0.585,
+        0.95
       ]
     },
     {
@@ -827,6 +927,10 @@
           "upleg twist",
           1
         ]
+      ],
+      "diagram": [
+        0.585,
+        0.635
       ]
     },
     {
@@ -848,6 +952,10 @@
           "shin twist",
           1
         ]
+      ],
+      "diagram": [
+        0.59,
+        0.8
       ]
     },
     {
@@ -897,6 +1005,10 @@
           "hip",
           0.7
         ]
+      ],
+      "diagram": [
+        0.45,
+        0.56
       ]
     },
     {
@@ -942,6 +1054,10 @@
           "leg",
           0.5
         ]
+      ],
+      "diagram": [
+        0.445,
+        0.72
       ]
     },
     {
@@ -959,6 +1075,10 @@
           "ankle",
           0.9
         ]
+      ],
+      "diagram": [
+        0.44,
+        0.89
       ]
     },
     {
@@ -984,6 +1104,10 @@
           "ball",
           0.8
         ]
+      ],
+      "diagram": [
+        0.415,
+        0.95
       ]
     },
     {
@@ -1005,6 +1129,10 @@
           "upleg twist",
           1
         ]
+      ],
+      "diagram": [
+        0.415,
+        0.635
       ]
     },
     {
@@ -1026,6 +1154,10 @@
           "shin twist",
           1
         ]
+      ],
+      "diagram": [
+        0.41,
+        0.8
       ]
     },
     {
@@ -1048,7 +1180,11 @@
           "thumb"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.875,
+        0.235
+      ]
     },
     {
       "name": "thumb_intermediate_l",
@@ -1070,7 +1206,11 @@
           "thumb"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.905,
+        0.219
+      ]
     },
     {
       "name": "thumb_distal_l",
@@ -1089,7 +1229,11 @@
           "thumb"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.935,
+        0.203
+      ]
     },
     {
       "name": "index_proximal_l",
@@ -1112,7 +1256,11 @@
           "pointer"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.875,
+        0.26
+      ]
     },
     {
       "name": "index_intermediate_l",
@@ -1135,7 +1283,11 @@
           "pointer"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.905,
+        0.26
+      ]
     },
     {
       "name": "index_distal_l",
@@ -1155,7 +1307,11 @@
           "pointer"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.935,
+        0.26
+      ]
     },
     {
       "name": "middle_proximal_l",
@@ -1177,7 +1333,11 @@
           "middle"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.875,
+        0.28
+      ]
     },
     {
       "name": "middle_intermediate_l",
@@ -1199,7 +1359,11 @@
           "middle"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.905,
+        0.28
+      ]
     },
     {
       "name": "middle_distal_l",
@@ -1218,7 +1382,11 @@
           "middle"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.935,
+        0.28
+      ]
     },
     {
       "name": "ring_proximal_l",
@@ -1240,7 +1408,11 @@
           "ring"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.875,
+        0.3
+      ]
     },
     {
       "name": "ring_intermediate_l",
@@ -1262,7 +1434,11 @@
           "ring"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.905,
+        0.3
+      ]
     },
     {
       "name": "ring_distal_l",
@@ -1281,7 +1457,11 @@
           "ring"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.935,
+        0.3
+      ]
     },
     {
       "name": "little_proximal_l",
@@ -1305,7 +1485,11 @@
           "pinkie"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.875,
+        0.32
+      ]
     },
     {
       "name": "little_intermediate_l",
@@ -1329,7 +1513,11 @@
           "pinkie"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.905,
+        0.32
+      ]
     },
     {
       "name": "little_distal_l",
@@ -1350,7 +1538,11 @@
           "pinkie"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.935,
+        0.32
+      ]
     },
     {
       "name": "thumb_proximal_r",
@@ -1372,7 +1564,11 @@
           "thumb"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.125,
+        0.235
+      ]
     },
     {
       "name": "thumb_intermediate_r",
@@ -1394,7 +1590,11 @@
           "thumb"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.095,
+        0.219
+      ]
     },
     {
       "name": "thumb_distal_r",
@@ -1413,7 +1613,11 @@
           "thumb"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.065,
+        0.203
+      ]
     },
     {
       "name": "index_proximal_r",
@@ -1436,7 +1640,11 @@
           "pointer"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.125,
+        0.26
+      ]
     },
     {
       "name": "index_intermediate_r",
@@ -1459,7 +1667,11 @@
           "pointer"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.095,
+        0.26
+      ]
     },
     {
       "name": "index_distal_r",
@@ -1479,7 +1691,11 @@
           "pointer"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.065,
+        0.26
+      ]
     },
     {
       "name": "middle_proximal_r",
@@ -1501,7 +1717,11 @@
           "middle"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.125,
+        0.28
+      ]
     },
     {
       "name": "middle_intermediate_r",
@@ -1523,7 +1743,11 @@
           "middle"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.095,
+        0.28
+      ]
     },
     {
       "name": "middle_distal_r",
@@ -1542,7 +1766,11 @@
           "middle"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.065,
+        0.28
+      ]
     },
     {
       "name": "ring_proximal_r",
@@ -1564,7 +1792,11 @@
           "ring"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.125,
+        0.3
+      ]
     },
     {
       "name": "ring_intermediate_r",
@@ -1586,7 +1818,11 @@
           "ring"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.095,
+        0.3
+      ]
     },
     {
       "name": "ring_distal_r",
@@ -1605,7 +1841,11 @@
           "ring"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.065,
+        0.3
+      ]
     },
     {
       "name": "little_proximal_r",
@@ -1629,7 +1869,11 @@
           "pinkie"
         ],
         "position": 0
-      }
+      },
+      "diagram": [
+        0.125,
+        0.32
+      ]
     },
     {
       "name": "little_intermediate_r",
@@ -1653,7 +1897,11 @@
           "pinkie"
         ],
         "position": 1
-      }
+      },
+      "diagram": [
+        0.095,
+        0.32
+      ]
     },
     {
       "name": "little_distal_r",
@@ -1674,7 +1922,11 @@
           "pinkie"
         ],
         "position": 2
-      }
+      },
+      "diagram": [
+        0.065,
+        0.32
+      ]
     }
   ],
   "chains": [
@@ -1901,6 +2153,193 @@
     {
       "name": "foot_r",
       "role": "foot_r"
+    }
+  ],
+  "poses": [
+    {
+      "name": "A",
+      "directions": {
+        "upper_arm_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "lower_arm_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "hand_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "upper_arm_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "lower_arm_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "hand_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "thumb_proximal_l": [
+          -0.5,
+          -0.5,
+          -0.7071067811865476
+        ],
+        "thumb_intermediate_l": [
+          -0.5,
+          -0.5,
+          -0.7071067811865476
+        ],
+        "thumb_distal_l": [
+          -0.5,
+          -0.5,
+          -0.7071067811865476
+        ],
+        "index_proximal_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "index_intermediate_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "index_distal_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "middle_proximal_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "middle_intermediate_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "middle_distal_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "ring_proximal_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "ring_intermediate_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "ring_distal_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "little_proximal_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "little_intermediate_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "little_distal_l": [
+          -0.7071068,
+          -0.7071068,
+          0
+        ],
+        "thumb_proximal_r": [
+          0.5,
+          -0.5,
+          -0.7071067811865476
+        ],
+        "thumb_intermediate_r": [
+          0.5,
+          -0.5,
+          -0.7071067811865476
+        ],
+        "thumb_distal_r": [
+          0.5,
+          -0.5,
+          -0.7071067811865476
+        ],
+        "index_proximal_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "index_intermediate_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "index_distal_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "middle_proximal_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "middle_intermediate_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "middle_distal_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "ring_proximal_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "ring_intermediate_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "ring_distal_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "little_proximal_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "little_intermediate_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ],
+        "little_distal_r": [
+          0.7071068,
+          -0.7071068,
+          0
+        ]
+      }
     }
   ]
 }

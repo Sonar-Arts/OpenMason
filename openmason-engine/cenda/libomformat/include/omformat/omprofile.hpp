@@ -15,6 +15,12 @@
 //                 chains; `bend` = the way the limb's middle joint bends in the profile frame (knees -Z, elbows +Z),
 //                 used by IK retargeting when the source limb is straight
 //   ikGoals       (1.x, optional; #160) [ {name, role} ] the IK goals chains end in
+//   poses         (1.1, optional; #163) [ {name, directions: {"<role>": [x,y,z], ...}} ] named reference poses
+//                 ("A"): per-role direction overrides on top of the roles' own `direction` (which is the default
+//                 pose, "T" for the humanoid); cc_char_fit_reference_pose_named fits one
+//   roles[].diagram  (1.1, optional; #163) [x, y] the role's slot on the editor's body diagram, 0..1, x to the
+//                 viewer's right, y down (the character faces the viewer); roles without one are laid out
+//                 from the directions
 //
 // Frame of every profile: +Y up, the character faces -Z, its own left is -X (a model that faces another way
 // is mapped through its .omchar `facing`). `direction` is the role's direction in the reference pose: from
@@ -34,7 +40,7 @@
 namespace cenda::omformat::omprofile {
 
 inline constexpr int kVersionMajor = 1;
-inline constexpr int kVersionMinor = 0;
+inline constexpr int kVersionMinor = 1;
 
 class version_error final : public std::runtime_error {
 public:
@@ -65,7 +71,20 @@ struct Role {
     float direction[3]{0.f, 0.f, 0.f};  // unit length when has_direction
     std::vector<Alias> match;
     std::optional<ChainRule> chain;
+    bool has_diagram = false;
+    float diagram[2]{0.f, 0.f};  // body-diagram slot (1.1)
 };
+
+// A named reference pose (1.1, #163): direction overrides by role (unit length, profile frame).
+struct PoseDirection {
+    std::string role;
+    float direction[3]{0.f, 0.f, 0.f};
+};
+
+struct NamedPose {
+    std::string name;
+    std::vector<PoseDirection> directions;
+}; 
 
 struct Facing {
     std::vector<std::string> roles;
@@ -97,9 +116,12 @@ struct Profile {
     std::vector<Role> roles;
     std::vector<RetargetChain> chains;
     std::vector<IkGoal> ik_goals;
+    std::vector<NamedPose> poses;
 
     // Index of the role with this name, -1 when none.
     [[nodiscard]] int find(std::string_view role) const;
+    // Index of the named pose, -1 when none.
+    [[nodiscard]] int find_pose(std::string_view pose_name) const;
 };
 
 // Parses and validates (unique names, parents/mirrors/toward/chain/facing refer to roles, parents listed

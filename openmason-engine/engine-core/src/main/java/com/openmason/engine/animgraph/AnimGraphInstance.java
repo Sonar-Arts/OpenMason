@@ -695,6 +695,26 @@ public final class AnimGraphInstance implements AutoCloseable {
         return out;
     }
 
+    /**
+     * The weight of each input of a node in the last evaluate (#164 debugger): blend-space samples, state-machine
+     * states (conduits left out), or for a layer node the base's share then each layer's weight.
+     *
+     * @throws IllegalArgumentException for a node without weighted inputs (a clip)
+     */
+    public float[] debugWeights(int node) {
+        try (Arena arena = Arena.ofConfined()) {
+            int n = (int) CendaAnimGraph.DEBUG_WEIGHTS.invokeExact(handle(), node, MemorySegment.NULL, 0);
+            if (n < 0) throw new IllegalArgumentException("debugWeights: " + CendaAnimGraph.lastError());
+            MemorySegment out = arena.allocate(CendaAnimGraph.F32, Math.max(1, n));
+            int got = (int) CendaAnimGraph.DEBUG_WEIGHTS.invokeExact(handle(), node, out, n);
+            return out.asSlice(0, 4L * Math.min(n, got)).toArray(CendaAnimGraph.F32);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        }
+    }
+
     /** One record per graph node. */
     public List<NodeDebug> debug() {
         int n = graph.nodes().size();

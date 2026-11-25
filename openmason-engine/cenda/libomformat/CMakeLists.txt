@@ -61,6 +61,7 @@ add_library(omformat STATIC
         src/omprofile.cpp
         src/omanim.cpp
         src/omanimgraph.cpp
+        src/omanimgraph_edit.cpp
         src/omlook.cpp
         src/omappearance.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/builtin_profiles.cpp)

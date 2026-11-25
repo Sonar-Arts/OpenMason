@@ -67,8 +67,9 @@
 //                     frame) / "socket:<s>" (a .omchar socket).
 //   <other keys>      unknown top-level sections, kept verbatim
 //
-// The nodes form a TREE under `root`: every node is used by at most one parent and never by itself, the
-// root by none. Ids, parameter, slot, mask and state names are unique within their kind.
+// The nodes form a DAG under `root` (1.1, #164; 1.0 required a tree): a node may feed several parents (or one
+// parent twice) and is then evaluated ONCE per frame - one clip clock, influence summed over its uses, like
+// Unreal's cached poses / Godot's blend trees; never itself, no cycles, the root used by none. Ids, parameter, slot, mask and state names are unique within their kind.
 
 #include "omformat/zip_archive.hpp"
 
@@ -80,7 +81,7 @@
 namespace cenda::omformat::omanimgraph {
 
 inline constexpr int kVersionMajor = 1;
-inline constexpr int kVersionMinor = 0;
+inline constexpr int kVersionMinor = 1;
 
 class version_error final : public std::runtime_error {
 public:
@@ -302,5 +303,13 @@ void validate(const Graph& graph);
 
 // Serializes (pretty JSON, deterministic; floats in single precision). read(write(g)) == g.
 std::string write(const Graph& graph);
+
+// Editing (#164): a DRAFT may miss required members and have empty lists (malformed values still fail);
+// write_draft skips validation, read_draft(write_draft(g)) == g. validate throws the first problem.
+Graph read_draft(std::string_view json);
+std::string write_draft(const Graph& graph);
+void validate(const Graph& graph);
+// The node ids a node uses, in input order (blend samples, states, layer base then layers, slot source).
+std::vector<std::string> node_children(const Node& node);
 
 }  // namespace cenda::omformat::omanimgraph
