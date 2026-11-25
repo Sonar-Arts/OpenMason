@@ -2,12 +2,12 @@ package com.openmason.engine.rendering.postfx;
 
 /**
  * A screen-space effect executed by {@link PostProcessingPipeline} after the scene has been
- * rendered and blitted to the default framebuffer.
+ * rendered, before it is tone mapped.
  *
- * <p>Effects composite their result directly onto the currently bound output framebuffer
- * (typically additively). They may bind their own intermediate {@link RenderTarget}s during
- * {@code apply()}, but must leave the default framebuffer bound with the full window viewport
- * when they return.</p>
+ * <p>Effects composite their result onto the output framebuffer bound when {@code apply()} is
+ * called: the HDR scene target (typically additively, so the result is tone mapped with the
+ * scene). They may bind their own intermediate {@link RenderTarget}s during {@code apply()}, but
+ * must rebind that output framebuffer with the full output viewport when they return.</p>
  */
 public interface PostProcessingEffect {
 
@@ -26,7 +26,8 @@ public interface PostProcessingEffect {
     /**
      * Runs the effect.
      *
-     * @param sceneColorTexture color texture of the rendered scene
+     * @param sceneColorTexture color texture of the rendered scene: the output framebuffer's own
+     *                          attachment, so it must not be sampled while drawing into that output
      * @param sceneDepthTexture depth texture of the rendered scene (0 if unavailable)
      * @param outputWidth       width of the output framebuffer
      * @param outputHeight      height of the output framebuffer

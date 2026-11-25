@@ -10,7 +10,7 @@ import static org.lwjgl.opengl.GL30.*;
 
 /**
  * Offscreen framebuffer with a color texture (RGBA8 unless another internal format is
- * given), an optional second color texture (a pass that writes two outputs) and an
+ * given, e.g. {@code GL_R11F_G11F_B10F} for an HDR scene), an optional second color texture (a pass that writes two outputs) and an
  * optional depth texture.
  *
  * <p>The depth attachment is a texture (not a renderbuffer) so post-processing passes can
@@ -65,7 +65,9 @@ public class RenderTarget {
 
         colorTexture = glGenTextures();
         glBindTexture(GL_TEXTURE_2D, colorTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, colorInternalFormat, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, (ByteBuffer) null);
+        glTexImage2D(GL_TEXTURE_2D, 0, colorInternalFormat, w, h, 0,
+                isPackedRgb(colorInternalFormat) ? GL_RGB : GL_RGBA,
+                isFloat(colorInternalFormat) ? GL_FLOAT : GL_UNSIGNED_BYTE, (ByteBuffer) null);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -107,6 +109,17 @@ public class RenderTarget {
 
         glBindTexture(GL_TEXTURE_2D, 0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    /** Whether {@code internalFormat} stores floats (allocated with a {@code GL_FLOAT} upload type). */
+    private static boolean isFloat(int internalFormat) {
+        return internalFormat == GL_R11F_G11F_B10F || internalFormat == GL_RGBA16F
+                || internalFormat == GL_RGB16F || internalFormat == GL_RGBA32F || internalFormat == GL_R32F;
+    }
+
+    /** Whether {@code internalFormat} has no alpha channel. */
+    private static boolean isPackedRgb(int internalFormat) {
+        return internalFormat == GL_R11F_G11F_B10F || internalFormat == GL_RGB16F;
     }
 
     /**
