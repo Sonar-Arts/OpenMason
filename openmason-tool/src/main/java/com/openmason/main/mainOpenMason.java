@@ -347,6 +347,8 @@ public class mainOpenMason {
         }
         registries.services().put(com.openmason.main.plugins.PluginManager.class, pluginManager);
         registries.services().put(com.openmason.main.plugins.EditorRegistries.class, registries);
+        // The hub's create/open flows for non-UI callers (the project_* MCP tools).
+        registries.services().put(com.openmason.main.systems.project.ProjectSessions.class, new AppProjectSessions());
         var keybinds = com.openmason.main.systems.keybinds.KeybindRegistry.getInstance();
         registries.forwardCommandsTo(keybinds);
         if (mainInterface.getViewport3D() != null) {
@@ -600,12 +602,13 @@ public class mainOpenMason {
      * editor on the fresh project. A template's starter models are written beside
      * the .omp and its open-on-create model is loaded into the editor.
      */
-    private void createNewProjectFile(String name, String directory, ProjectTemplate template, String targetId) {
+    private java.nio.file.Path createNewProjectFile(String name, String directory, ProjectTemplate template,
+                                                    String targetId) {
         String safeName = (name == null || name.isBlank()) ? "Untitled" : name.trim();
         if (directory == null || directory.isBlank()) {
             // No directory chosen — just open a fresh (unsaved) editor session.
             transitionToMainInterface();
-            return;
+            return null;
         }
 
         String fileName = safeName.replaceAll("[\\\\/:*?\"<>|]", "_") + ".omp";
@@ -631,6 +634,97 @@ public class mainOpenMason {
             mainInterface.getModelOperations().loadOMOModel(openModel.toString());
         }
         logger.info("Created new project '{}' at {}", safeName, path);
+        return saved ? java.nio.file.Path.of(path) : null;
+    }
+
+    /** {@link com.openmason.main.systems.project.ProjectSessions} over the hub's own create/open flows. */
+    private final class AppProjectSessions implements com.openmason.main.systems.project.ProjectSessions {
+
+        @Override
+        public java.nio.file.Path projectsBaseFolder() {
+            return omConfig.getProjectsBaseFolder();
+        }
+
+        @Override
+        public boolean onHub() {
+            return showHomeScreen;
+        }
+
+        @Override
+        public java.util.List<TemplateInfo> templates() {
+            java.util.List<TemplateInfo> out = new java.util.ArrayList<>();
+            for (ProjectTemplate t : allTemplates()) {
+                out.add(new TemplateInfo(t.getId(), t.getName(), t.getDescription(), t.getCategory(), t.getTargetId()));
+            }
+            return out;
+        }
+
+        @Override
+        public java.util.List<ProjectRef> recentProjects() {
+            java.util.List<ProjectRef> out = new java.util.ArrayList<>();
+            if (projectHubScreen == null) return out;
+            for (RecentProject p : projectHubScreen.getRecentProjectsService().getRecentProjects()) {
+                out.add(new ProjectRef(p.getName(), p.getPath(),
+                        p.getLastOpened() == null ? null : p.getLastOpened().toString()));
+            }
+            return out;
+        }
+
+        @Override
+        public java.util.List<ProjectRef> projectsInBaseFolder() {
+            java.util.List<ProjectRef> out = new java.util.ArrayList<>();
+            if (projectHubScreen == null) return out;
+            var scan = projectHubScreen.getProjectScanService();
+            scan.invalidate();
+            for (var p : scan.getProjects()) {
+                out.add(new ProjectRef(p.displayName(), p.ompPath().toString(),
+                        p.lastModified() == null ? null : p.lastModified().toString()));
+            }
+            return out;
+        }
+
+        @Override
+        public java.nio.file.Path createProject(String name, java.nio.file.Path directory, String templateId,
+                                                String targetId) {
+            ProjectTemplate template = null;
+            if (templateId != null) {
+                for (ProjectTemplate t : allTemplates()) {
+                    if (templateId.equals(t.getId())) {
+                        template = t;
+                        break;
+                    }
+                }
+                if (template == null) {
+                    throw new IllegalArgumentException("unknown_template: " + templateId);
+                }
+            }
+            java.nio.file.Path omp = createNewProjectFile(name, directory.toString(),
+                    template != null ? template
+                            : com.openmason.main.systems.menus.mainHub.services.TemplateService.blankTemplate(),
+                    targetId);
+            if (projectHubScreen != null) projectHubScreen.getProjectScanService().invalidate();
+            return omp;
+        }
+
+        @Override
+        public boolean openProject(java.nio.file.Path ompPath) {
+            String path = ompPath.toString();
+            transitionToMainInterface();
+            mainInterface.openProjectFromHub(path);
+            var projects = mainInterface.getServices()
+                    .find(com.openmason.main.systems.project.ProjectService.class).orElse(null);
+            boolean ok = projects != null && projects.hasCurrentProject()
+                    && path.equals(projects.getCurrentProjectPath());
+            if (ok && projectHubScreen != null) {
+                projectHubScreen.getRecentProjectsService().addProject(projects.getCurrentProjectName(), path);
+            }
+            return ok;
+        }
+
+        private java.util.List<ProjectTemplate> allTemplates() {
+            return projectHubScreen != null ? projectHubScreen.getTemplateService().getAllTemplates()
+                    : java.util.List.of();
+        }
     }
 
     /**

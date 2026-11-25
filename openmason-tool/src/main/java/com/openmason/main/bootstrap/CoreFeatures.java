@@ -139,12 +139,12 @@ public final class CoreFeatures {
                     .openScene(path.toString(), dir == null ? null : Path.of(dir));
         }));
 
-        for (var tools : List.of(BuiltinMcpTools.SAVE, BuiltinMcpTools.MODEL_FILES, BuiltinMcpTools.MODEL,
+        for (var tools : List.of(BuiltinMcpTools.SAVE, BuiltinMcpTools.PROJECTS, BuiltinMcpTools.MODEL_FILES, BuiltinMcpTools.MODEL,
                 BuiltinMcpTools.BONES, BuiltinMcpTools.SKIN, BuiltinMcpTools.ATTACHMENTS, BuiltinMcpTools.VIEWPORT, BuiltinMcpTools.SCENE,
                 BuiltinMcpTools.INSPECTION, BuiltinMcpTools.KNOWLEDGE, BuiltinMcpTools.META)) {
             context.mcpTools().register(tools);
         }
-        for (String topic : List.of("overview", "parts", "face_textures", "bones", "skinning", "attachments", "recipes",
+        for (String topic : List.of("overview", "projects", "parts", "face_textures", "bones", "skinning", "attachments", "recipes",
                 "saving")) {
             context.guideTopics().register(BuiltinKnowledge.topic(topic));
         }

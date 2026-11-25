@@ -18,6 +18,7 @@ networking	openmason-engine/engine-voxel	com/openmason/engine/net/**/*Test,com/o
 mesh-editing	openmason-engine/engine-modeling	com/openmason/engine/modeling/**/*Test,!com/openmason/engine/modeling/boundary/**/*Test
 mesh-editing	openmason-engine/engine-core	com/openmason/engine/rendering/model/*Test
 model-draw	openmason-engine/engine-core	com/openmason/engine/rendering/model/draw/**/*Test
+rig	openmason-engine/engine-core	com/openmason/engine/rig/**/*Test
 viewer	openmason-engine/engine-modeling	com/openmason/engine/rendering/viewer/**/*Test
 cco	openmason-engine/engine-voxel	com/openmason/engine/voxel/cco/**/*Test
 mms	openmason-engine/engine-voxel	com/openmason/engine/voxel/mms/**/*Test

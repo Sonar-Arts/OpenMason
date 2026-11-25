@@ -28,6 +28,11 @@ public final class BuiltinMcpTools {
     public static final McpToolContribution MODEL_FILES = new McpToolContribution("core.model-files",
             c -> new ModelFileToolDefinitions(McpSharedServices.of(c).modelFiles(), c.mapper()).registerAll(c.registry()));
 
+    /** The Project Hub's create/open flows (project_info / _list / _create / _open). */
+    public static final McpToolContribution PROJECTS = new McpToolContribution("core.projects",
+            c -> new ProjectToolDefinitions(new ProjectSessionService(McpSharedServices.of(c).editor()), c.mapper())
+                    .registerAll(c.registry()));
+
     public static final McpToolContribution MODEL = new McpToolContribution("core.model",
             c -> new OpenMasonToolDefinitions(McpSharedServices.of(c).model(), c.mapper()).registerAll(c.registry()));
 
@@ -110,7 +115,7 @@ public final class BuiltinMcpTools {
 
     /** Every built-in group, in the order the built-in plugins register them. */
     public static List<McpToolContribution> all() {
-        return List.of(SAVE, MODEL_FILES, MODEL, BONES, SKIN, ATTACHMENTS, VIEWPORT, SCENE, INSPECTION, KNOWLEDGE, META,
+        return List.of(SAVE, PROJECTS, MODEL_FILES, MODEL, BONES, SKIN, ATTACHMENTS, VIEWPORT, SCENE, INSPECTION, KNOWLEDGE, META,
                 TEXTURE, FACE_TEXTURES, ANIMATION, UI, SCRIPTING, SCRIPT_LIBRARY, PARTICLES);
     }
 }

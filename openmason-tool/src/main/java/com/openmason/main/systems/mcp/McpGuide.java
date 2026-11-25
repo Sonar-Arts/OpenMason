@@ -16,7 +16,7 @@ public final class McpGuide {
 
     /** The built-in topics, in the order the built-in plugins register them. */
     public static final List<String> BUILTIN_TOPICS = List.of(
-            "overview", "parts", "face_textures", "bones", "skinning", "attachments",
+            "overview", "projects", "parts", "face_textures", "bones", "skinning", "attachments",
             "animation", "scripting", "texture_editor", "recipes", "saving", "ui_editor", "particles");
 
     private final Map<String, GuideTopic> topics = new LinkedHashMap<>();

@@ -263,6 +263,11 @@ public class ProjectHubScreen {
         return recentProjectsService;
     }
 
+    /** The projects-base-folder scan behind the hub's project grid. */
+    public ProjectScanService getProjectScanService() {
+        return projectScanService;
+    }
+
     public void setOnPreferencesClicked(Runnable callback) {
         sidebarNav.setOnPreferencesClicked(callback);
     }
