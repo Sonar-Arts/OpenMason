@@ -86,7 +86,8 @@ std::vector<std::byte> write_zip(const std::vector<ZipEntry>& entries) {
     }
     std::vector<std::byte> out(size);
     if (size > 0) std::memcpy(out.data(), buffer, size);
-    // mz_zip_writer_end frees the heap buffer.
+    // finalize_heap_archive hands the buffer to the caller (it clears the state's pointer): free it here.
+    zip.m_pFree(zip.m_pAlloc_opaque, buffer);
     return out;
 }
 

@@ -7,7 +7,11 @@ import com.openmason.engine.rig.Rig;
 import org.joml.Matrix4f;
 
 import java.lang.foreign.Arena;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.ref.Cleaner;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +33,38 @@ public final class AnimGraphInstance implements AutoCloseable {
     public static final int ROOT_MOTION_KEEP = 0;
     /** {@link #setRootMotion}: the root is pinned in the pose; {@link #rootMotion} reports the motion. */
     public static final int ROOT_MOTION_EXTRACT = 1;
+
+    /** {@link #modifierValue} keys (= rig.h {@code CR_VALUE_*} / anim_graph.h {@code CG_VALUE_*}, OpenMason #159). */
+    public static final int VALUE_LOCK = 8;            // footPlacement: + leg, the lock input fed this frame
+    public static final int VALUE_OUT_ANGLE = 64;      // orientationWarp: the eased angle
+    public static final int VALUE_OUT_PELVIS = 65;     // strideWarp / footPlacement: the pelvis offset along up
+    public static final int VALUE_OUT_LOCKED = 66;     // footPlacement: + leg, 1 while locked
+    public static final int VALUE_OUT_GROUND = 71;     // footPlacement: + leg, its eased ground offset
+    public static final int VALUE_OUT_ALPHA = 76;      // footPlacement: + leg, how far it is pulled to its lock
+    public static final int VALUE_PLAY_RATE = 128;     // strideWarp: the play rate it gave its clips
+    public static final int VALUE_STRIDE = 129;        // strideWarp: the stride scale
+
+    /** One upcall stub for every instance: the ground query of the evaluate in progress is a per-thread frame. */
+    private static final MemorySegment GROUND_STUB;
+    private static final ThreadLocal<GroundFrame> GROUND = new ThreadLocal<>();
+
+    static {
+        MemorySegment stub = null;
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(AnimGraphInstance.class, "groundUpcall",
+                MethodType.methodType(int.class, long.class, long.class, int.class, long.class));
+            stub = Linker.nativeLinker().upcallStub(target, CendaAnimGraph.GROUND_FN, Arena.global());
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            stub = null;
+        }
+        GROUND_STUB = stub;
+    }
+
+    private static final class GroundFrame {
+        GroundQuery query;
+        final GroundProbes probes = new GroundProbes();
+        Throwable failure;
+    }
 
     /** {@link #setTarget} kinds (= {@code CR_TARGET_*}). */
     public static final int TARGET_NONE = 0;
@@ -55,6 +91,7 @@ public final class AnimGraphInstance implements AutoCloseable {
     private final MemorySegment base;
     private final MemorySegment targetPos;
     private final MemorySegment targetRot;
+    private final GroundFrame groundFrame = new GroundFrame();
     private MemorySegment extras = MemorySegment.NULL;
     private int extraCapacity;
     private int extraCount;
@@ -429,16 +466,82 @@ public final class AnimGraphInstance implements AutoCloseable {
             baseSeg = base;
         }
         MemorySegment extraSeg = extraCount == 0 ? MemorySegment.NULL : extras;
+        MemorySegment h = handle();
+        boolean ground = groundFrame.query != null;
+        GroundFrame outer = null;
+        if (ground) {
+            outer = GROUND.get();
+            groundFrame.failure = null;
+            GROUND.set(groundFrame);
+        }
+        int rc;
         try {
-            CendaAnimGraph.check((int) CendaAnimGraph.EVALUATE.invokeExact(handle(), dt, extraSeg, extraCount, baseSeg,
-                out.nativeSkin(), out.nativeWorld(), MemorySegment.NULL), "evaluate");
+            rc = (int) CendaAnimGraph.EVALUATE.invokeExact(h, dt, extraSeg, extraCount, baseSeg, out.nativeSkin(),
+                out.nativeWorld(), MemorySegment.NULL);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        } finally {
+            if (ground) GROUND.set(outer);  // set, not remove: keeps the thread's entry (no allocation next frame)
+        }
+        if (ground && groundFrame.failure != null) {
+            Throwable t = groundFrame.failure;
+            groundFrame.failure = null;
+            throw CendaAnimGraph.rethrow(t);
+        }
+        CendaAnimGraph.check(rc, "evaluate");
+        out.nativeWritten(n);
+        return out;
+    }
+
+    /**
+     * The ground query of the graph's {@code footPlacement} modifiers (OpenMason #159), or null for the flat plane
+     * at their {@code groundHeight}. Called inside {@link #evaluate} on the evaluating thread, once per
+     * footPlacement modifier, with every probe of every leg.
+     */
+    public void setGround(GroundQuery query) {
+        if (query != null && GROUND_STUB == null) throw new IllegalStateException("ground upcall stub unavailable");
+        MemorySegment fn = query == null ? MemorySegment.NULL : GROUND_STUB;
+        try {
+            CendaAnimGraph.check((int) CendaAnimGraph.SET_GROUND.invokeExact(handle(), fn, MemorySegment.NULL), "setGround");
         } catch (RuntimeException e) {
             throw e;
         } catch (Throwable t) {
             throw CendaAnimGraph.rethrow(t);
         }
-        out.nativeWritten(n);
-        return out;
+        groundFrame.query = query;
+    }
+
+    /**
+     * A modifier's value after the last {@link #evaluate} ({@code VALUE_*} keys, rig.h {@code CR_VALUE_*}): foot
+     * locks, the pelvis offset, the eased warp angle, a stride warp's play rate and stride scale. 0 for a key the
+     * modifier lacks or a modifier left out. Allocation-free.
+     */
+    public float modifierValue(int modifier, int key) {
+        try {
+            return (float) CendaAnimGraph.MODIFIER_VALUE.invokeExact(handle(), modifier, key);
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        }
+    }
+
+    // Native code calls this inside an evaluate. Must never throw: an exception escaping an upcall terminates the
+    // JVM. A host failure is kept and rethrown from evaluate.
+    @SuppressWarnings("unused")
+    private static int groundUpcall(long user, long probes, int count, long hits) {
+        GroundFrame frame = GROUND.get();
+        if (frame == null || frame.query == null) return -1;
+        try {
+            frame.probes.bind(probes, hits, count);
+            frame.query.query(frame.probes);
+            return 0;
+        } catch (Throwable t) {
+            if (frame.failure == null) frame.failure = t;
+            return -1;
+        } finally {
+            frame.probes.bind(0L, 0L, 0);
+        }
     }
 
     private static void writeMatrix(MemorySegment s, Matrix4f m) {

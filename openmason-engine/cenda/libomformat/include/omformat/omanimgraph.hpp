@@ -45,6 +45,20 @@
 //     spring          start, end, stiffness?: 1, drag?: 0.4, gravity?: [x,y,z], radius?: 0, step?: 1/60
 //     fullBody        body, limbs: [ {upper, mid, end, target, pull?: 1, reach?: 1} ] (1..5), hipGoal?,
 //                     hipWeight?: 1, iterations?: 3
+//     orientationWarp hips, spine?: [ {joint, weight?: 1} ] parents first, angleParam (float, degrees: the
+//                     movement direction relative to the facing, counter-clockwise seen from above), maxAngle?: 90,
+//                     rate?: 0 (easing 1/s, 0 = instant), counter?: 1 (share of the turn the spine takes back)
+//     strideWarp      pelvis, legs: [ {upper, mid, end?} ] (1..5; no end = the mid joint's tail is the ankle),
+//                     speedParam (float: the real ground speed), directionParam? (vec2: travel direction in model
+//                     x/z; default the character's facing), animSpeed?: the clips' speed at play rate 1,
+//                     animSpeedCurve?: a curve that says it (wins when present), node?: the node whose clips get the
+//                     play rate (default the root), rateMin?: 0.8, rateMax?: 1.2, strideMin?: 0.5, strideMax?: 2,
+//                     pelvisWeight?: 1. Play rate = clamp(speed / animSpeed, rateMin, rateMax); the stride scales
+//                     by the rest, clamped to [strideMin, strideMax]
+//     footPlacement   pelvis, legs: [ {upper, mid, end?, lockCurve?, lockMarkers?: [down, up]} ] (1..5), probeUp?,
+//                     probeDown?, maxDrop?, maxLockDistance? (0 = from the leg length), maxRise?: 0, maxAlign?: 30,
+//                     pelvisRate?: 10, footRate?: 15, groundHeight?: 0 (the clips' flat ground, model y),
+//                     unlockTime?: 0.15. The host answers the ground query (cg_instance_set_ground)
 //                     JOINT references: "role:<role>" (through the character) or a joint id / name.
 //                     TARGET references: a name from `targets`, or "role:<r>" / "joint:<j>" (that joint's posed
 //                     frame) / "socket:<s>" (a .omchar socket).
@@ -168,7 +182,10 @@ struct Node {
     std::string mask;
 };
 
-enum class ModType : int { TwoBone = 0, Fabrik = 1, Ccd = 2, Aim = 3, Constraint = 4, Spring = 5, FullBody = 6 };
+enum class ModType : int {
+    TwoBone = 0, Fabrik = 1, Ccd = 2, Aim = 3, Constraint = 4, Spring = 5, FullBody = 6,
+    OrientationWarp = 7, StrideWarp = 8, FootPlacement = 9  // locomotion adaptation (#159)
+};
 enum class ConstraintKind : int { Point = 0, Orient = 1, Parent = 2, Aim = 3, Copy = 4 };
 
 struct AimJoint {
@@ -180,6 +197,13 @@ struct Limb {
     std::string upper, mid, end, target;
     float pull = 1.f;
     float reach = 1.f;
+};
+
+// A leg of a stride-warp / foot-placement modifier (#159).
+struct Leg {
+    std::string upper, mid, end;  // end "" = the mid joint's tail is the ankle
+    std::string lock_curve;       // footPlacement: lock weight from this curve
+    std::string lock_down, lock_up;  // footPlacement: locked from sync marker `down` to the next `up`
 };
 
 struct Modifier {
@@ -209,6 +233,26 @@ struct Modifier {
     float step = 0.f;  // 0 = 1/60
     std::vector<Limb> limbs;
     float hip_weight = 1.f;
+    // locomotion (#159): body = hips / pelvis, aim = the spine of an orientation warp
+    std::vector<Leg> legs;
+    std::string angle_param;       // orientationWarp
+    float max_angle = 90.f;
+    float rate = 0.f;
+    float counter = 1.f;
+    std::string speed_param;       // strideWarp
+    std::string direction_param;
+    float anim_speed = 0.f;
+    std::string anim_speed_curve;
+    std::string node;
+    float rate_min = 0.8f, rate_max = 1.2f;
+    float stride_min = 0.5f, stride_max = 2.f;
+    float pelvis_weight = 1.f;
+    float probe_up = 0.f, probe_down = 0.f, max_drop = 0.f, max_rise = 0.f;  // footPlacement
+    float max_align = 30.f;
+    float pelvis_rate = 10.f, foot_rate = 15.f;
+    float ground_height = 0.f;
+    float unlock_time = 0.15f;
+    float max_lock_distance = 0.f;
 };
 
 struct Collider {

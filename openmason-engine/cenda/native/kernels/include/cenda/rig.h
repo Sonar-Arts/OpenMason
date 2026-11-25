@@ -70,7 +70,8 @@ typedef struct cr_modstack cr_modstack;
 enum {
     CR_OK = 0,
     CR_ERR_ARG = -1,   /* null handle, bad index, bad sizes */
-    CR_ERR_RANGE = -2  /* an index refers outside the rig / mesh */
+    CR_ERR_RANGE = -2, /* an index refers outside the rig / mesh */
+    CR_ERR_HOST = -3   /* a host callback failed (the ground query, #159) */
 };
 
 #define CR_MAX_JOINTS 65535
@@ -501,6 +502,115 @@ int32_t cr_modstack_reset(cr_modstack* stack);
 int32_t cr_target_from_socket(const cr_rig* rig, int32_t joint, const float* pos, const float* rot_deg, cr_target* out);
 /* Runs the stack on one slot, advancing spring bones by dt (what CR_OP_MODIFY does). */
 int32_t cr_modstack_apply(cr_modstack* stack, cr_poses* poses, int32_t slot, float dt);
+
+/* ---------------------------------------------------------------------------------------------- */
+/* Locomotion adaptation (OpenMason #159; still CR ABI 2: modifier types, functions and an error  */
+/* code were added). Unreal's Game Animation Sample model: authored locomotion fitted to the       */
+/* ground and to the character's real speed and direction.                                        */
+/*                                                                                                 */
+/* Three more modifier types, run in the stack like the others (influence = the modifier weight).  */
+/* Lengths are in MODEL units, "up" is model +Y and the stack's frame maps model to world (uniform */
+/* scale). Their tuning and per-frame inputs are keyed VALUES (cr_modstack_set_value, CR_VALUE_*), */
+/* not p[]. A LEG is joints [upper, mid, end]; end -1 = the mid joint's tail (a bone's endpoint) is */
+/* the ankle and the leg has no foot to align. Order them orientation warp, stride warp, foot      */
+/* placement: each reads the pose the one before left.                                             */
+/*                                                                                                 */
+/*  CR_MOD_ORIENT_WARP   joints[0] = the hips, joints[1..) = the spine parents first, joint_weights  */
+/*      [1..) their shares of the counter-rotation (normalized; all 0 = equal). The hips turn about */
+/*      up by ANGLE (the movement direction relative to the facing, degrees, counter-clockwise seen */
+/*      from above = toward the character's left for a -Z facing), clamped to MAX_ANGLE and eased  */
+/*      by RATE; the spine turns back COUNTER x that angle, so the legs run toward the movement    */
+/*      while the chest keeps facing forward.                                                       */
+/*  CR_MOD_STRIDE_WARP   joints[0] = the pelvis, legs k < 5 at [1+3k, 2+3k, 3+3k]. Each foot's      */
+/*      offset from its thigh along the travel direction (DIR_X, DIR_Z) is scaled by SCALE (the    */
+/*      host's speed / (the clip's speed x the play rate it allowed)); with PELVIS > 0 the pelvis  */
+/*      drops (PELVIS x what it takes) until every stretched leg reaches; two-bone per leg, the    */
+/*      feet keep their animated rotation.                                                         */
+/*  CR_MOD_FOOT_PLACEMENT joints[0] = the pelvis, legs as above. Per apply: one ground query for   */
+/*      every leg (heel = the ankle; toe = the foot bone's tail when the foot is a bone with       */
+/*      length), rays straight down from PROBE_UP above the clips' flat ground (GROUND_Y, model y)  */
+/*      to PROBE_DOWN below it. A foot's ground offset = its highest hit - GROUND_Y (it sits on the */
+/*      higher tread at a stair edge; no hit = 0: the animation), eased by FOOT_RATE while free.   */
+/*      LOCK + k in [0,1] (the graph feeds foot_lock curves or sync-marker contacts): rising above */
+/*      0 pins foot k where it stands, on the ground there, in WORLD space (its height above that  */
+/*      ground keeps following the animation: heel roll, a contact keyed a frame early); its target */
+/*      is lerp(live, lock, lock value); at 0 (or when the lock is MAX_LOCK_DISTANCE from the live */
+/*      foot) it releases and the pull fades out over UNLOCK_TIME. The pelvis drops to the lowest  */
+/*      foot's need (clamped to [-MAX_DROP, MAX_RISE], eased by PELVIS_RATE) and never stays so    */
+/*      high that a target is out of reach; two-bone per leg (bend plane = the animated knee); the */
+/*      foot's animated rotation is turned toward the hit normal by at most MAX_ALIGN degrees.     */
+/*      Without a ground function the ground is the flat plane GROUND_Y (locking still works).    */
+
+enum {
+    CR_MOD_ORIENT_WARP = 7,
+    CR_MOD_STRIDE_WARP = 8,
+    CR_MOD_FOOT_PLACEMENT = 9
+};
+
+#define CR_MAX_LEGS 5
+
+/* Keyed modifier values. Inputs (set and get; defaults in brackets): */
+enum {
+    CR_VALUE_ANGLE = 0,              /* ORIENT: degrees [0] */
+    CR_VALUE_MAX_ANGLE = 1,          /* ORIENT: degrees [90] */
+    CR_VALUE_RATE = 2,               /* ORIENT: easing rate 1/s [0 = instant] */
+    CR_VALUE_COUNTER = 3,            /* ORIENT: share of the turn the spine takes back [1] */
+    CR_VALUE_SCALE = 4,              /* STRIDE: stride scale [1] */
+    CR_VALUE_DIR_X = 5,              /* STRIDE: travel direction in model XZ [0, -1] */
+    CR_VALUE_DIR_Z = 6,
+    CR_VALUE_PELVIS = 7,             /* STRIDE: pelvis adjustment 0..1 [1] */
+    CR_VALUE_LOCK = 8,               /* FOOT: lock of leg k = CR_VALUE_LOCK + k, 0..1 [0] */
+    CR_VALUE_PROBE_UP = 13,          /* FOOT: [0 = the mean leg length: a ray never starts below the hips] */
+    CR_VALUE_PROBE_DOWN = 14,        /* FOOT: [0 = 0.75 x the mean leg length] */
+    CR_VALUE_MAX_DROP = 15,          /* FOOT: [0 = half the mean leg length] */
+    CR_VALUE_MAX_RISE = 16,          /* FOOT: [0] */
+    CR_VALUE_MAX_ALIGN = 17,         /* FOOT: degrees [30] */
+    CR_VALUE_PELVIS_RATE = 18,       /* FOOT: 1/s [10; 0 = instant] */
+    CR_VALUE_FOOT_RATE = 19,         /* FOOT: 1/s [15; 0 = instant] */
+    CR_VALUE_GROUND_Y = 20,          /* FOOT: the clips' flat ground, model y [0] */
+    CR_VALUE_UNLOCK_TIME = 21,       /* FOOT: seconds [0.15] */
+    CR_VALUE_MAX_LOCK_DISTANCE = 22, /* FOOT: [0 = half the mean leg length] */
+    CR_VALUE_INPUT_COUNT = 23
+};
+/* Outputs of the last apply (get only): */
+enum {
+    CR_VALUE_OUT_ANGLE = 64,         /* ORIENT: the eased angle */
+    CR_VALUE_OUT_PELVIS = 65,        /* STRIDE / FOOT: the pelvis offset along up */
+    CR_VALUE_OUT_LOCKED = 66,        /* FOOT: + k, 1 while leg k is locked */
+    CR_VALUE_OUT_GROUND = 71,        /* FOOT: + k, leg k's eased ground offset */
+    CR_VALUE_OUT_ALPHA = 76          /* FOOT: + k, how far leg k is pulled to its lock */
+};
+
+/* Sets an input value; CR_ERR_RANGE when the modifier's type does not read that key. */
+int32_t cr_modstack_set_value(cr_modstack* stack, int32_t mod, int32_t key, float value);
+/* An input or output value (0 for a key the type does not have). */
+float cr_modstack_get_value(const cr_modstack* stack, int32_t mod, int32_t key);
+
+/* Ground query (the host answers; the engine assumes no world type). ONE call per foot-placement
+ * modifier per apply with every probe of every leg, in leg order (heel, then toe), so the order of
+ * host calls is fixed. Probes and hits are in WORLD space (through the stack's frame); a probe is the
+ * segment origin + t * direction, t in [0, max_distance]. */
+typedef struct cr_ground_probe {   /* 64 bytes */
+    double origin[3];
+    double direction[3];  /* unit length */
+    double max_distance;
+    int32_t foot;         /* leg index */
+    int32_t point;        /* 0 = heel (the ankle), 1 = toe */
+} cr_ground_probe;
+
+typedef struct cr_ground_hit {     /* 48 bytes; the host fills one per probe */
+    int32_t hit;          /* 0 = no ground along the probe (that point keeps the animation) */
+    int32_t surface;      /* host value (e.g. a block id), unused by the engine */
+    double point[3];
+    float normal[3];      /* need not be normalized; zero = up */
+    float reserved;
+} cr_ground_hit;
+
+/* Fills out[0..count) (zeroed before the call). A negative return aborts the apply with CR_ERR_HOST. */
+typedef int32_t (*cr_ground_fn)(void* user, const cr_ground_probe* probes, int32_t count, cr_ground_hit* out);
+
+/* fn NULL = no ground function (the flat plane). */
+int32_t cr_modstack_set_ground(cr_modstack* stack, cr_ground_fn fn, void* user);
 
 /* ---------------------------------------------------------------------------------------------- */
 /* Skin weights.                                                                                   */

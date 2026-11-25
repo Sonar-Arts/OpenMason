@@ -398,6 +398,9 @@ const char* mod_type_name(ModType t) {
         case ModType::Constraint: return "constraint";
         case ModType::Spring: return "spring";
         case ModType::FullBody: return "fullBody";
+        case ModType::OrientationWarp: return "orientationWarp";
+        case ModType::StrideWarp: return "strideWarp";
+        case ModType::FootPlacement: return "footPlacement";
         default: return "twoBone";
     }
 }
@@ -419,7 +422,7 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
     const std::string type = str_field(v, "type", at, true);
     bool known = false;
     for (ModType t : {ModType::TwoBone, ModType::Fabrik, ModType::Ccd, ModType::Aim, ModType::Constraint, ModType::Spring,
-                      ModType::FullBody}) {
+                      ModType::FullBody, ModType::OrientationWarp, ModType::StrideWarp, ModType::FootPlacement}) {
         if (type == mod_type_name(t)) {
             m.type = t;
             known = true;
@@ -524,6 +527,91 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
             m.pole = str_field(v, "hipGoal", at, false);
             m.hip_weight = static_cast<float>(num_field(v, "hipWeight", at, 1.0));
             iterations();
+            break;
+        }
+        case ModType::OrientationWarp: {
+            m.body = str_field(v, "hips", at, true);
+            if (yyjson_val* js = arr_field(v, "spine", at, false)) {
+                for (std::size_t k = 0, n = yyjson_arr_size(js); k < n; ++k) {
+                    yyjson_val* e = yyjson_arr_get(js, k);
+                    const std::string ew = at + " spine[" + std::to_string(k) + "]";
+                    if (!yyjson_is_obj(e)) fail(ew + " must be an object");
+                    AimJoint aj;
+                    aj.joint = str_field(e, "joint", ew, true);
+                    aj.weight = static_cast<float>(num_field(e, "weight", ew, 1.0));
+                    if (aj.weight < 0.f) fail(ew + ": weight must be >= 0");
+                    m.aim.push_back(std::move(aj));
+                }
+            }
+            if (m.aim.size() > 15) fail(at + ": an orientation warp takes at most 15 spine joints");
+            m.angle_param = str_field(v, "angleParam", at, true);
+            m.max_angle = static_cast<float>(num_field(v, "maxAngle", at, 90.0));
+            m.rate = static_cast<float>(num_field(v, "rate", at, 0.0));
+            m.counter = static_cast<float>(num_field(v, "counter", at, 1.0));
+            if (m.max_angle < 0.f || m.max_angle > 180.f) fail(at + ": maxAngle must be in [0, 180]");
+            if (m.rate < 0.f) fail(at + ": rate must be >= 0");
+            break;
+        }
+        case ModType::StrideWarp:
+        case ModType::FootPlacement: {
+            const bool foot = m.type == ModType::FootPlacement;
+            m.body = str_field(v, "pelvis", at, true);
+            yyjson_val* ls = arr_field(v, "legs", at, true);
+            for (std::size_t k = 0, n = yyjson_arr_size(ls); k < n; ++k) {
+                yyjson_val* e = yyjson_arr_get(ls, k);
+                const std::string lw = at + " legs[" + std::to_string(k) + "]";
+                if (!yyjson_is_obj(e)) fail(lw + " must be an object");
+                Leg l;
+                l.upper = str_field(e, "upper", lw, true);
+                l.mid = str_field(e, "mid", lw, true);
+                l.end = str_field(e, "end", lw, false);
+                if (foot) {
+                    l.lock_curve = str_field(e, "lockCurve", lw, false);
+                    if (yyjson_val* mk = arr_field(e, "lockMarkers", lw, false)) {
+                        if (yyjson_arr_size(mk) != 2 || !yyjson_is_str(yyjson_arr_get(mk, 0))
+                            || !yyjson_is_str(yyjson_arr_get(mk, 1))) {
+                            fail(lw + ": lockMarkers must be [down, up] marker names");
+                        }
+                        l.lock_down = yyjson_get_str(yyjson_arr_get(mk, 0));
+                        l.lock_up = yyjson_get_str(yyjson_arr_get(mk, 1));
+                        if (l.lock_down.empty() || l.lock_up.empty()) fail(lw + ": empty lockMarkers name");
+                    }
+                }
+                m.legs.push_back(std::move(l));
+            }
+            if (m.legs.empty() || m.legs.size() > 5) fail(at + ": needs 1..5 legs");
+            auto nonneg = [&](const char* key, double fallback) {
+                const double x = num_field(v, key, at, fallback);
+                if (x < 0.0) fail(at + ": " + key + " must be >= 0");
+                return static_cast<float>(x);
+            };
+            if (!foot) {
+                m.speed_param = str_field(v, "speedParam", at, true);
+                m.direction_param = str_field(v, "directionParam", at, false);
+                m.anim_speed = nonneg("animSpeed", 0.0);
+                m.anim_speed_curve = str_field(v, "animSpeedCurve", at, false);
+                m.node = str_field(v, "node", at, false);
+                m.rate_min = nonneg("rateMin", 0.8);
+                m.rate_max = nonneg("rateMax", 1.2);
+                m.stride_min = nonneg("strideMin", 0.5);
+                m.stride_max = nonneg("strideMax", 2.0);
+                m.pelvis_weight = nonneg("pelvisWeight", 1.0);
+                if (!(m.rate_min > 0.f) || m.rate_min > m.rate_max) fail(at + ": needs 0 < rateMin <= rateMax");
+                if (m.stride_min > m.stride_max) fail(at + ": needs strideMin <= strideMax");
+                if (m.pelvis_weight > 1.f) fail(at + ": pelvisWeight must be in [0, 1]");
+            } else {
+                m.probe_up = nonneg("probeUp", 0.0);
+                m.probe_down = nonneg("probeDown", 0.0);
+                m.max_drop = nonneg("maxDrop", 0.0);
+                m.max_rise = nonneg("maxRise", 0.0);
+                m.max_align = nonneg("maxAlign", 30.0);
+                m.pelvis_rate = nonneg("pelvisRate", 10.0);
+                m.foot_rate = nonneg("footRate", 15.0);
+                m.ground_height = static_cast<float>(num_field(v, "groundHeight", at, 0.0));
+                m.unlock_time = nonneg("unlockTime", 0.15);
+                m.max_lock_distance = nonneg("maxLockDistance", 0.0);
+                if (m.max_align > 90.f) fail(at + ": maxAlign must be in [0, 90]");
+            }
             break;
         }
     }
@@ -760,6 +848,16 @@ void validate(const Graph& g) {
                 target_ref(m.pole, at, false);
                 break;
             case ModType::Spring:
+                break;
+            case ModType::OrientationWarp:
+                param_of(m.angle_param, at, {ParamType::Float});
+                break;
+            case ModType::StrideWarp:
+                param_of(m.speed_param, at, {ParamType::Float});
+                if (!m.direction_param.empty()) param_of(m.direction_param, at, {ParamType::Vec2});
+                if (!m.node.empty() && g.find_node(m.node) < 0) fail(at + ": unknown node " + m.node);
+                break;
+            case ModType::FootPlacement:
                 break;
             default:
                 target_ref(m.target, at, true);
@@ -1116,6 +1214,72 @@ std::string write(const Graph& g) {
                     put_str(d, o, "hipGoal", m.pole);
                     if (m.hip_weight != 1.f) put(d, o, "hipWeight", yyjson_mut_float(d, m.hip_weight));
                     if (m.iterations != 0) put(d, o, "iterations", yyjson_mut_sint(d, m.iterations));
+                    break;
+                }
+                case ModType::OrientationWarp: {
+                    put(d, o, "hips", mstr(d, m.body));
+                    if (!m.aim.empty()) {
+                        yyjson_mut_val* js = yyjson_mut_arr(d);
+                        for (const AimJoint& a : m.aim) {
+                            yyjson_mut_val* jo = yyjson_mut_obj(d);
+                            put(d, jo, "joint", mstr(d, a.joint));
+                            if (a.weight != 1.f) put(d, jo, "weight", yyjson_mut_float(d, a.weight));
+                            yyjson_mut_arr_append(js, jo);
+                        }
+                        put(d, o, "spine", js);
+                    }
+                    put(d, o, "angleParam", mstr(d, m.angle_param));
+                    if (m.max_angle != 90.f) put(d, o, "maxAngle", yyjson_mut_float(d, m.max_angle));
+                    if (m.rate != 0.f) put(d, o, "rate", yyjson_mut_float(d, m.rate));
+                    if (m.counter != 1.f) put(d, o, "counter", yyjson_mut_float(d, m.counter));
+                    break;
+                }
+                case ModType::StrideWarp:
+                case ModType::FootPlacement: {
+                    const bool foot = m.type == ModType::FootPlacement;
+                    put(d, o, "pelvis", mstr(d, m.body));
+                    yyjson_mut_val* ls = yyjson_mut_arr(d);
+                    for (const Leg& l : m.legs) {
+                        yyjson_mut_val* lo = yyjson_mut_obj(d);
+                        put(d, lo, "upper", mstr(d, l.upper));
+                        put(d, lo, "mid", mstr(d, l.mid));
+                        put_str(d, lo, "end", l.end);
+                        put_str(d, lo, "lockCurve", l.lock_curve);
+                        if (!l.lock_down.empty()) {
+                            yyjson_mut_val* mk = yyjson_mut_arr(d);
+                            yyjson_mut_arr_append(mk, mstr(d, l.lock_down));
+                            yyjson_mut_arr_append(mk, mstr(d, l.lock_up));
+                            put(d, lo, "lockMarkers", mk);
+                        }
+                        yyjson_mut_arr_append(ls, lo);
+                    }
+                    put(d, o, "legs", ls);
+                    auto num = [&](const char* key, float value, float fallback) {
+                        if (value != fallback) put(d, o, key, yyjson_mut_float(d, value));
+                    };
+                    if (!foot) {
+                        put(d, o, "speedParam", mstr(d, m.speed_param));
+                        put_str(d, o, "directionParam", m.direction_param);
+                        num("animSpeed", m.anim_speed, 0.f);
+                        put_str(d, o, "animSpeedCurve", m.anim_speed_curve);
+                        put_str(d, o, "node", m.node);
+                        num("rateMin", m.rate_min, 0.8f);
+                        num("rateMax", m.rate_max, 1.2f);
+                        num("strideMin", m.stride_min, 0.5f);
+                        num("strideMax", m.stride_max, 2.f);
+                        num("pelvisWeight", m.pelvis_weight, 1.f);
+                    } else {
+                        num("probeUp", m.probe_up, 0.f);
+                        num("probeDown", m.probe_down, 0.f);
+                        num("maxDrop", m.max_drop, 0.f);
+                        num("maxRise", m.max_rise, 0.f);
+                        num("maxAlign", m.max_align, 30.f);
+                        num("pelvisRate", m.pelvis_rate, 10.f);
+                        num("footRate", m.foot_rate, 15.f);
+                        num("groundHeight", m.ground_height, 0.f);
+                        num("unlockTime", m.unlock_time, 0.15f);
+                        num("maxLockDistance", m.max_lock_distance, 0.f);
+                    }
                     break;
                 }
             }

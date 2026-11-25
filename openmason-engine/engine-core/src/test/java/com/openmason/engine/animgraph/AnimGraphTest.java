@@ -60,7 +60,7 @@ class AnimGraphTest {
 
     // ---- fixtures ---------------------------------------------------------------------------------------
 
-    private static Rig rigOf(String sbe) throws IOException {
+    static Rig rigOf(String sbe) throws IOException {
         byte[] omo = null;
         try (ZipInputStream in = new ZipInputStream(Files.newInputStream(MOBS.resolve(sbe)))) {
             ZipEntry e;
@@ -119,7 +119,7 @@ class AnimGraphTest {
     }
 
     /** A characterized rig: auto-mapped onto the humanoid profile. */
-    private record Character(Rig rig, CharacterDefinition definition, CharacterProfile profile) implements AutoCloseable {
+    record Character(Rig rig, CharacterDefinition definition, CharacterProfile profile) implements AutoCloseable {
         static Character of(String sbe) throws IOException {
             Rig rig = rigOf(sbe);
             CharacterProfile humanoid = CharacterProfile.builtin("humanoid");

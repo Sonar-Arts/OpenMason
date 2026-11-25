@@ -38,6 +38,10 @@ public final class CendaAnimGraph {
     static final int ERR_FORMAT = -3;
     static final int ERR_VERSION = -4;
     static final int ERR_STATE = -5;
+    static final int ERR_HOST = -6;
+
+    /** {@code cr_ground_fn} (rig.h, #159) with its pointers as raw addresses: an upcall allocates no segment. */
+    static final FunctionDescriptor GROUND_FN = FunctionDescriptor.of(I32, I64, I64, I32, I64);
 
     /** {@code cg_notify}. */
     static final long NOTIFY_BYTES = 24;
@@ -72,6 +76,8 @@ public final class CendaAnimGraph {
     static final MethodHandle TARGET_NAME;
     static final MethodHandle MODIFIER_COUNT;
     static final MethodHandle SET_TARGET;
+    static final MethodHandle SET_GROUND;
+    static final MethodHandle MODIFIER_VALUE;
     static final MethodHandle INSTANCE_CREATE;
     static final MethodHandle INSTANCE_DESTROY;
     static final MethodHandle INSTANCE_RESET;
@@ -154,6 +160,8 @@ public final class CendaAnimGraph {
         TARGET_NAME = handle(lookup, "cg_graph_target_name", FunctionDescriptor.of(ADDR, ADDR, I32));
         MODIFIER_COUNT = handle(lookup, "cg_graph_modifier_count", FunctionDescriptor.of(I32, ADDR));
         SET_TARGET = handle(lookup, "cg_instance_set_target", FunctionDescriptor.of(I32, ADDR, I32, I32, ADDR, ADDR));
+        SET_GROUND = handle(lookup, "cg_instance_set_ground", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        MODIFIER_VALUE = handle(lookup, "cg_instance_modifier_value", FunctionDescriptor.of(F32, ADDR, I32, I32), critical);
         INSTANCE_CREATE = handle(lookup, "cg_instance_create", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR, ADDR));
         INSTANCE_DESTROY = handle(lookup, "cg_instance_destroy", FunctionDescriptor.ofVoid(ADDR));
         INSTANCE_RESET = handle(lookup, "cg_instance_reset", FunctionDescriptor.of(I32, ADDR));

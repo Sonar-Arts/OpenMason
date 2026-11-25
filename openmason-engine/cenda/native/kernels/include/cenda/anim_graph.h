@@ -21,7 +21,13 @@
  *      advance by rate x dt. Montages advance, follow their section links and blend out at their end.
  *   3. pose: the active nodes emit one cr_pose_op program (rig.h), run and composed by cr_poses_evaluate; the
  *      graph's pose-modifier stack (#158) runs last on the root's pose (CR_OP_MODIFY), each modifier's weight =
- *      its weight x weightParam x weightCurve this frame, the base matrix as the stack's world frame.
+ *      its weight x weightParam x weightCurve this frame, the base matrix as the stack's world frame. The
+ *      locomotion modifiers (#159) get their inputs here: orientationWarp its angle parameter, strideWarp its
+ *      stride scale + travel direction, footPlacement each leg's lock (its lockCurve, else the influence-weighted
+ *      lockMarkers interval of the playing clips); footPlacement asks the host for the ground (cg_instance_set_ground).
+ *      A strideWarp also sets the play rate of the clips under its node, before step 2, from the host's speed
+ *      parameter and the clips' speed (animSpeedCurve of the previous frame, else animSpeed): clamp(speed /
+ *      animSpeed, rateMin, rateMax), lerped toward 1 by the modifier's weight; the stride covers the rest.
  *   4. outputs: notifies the step crossed (players at or above the graph's notifyThreshold influence, and
  *      montages), curves (influence-weighted; a clip without the curve counts 0), root motion (influence-weighted
  *      sum over the base chain and montages; with CG_ROOT_MOTION_EXTRACT the root is pinned in the pose).
@@ -53,7 +59,8 @@ enum {
     CG_ERR_RANGE = -2,
     CG_ERR_FORMAT = -3,   /* not a valid .omanimgraph (cg_last_error says why) */
     CG_ERR_VERSION = -4,  /* a newer major version */
-    CG_ERR_STATE = -5     /* not possible now (no path to the state, montage slot idle, ...) */
+    CG_ERR_STATE = -5,    /* not possible now (no path to the state, montage slot idle, ...) */
+    CG_ERR_HOST = -6      /* the host's ground query failed (#159) */
 };
 
 /* Parameter types (= the file's). */
@@ -145,6 +152,21 @@ int32_t cg_instance_get_param(const cg_instance* inst, int32_t param, float* out
  * frame = the base matrix of the evaluate) / CR_TARGET_NONE (the modifiers reading it do nothing); pos 3 floats,
  * rot a quaternion x, y, z, w (NULL = identity). */
 int32_t cg_instance_set_target(cg_instance* inst, int32_t target, int32_t kind, const float* pos, const float* rot);
+
+/* Locomotion adaptation (#159): the ground query of the graph's footPlacement modifiers (rig.h
+ * cr_ground_fn: one call per footPlacement modifier per evaluate, every probe of every leg, world space =
+ * through the evaluate's base matrix). fn NULL = the flat plane at the modifier's groundHeight. Called on the
+ * evaluating thread inside cg_instance_evaluate; a negative return fails the evaluate with CG_ERR_HOST. */
+int32_t cg_instance_set_ground(cg_instance* inst, cr_ground_fn fn, void* user);
+
+/* A modifier's value after the last evaluate: rig.h CR_VALUE_* (inputs and outputs: locks, pelvis offset, eased
+ * angle, ...) or, for a strideWarp, the play rate / stride scale the graph chose. 0 for an unknown key / a
+ * modifier left out. modifier = the graph's modifier index. */
+enum {
+    CG_VALUE_PLAY_RATE = 128,
+    CG_VALUE_STRIDE = 129
+};
+float cg_instance_modifier_value(const cg_instance* inst, int32_t modifier, int32_t key);
 
 /* Root motion modes. */
 enum {

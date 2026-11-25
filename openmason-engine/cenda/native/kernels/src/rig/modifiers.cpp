@@ -1,6 +1,7 @@
 // Cenda rig pose modifiers (OpenMason #158): two-bone IK with pole and soft reach, FABRIK / CCD chains, multi-aim
-// with per-joint weights and limits, Maya-style constraints, spring bones with colliders, full-body effectors.
-// Contract in cenda/rig.h ("Pose modifiers").
+// with per-joint weights and limits, Maya-style constraints, spring bones with colliders, full-body effectors; and
+// locomotion adaptation (#159): orientation warping, stride warping, foot placement over the host's batched ground
+// query with world-space foot locks. Contract in cenda/rig.h ("Pose modifiers", "Locomotion adaptation").
 //
 // Everything works on the pose's forward kinematics in model space (double). A joint is turned by a WORLD rotation
 // about its pivot: q_local' = q_parent^-1 · delta · q_parent · q_local (q_parent = the rotation of the frame its
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <string>
 
@@ -125,12 +127,40 @@ struct Collider {
     double radius = 0.0;
 };
 
+// One leg of a foot-placement modifier (#159).
+struct LegRt {
+    bool init = false;
+    double ground = 0.0;  // eased ground offset along up
+    bool locked = false;
+    Vec lock_w;           // the lock point, world
+    double lock_height = 0.0;  // the animated ankle's model y when it locked
+    double alpha = 0.0;   // last frame's pull toward the lock
+    double fade = 0.0;    // the pull while releasing
+};
+
 struct ModRt {
     cr_modifier_desc d{};
     std::vector<int> chain;  // FABRIK / CCD / SPRING: start .. end
     std::vector<Vec> cur, prev;
     bool spring_init = false;
     double acc = 0.0;
+    // Locomotion (#159).
+    float v[CR_VALUE_INPUT_COUNT]{};
+    LegRt legs[CR_MAX_LEGS];
+    bool has_toe[CR_MAX_LEGS]{};
+    bool with_pelvis[CR_MAX_LEGS]{};  // the thigh moves with the pelvis
+    int probe_count = 0;
+    double angle = 0.0;
+    bool angle_init = false;
+    double pelvis = 0.0;
+    bool pelvis_init = false;
+    double out_pelvis = 0.0;
+
+    void reset_locomotion() {
+        for (LegRt& l : legs) l = LegRt{};
+        angle = pelvis = out_pelvis = 0.0;
+        angle_init = pelvis_init = false;
+    }
 };
 
 // Parent-to-child path from start to end; empty when start is not an ancestor of (or equal to) end.
@@ -165,6 +195,11 @@ struct cr_modstack {
     std::vector<uint8_t> touched;
     std::vector<Vec> scratch;
     std::vector<double> lengths;
+    // Ground query (#159): buffers sized at create.
+    cr_ground_fn ground = nullptr;
+    void* ground_user = nullptr;
+    std::vector<cr_ground_probe> probes;
+    std::vector<cr_ground_hit> hits;
 };
 
 namespace {
@@ -268,8 +303,14 @@ bool target_frame(const cr_modstack& s, int t, Vec& pos, Quat& rot) {
 
 // ---- solvers --------------------------------------------------------------------------------------------------
 
+// A limb's end point: the end joint's pivot, or (end -1) the mid joint's tail: the origin of the frame it hands
+// down (a bone's endpoint).
+Vec effector(const cr_modstack& s, int mid, int end) {
+    return end >= 0 ? pivot(s, end) : transform_point(s.child[static_cast<size_t>(mid)], Vec{});
+}
+
 void two_bone(cr_modstack& s, int up, int mid, int end, Vec t, const Vec* pole, double soft, const Quat* end_rot) {
-    const Vec a = pivot(s, up), b = pivot(s, mid), c = pivot(s, end);
+    const Vec a = pivot(s, up), b = pivot(s, mid), c = effector(s, mid, end);
     const double lab = length(b - a), lcb = length(c - b);
     if (lab < EPS || lcb < EPS) return;
     const Vec at = t - a;
@@ -296,9 +337,9 @@ void two_bone(cr_modstack& s, int up, int mid, int end, Vec t, const Vec* pole, 
     const Vec b1 = a + u * x + v * h;
     const Vec c1 = a + u * d;
     rotate_world(s, up, from_to(normalized(b - a), normalized(b1 - a)));
-    const Vec b2 = pivot(s, mid), c2 = pivot(s, end);
+    const Vec b2 = pivot(s, mid), c2 = effector(s, mid, end);
     rotate_world(s, mid, from_to(normalized(c2 - b2), normalized(c1 - b2)));
-    if (end_rot != nullptr) rotate_world(s, end, qnormalize(qmul(*end_rot, qconj(world_rot(s, end)))));
+    if (end_rot != nullptr && end >= 0) rotate_world(s, end, qnormalize(qmul(*end_rot, qconj(world_rot(s, end)))));
 }
 
 void fabrik(cr_modstack& s, const std::vector<int>& chain, const Vec& t, int iterations, double tol) {
@@ -526,6 +567,294 @@ void full_body(cr_modstack& s, const cr_modifier_desc& d) {
     }
 }
 
+// ---- locomotion adaptation (#159) -------------------------------------------------------------------------------
+
+constexpr double DEG_TO_RAD = 3.14159265358979323846 / 180.0;
+const Vec UP{0.0, 1.0, 0.0};
+
+int leg_count(const cr_modifier_desc& d) { return (d.joint_count - 1) / 3; }
+
+// Exponential easing toward want at rate (1/s); rate <= 0 = instant.
+double ease(double cur, double want, double rate, double dt) {
+    if (rate <= 0.0) return want;
+    return cur + (want - cur) * (1.0 - std::exp(-rate * dt));
+}
+
+// The highest pelvis offset along up, at most `cap` (what the caller wants), that lets every leg moving with the
+// pelvis reach its goal: |goal - (thigh + up * P)| <= its length. A leg already in reach at `cap` sets no bound.
+double reach_bound(const cr_modstack& s, const ModRt& m, const Vec* goals, double cap) {
+    double bound = cap;
+    const cr_modifier_desc& d = m.d;
+    for (int k = 0, n = leg_count(d); k < n; ++k) {
+        if (!m.with_pelvis[k]) continue;
+        const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
+        const Vec a = pivot(s, up);
+        const Vec b = pivot(s, mid);
+        const double full = length(b - a) + length(effector(s, mid, end) - b);
+        const Vec g = goals[k] - a;
+        if (length(g - UP * cap) <= full) continue;  // already in reach at the offset the caller wants
+        const double reach = full * (1.0 - 1e-9);
+        const double h2 = g.x * g.x + g.z * g.z;
+        // Out of reach horizontally: the best the pelvis can do is sit level with the goal.
+        const double p = h2 >= reach * reach ? g.y : g.y + std::sqrt(reach * reach - h2);
+        bound = std::min(bound, p);
+    }
+    return bound;
+}
+
+// The pole a leg bends toward when its animated knee is straight: forward along the foot (else -Z).
+bool straight_leg_pole(const cr_modstack& s, int up, int mid, int end, bool has_toe, const Vec& goal, Vec& pole) {
+    const Vec a = pivot(s, up), b = pivot(s, mid), c = effector(s, mid, end);
+    const Vec ac = c - a;
+    const double lab = length(b - a);
+    if (length(ac) < EPS || length(cross(normalized(ac), b - a)) > 1e-3 * lab) return false;
+    Vec fwd{0.0, 0.0, -1.0};
+    if (has_toe) {
+        const Vec t = transform_point(s.child[static_cast<size_t>(end)], Vec{}) - c;
+        const Vec h{t.x, 0.0, t.z};
+        if (length(h) > EPS) fwd = normalized(h);
+    }
+    pole = b + fwd * lab + (goal - c) * 0.5;
+    return true;
+}
+
+// Two-bone a leg onto goal; the foot keeps the world rotation `foot` (when it has one).
+void place_leg(cr_modstack& s, const ModRt& m, int k, const Vec& goal, const Quat* foot) {
+    const cr_modifier_desc& d = m.d;
+    const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
+    Vec pole;
+    const bool use_pole = straight_leg_pole(s, up, mid, end, m.has_toe[k], goal, pole);
+    two_bone(s, up, mid, end, goal, use_pole ? &pole : nullptr, 0.0, nullptr);
+    if (foot != nullptr && end >= 0) rotate_world(s, end, qnormalize(qmul(*foot, qconj(world_rot(s, end)))));
+}
+
+void orient_warp(cr_modstack& s, ModRt& m, double dt) {
+    const cr_modifier_desc& d = m.d;
+    const double mx = std::clamp(static_cast<double>(m.v[CR_VALUE_MAX_ANGLE]), 0.0, 180.0);
+    const double want = std::clamp(static_cast<double>(m.v[CR_VALUE_ANGLE]), -mx, mx);
+    if (!m.angle_init) {
+        m.angle = want;
+        m.angle_init = true;
+    } else {
+        m.angle = ease(m.angle, want, m.v[CR_VALUE_RATE], dt);
+    }
+    if (std::fabs(m.angle) < 1e-9) return;
+    const double rad = m.angle * DEG_TO_RAD;
+    rotate_world(s, d.joints[0], qaxis(0.0, 1.0, 0.0, rad));
+    const int n = d.joint_count - 1;
+    if (n <= 0) return;
+    double sum = 0.0;
+    for (int i = 1; i <= n; ++i) sum += std::max(0.f, d.joint_weights[i]);
+    const double back = rad * static_cast<double>(m.v[CR_VALUE_COUNTER]);
+    for (int i = 1; i <= n; ++i) {
+        const double w = sum > 0.0 ? std::max(0.f, d.joint_weights[i]) / sum : 1.0 / n;
+        if (w > 0.0) rotate_world(s, d.joints[i], qaxis(0.0, 1.0, 0.0, -back * w));
+    }
+}
+
+void stride_warp(cr_modstack& s, ModRt& m) {
+    const cr_modifier_desc& d = m.d;
+    m.out_pelvis = 0.0;
+    const double scale = m.v[CR_VALUE_SCALE];
+    Vec dir{m.v[CR_VALUE_DIR_X], 0.0, m.v[CR_VALUE_DIR_Z]};
+    if (length(dir) < 1e-9 || std::fabs(scale - 1.0) < 1e-9) return;
+    dir = normalized(dir);
+    const int legs = leg_count(d);
+    Vec goals[CR_MAX_LEGS];
+    Quat feet[CR_MAX_LEGS];
+    for (int k = 0; k < legs; ++k) {
+        const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
+        const Vec a = pivot(s, up), f = effector(s, mid, end);
+        goals[k] = f + dir * (dot(f - a, dir) * (scale - 1.0));
+        if (end >= 0) feet[k] = world_rot(s, end);
+    }
+    const double pw = std::clamp(static_cast<double>(m.v[CR_VALUE_PELVIS]), 0.0, 1.0);
+    if (pw > 0.0) {
+        const double need = reach_bound(s, m, goals, 0.0);
+        if (need < 0.0) {
+            m.out_pelvis = need * pw;
+            move_world(s, d.joints[0], UP * m.out_pelvis);
+        }
+    }
+    for (int k = 0; k < legs; ++k) place_leg(s, m, k, goals[k], d.joints[3 + 3 * k] >= 0 ? &feet[k] : nullptr);
+}
+
+// The leg length average of a foot-placement / stride modifier on the current pose.
+double mean_leg(const cr_modstack& s, const cr_modifier_desc& d) {
+    double sum = 0.0;
+    const int legs = leg_count(d);
+    for (int k = 0; k < legs; ++k) {
+        const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
+        const Vec b = pivot(s, mid);
+        sum += length(b - pivot(s, up)) + length(effector(s, mid, end) - b);
+    }
+    return legs > 0 ? sum / legs : 0.0;
+}
+
+bool finite3(const double* p) { return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]); }
+
+int32_t foot_placement(cr_modstack& s, ModRt& m, double dt) {
+    const cr_modifier_desc& d = m.d;
+    const int legs = leg_count(d);
+    const double mean = mean_leg(s, d);
+    auto length_value = [&](int key, double auto_share) {
+        const double v = m.v[key];
+        return v > 0.0 ? v : auto_share * mean;
+    };
+    const double probe_up = length_value(CR_VALUE_PROBE_UP, 1.0);
+    const double probe_down = length_value(CR_VALUE_PROBE_DOWN, 0.75);
+    const double max_drop = length_value(CR_VALUE_MAX_DROP, 0.5);
+    const double max_lock = length_value(CR_VALUE_MAX_LOCK_DISTANCE, 0.5);
+    const double max_rise = std::max(0.0, static_cast<double>(m.v[CR_VALUE_MAX_RISE]));
+    const double max_align = std::clamp(static_cast<double>(m.v[CR_VALUE_MAX_ALIGN]), 0.0, 90.0) * DEG_TO_RAD;
+    const double ground_y = m.v[CR_VALUE_GROUND_Y];
+    const double unlock_time = std::max(0.0, static_cast<double>(m.v[CR_VALUE_UNLOCK_TIME]));
+
+    // The animated feet.
+    Vec ankle[CR_MAX_LEGS], toe[CR_MAX_LEGS];
+    Quat foot[CR_MAX_LEGS];
+    for (int k = 0; k < legs; ++k) {
+        const int mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
+        ankle[k] = effector(s, mid, end);
+        if (end >= 0) foot[k] = world_rot(s, end);
+        if (m.has_toe[k]) toe[k] = transform_point(s.child[static_cast<size_t>(end)], Vec{});
+    }
+
+    // The ground: one host call for every probe.
+    double ground[CR_MAX_LEGS]{};
+    Vec normal[CR_MAX_LEGS];
+    for (Vec& n : normal) n = UP;
+    if (s.ground != nullptr && m.probe_count > 0) {
+        const Vec up_w = transform_dir(s.frame, UP);
+        const double units = length(up_w);  // world units per model unit
+        const Vec down_w = normalized(up_w) * -1.0;
+        int count = 0;
+        for (int k = 0; k < legs; ++k) {
+            for (int point = 0; point < (m.has_toe[k] ? 2 : 1); ++point) {
+                const Vec p = point == 0 ? ankle[k] : toe[k];
+                const Vec o = transform_point(s.frame, Vec{p.x, ground_y + probe_up, p.z});
+                cr_ground_probe& pr = s.probes[static_cast<size_t>(count++)];
+                pr.origin[0] = o.x;
+                pr.origin[1] = o.y;
+                pr.origin[2] = o.z;
+                pr.direction[0] = down_w.x;
+                pr.direction[1] = down_w.y;
+                pr.direction[2] = down_w.z;
+                pr.max_distance = (probe_up + probe_down) * units;
+                pr.foot = k;
+                pr.point = point;
+            }
+        }
+        std::fill(s.hits.begin(), s.hits.begin() + count, cr_ground_hit{});
+        if (s.ground(s.ground_user, s.probes.data(), count, s.hits.data()) < 0) {
+            set_error("cr_modstack: the ground query failed");
+            return CR_ERR_HOST;
+        }
+        bool has[CR_MAX_LEGS]{};
+        int ties[CR_MAX_LEGS]{};
+        Vec sum[CR_MAX_LEGS];
+        for (int i = 0; i < count; ++i) {
+            const cr_ground_hit& h = s.hits[static_cast<size_t>(i)];
+            if (h.hit == 0 || !finite3(h.point)) continue;
+            const int k = s.probes[static_cast<size_t>(i)].foot;
+            const double height = transform_point(s.frame_inv, Vec{h.point[0], h.point[1], h.point[2]}).y - ground_y;
+            Vec n = transform_dir(s.frame_inv, Vec{h.normal[0], h.normal[1], h.normal[2]});
+            n = std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z) && length(n) > EPS ? normalized(n) : UP;
+            if (!has[k] || height > ground[k] + 1e-6) {
+                has[k] = true;
+                ground[k] = height;
+                sum[k] = n;
+                ties[k] = 1;
+            } else if (std::fabs(height - ground[k]) <= 1e-6) {
+                sum[k] = sum[k] + n;
+                ++ties[k];
+            }
+        }
+        for (int k = 0; k < legs; ++k) {
+            if (has[k] && length(sum[k]) > EPS) normal[k] = normalized(sum[k]);
+        }
+    }
+
+    // Easing, locks, goals.
+    Vec goals[CR_MAX_LEGS];
+    for (int k = 0; k < legs; ++k) {
+        LegRt& l = m.legs[k];
+        const double lock = std::clamp(static_cast<double>(m.v[CR_VALUE_LOCK + k]), 0.0, 1.0);
+        if (!l.init) {
+            l.ground = ground[k];
+            l.init = true;
+        } else if (!l.locked) {
+            l.ground = ease(l.ground, ground[k], m.v[CR_VALUE_FOOT_RATE], dt);
+        }
+        const Vec live = ankle[k] + UP * l.ground;
+        if (lock > 0.0 && !l.locked) {
+            l.locked = true;
+            l.fade = 0.0;
+            l.lock_w = transform_point(s.frame, ankle[k] + UP * ground[k]);
+            l.lock_height = ankle[k].y;
+        }
+        // Pinned where it locked; its height above that ground follows the animation (heel roll, a late contact).
+        Vec lock_m = transform_point(s.frame_inv, l.lock_w) + UP * (ankle[k].y - l.lock_height);
+        if (l.locked && (lock <= 0.0 || length(lock_m - live) > max_lock)) {
+            l.locked = false;
+            l.fade = l.alpha;
+        }
+        double a;
+        if (l.locked) {
+            a = lock;
+        } else {
+            if (l.fade > 0.0) l.fade = unlock_time > 0.0 ? std::max(0.0, l.fade - dt / unlock_time) : 0.0;
+            a = l.fade;
+        }
+        l.alpha = a;
+        goals[k] = a > 0.0 ? live + (lock_m - live) * a : live;
+    }
+
+    // The pelvis: down to the lowest foot's need, eased, never so high a goal is out of reach.
+    double need = std::numeric_limits<double>::infinity();
+    for (int k = 0; k < legs; ++k) need = std::min(need, goals[k].y - ankle[k].y);
+    need = std::clamp(need, -max_drop, max_rise);
+    if (!m.pelvis_init) {
+        m.pelvis = need;
+        m.pelvis_init = true;
+    } else {
+        m.pelvis = ease(m.pelvis, need, m.v[CR_VALUE_PELVIS_RATE], dt);
+    }
+    m.pelvis = std::max(reach_bound(s, m, goals, m.pelvis), -max_drop);
+    m.out_pelvis = m.pelvis;
+    if (m.pelvis != 0.0) move_world(s, d.joints[0], UP * m.pelvis);
+
+    // The legs, then the feet turned toward the ground's normal.
+    for (int k = 0; k < legs; ++k) {
+        const int end = d.joints[3 + 3 * k];
+        Quat aligned;
+        if (end >= 0) {
+            Quat q = from_to(UP, normal[k]);
+            double axis[3];
+            const double angle = qangle_axis(q, axis);
+            if (angle > max_align) q = qaxis(axis[0], axis[1], axis[2], max_align);
+            aligned = qnormalize(qmul(q, foot[k]));
+        }
+        place_leg(s, m, k, goals[k], end >= 0 ? &aligned : nullptr);
+    }
+    return CR_OK;
+}
+
+// Which keyed values a modifier type reads (inputs) / reports (outputs).
+bool reads_value(const cr_modifier_desc& d, int key) {
+    switch (d.type) {
+        case CR_MOD_ORIENT_WARP:
+            return key >= CR_VALUE_ANGLE && key <= CR_VALUE_COUNTER;
+        case CR_MOD_STRIDE_WARP:
+            return key >= CR_VALUE_SCALE && key <= CR_VALUE_PELVIS;
+        case CR_MOD_FOOT_PLACEMENT:
+            return (key >= CR_VALUE_LOCK && key < CR_VALUE_LOCK + leg_count(d))
+                || (key >= CR_VALUE_PROBE_UP && key < CR_VALUE_INPUT_COUNT);
+        default:
+            return false;
+    }
+}
+
 // Blend the joints a modifier touched back toward the pose it got, by its weight.
 void blend_back(cr_modstack& s, float w) {
     const size_t n = s.snap.size();
@@ -582,6 +911,23 @@ bool check_mod(const cr_rig& rig, const cr_modifier_desc& d, int targets, std::v
                 return false;
             }
             return joints_ok(1, 1);
+        case CR_MOD_ORIENT_WARP:
+            return joints_ok(1, CR_MOD_MAX_JOINTS);
+        case CR_MOD_STRIDE_WARP:
+        case CR_MOD_FOOT_PLACEMENT: {
+            if (d.joint_count < 4 || d.joint_count > 1 + 3 * CR_MAX_LEGS || (d.joint_count - 1) % 3 != 0) {
+                why = "needs the pelvis and 3 joints per leg (1..5 legs)";
+                return false;
+            }
+            for (int k = 0; k < d.joint_count; ++k) {
+                const bool foot = k > 0 && (k - 1) % 3 == 2;  // a leg's end may be -1 (the mid joint's tail)
+                if (!valid_joint(rig, d.joints[k]) && !(foot && d.joints[k] == -1)) {
+                    why = "joint " + std::to_string(d.joints[k]) + " out of range";
+                    return false;
+                }
+            }
+            return true;
+        }
         case CR_MOD_FULL_BODY:
             if (!joints_ok(4, 16) || (d.joint_count - 1) % 3 != 0) {
                 why = d.joint_count >= 4 ? "needs the body and 3 joints per limb" : why;
@@ -614,6 +960,7 @@ int32_t modstack_apply(cr_modstack& s, PoseBuf& pose, float dt) {
         const cr_modifier_desc& d = m.d;
         if (d.weight <= 0.f) {
             if (d.type == CR_MOD_SPRING) m.spring_init = false;  // restart from the pose when it comes back
+            m.reset_locomotion();                                // locks and easing too
             continue;
         }
         s.snap = pose.v;
@@ -656,6 +1003,20 @@ int32_t modstack_apply(cr_modstack& s, PoseBuf& pose, float dt) {
             case CR_MOD_FULL_BODY:
                 full_body(s, d);
                 break;
+            case CR_MOD_ORIENT_WARP:
+                orient_warp(s, m, dt);
+                break;
+            case CR_MOD_STRIDE_WARP:
+                stride_warp(s, m);
+                break;
+            case CR_MOD_FOOT_PLACEMENT: {
+                const int32_t rc = foot_placement(s, m, dt);
+                if (rc != CR_OK) {
+                    s.pose = nullptr;
+                    return rc;
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -696,6 +1057,38 @@ cr_modstack* cr_modstack_create(const cr_rig* rig, const cr_modifier_desc* mods,
         m.d.weight = std::clamp(m.d.weight, 0.f, 1.f);
         m.cur.resize(m.chain.size());
         m.prev.resize(m.chain.size());
+        // Locomotion defaults (rig.h CR_VALUE_*; 0 = derived from the leg length where documented).
+        m.v[CR_VALUE_MAX_ANGLE] = 90.f;
+        m.v[CR_VALUE_COUNTER] = 1.f;
+        m.v[CR_VALUE_SCALE] = 1.f;
+        m.v[CR_VALUE_DIR_Z] = -1.f;
+        m.v[CR_VALUE_PELVIS] = 1.f;
+        m.v[CR_VALUE_MAX_ALIGN] = 30.f;
+        m.v[CR_VALUE_PELVIS_RATE] = 10.f;
+        m.v[CR_VALUE_FOOT_RATE] = 15.f;
+        m.v[CR_VALUE_UNLOCK_TIME] = 0.15f;
+        if (m.d.type == CR_MOD_STRIDE_WARP || m.d.type == CR_MOD_FOOT_PLACEMENT) {
+            const int pelvis = m.d.joints[0];
+            for (int k = 0, legs = leg_count(m.d); k < legs; ++k) {
+                const int end = m.d.joints[3 + 3 * k];
+                if (end >= 0) {
+                    const Joint& j = rig->joints[static_cast<size_t>(end)];
+                    m.has_toe[k] = j.kind == CR_JOINT_BONE
+                        && length(vec_of(j.endpoint)) > 1e-6;
+                }
+                for (int a = m.d.joints[1 + 3 * k]; a >= 0; a = rig->joints[static_cast<size_t>(a)].parent) {
+                    if (a == pelvis) {
+                        m.with_pelvis[k] = true;
+                        break;
+                    }
+                }
+                m.probe_count += m.has_toe[k] ? 2 : 1;
+            }
+            if (m.d.type == CR_MOD_FOOT_PLACEMENT && static_cast<size_t>(m.probe_count) > s->probes.size()) {
+                s->probes.resize(static_cast<size_t>(m.probe_count));
+                s->hits.resize(static_cast<size_t>(m.probe_count));
+            }
+        }
         s->mods.push_back(std::move(m));
     }
     s->targets.resize(static_cast<size_t>(target_count));
@@ -822,7 +1215,58 @@ int32_t cr_modstack_reset(cr_modstack* stack) {
     for (ModRt& m : stack->mods) {
         m.spring_init = false;
         m.acc = 0.0;
+        m.reset_locomotion();
     }
+    return CR_OK;
+}
+
+int32_t cr_modstack_set_value(cr_modstack* stack, int32_t mod, int32_t key, float value) {
+    if (stack == nullptr || mod < 0 || static_cast<size_t>(mod) >= stack->mods.size() || !std::isfinite(value)) {
+        set_error("cr_modstack_set_value: bad modifier or value");
+        return CR_ERR_ARG;
+    }
+    ModRt& m = stack->mods[static_cast<size_t>(mod)];
+    if (!reads_value(m.d, key)) {
+        set_error("cr_modstack_set_value: modifier " + std::to_string(mod) + " does not read value " + std::to_string(key));
+        return CR_ERR_RANGE;
+    }
+    m.v[key] = value;
+    return CR_OK;
+}
+
+float cr_modstack_get_value(const cr_modstack* stack, int32_t mod, int32_t key) {
+    if (stack == nullptr || mod < 0 || static_cast<size_t>(mod) >= stack->mods.size()) return 0.f;
+    const ModRt& m = stack->mods[static_cast<size_t>(mod)];
+    if (reads_value(m.d, key)) return m.v[key];
+    const int legs = m.d.type == CR_MOD_FOOT_PLACEMENT ? leg_count(m.d) : 0;
+    switch (m.d.type) {
+        case CR_MOD_ORIENT_WARP:
+            return key == CR_VALUE_OUT_ANGLE ? static_cast<float>(m.angle) : 0.f;
+        case CR_MOD_STRIDE_WARP:
+        case CR_MOD_FOOT_PLACEMENT:
+            if (key == CR_VALUE_OUT_PELVIS) return static_cast<float>(m.out_pelvis);
+            if (key >= CR_VALUE_OUT_LOCKED && key < CR_VALUE_OUT_LOCKED + legs) {
+                return m.legs[key - CR_VALUE_OUT_LOCKED].locked ? 1.f : 0.f;
+            }
+            if (key >= CR_VALUE_OUT_GROUND && key < CR_VALUE_OUT_GROUND + legs) {
+                return static_cast<float>(m.legs[key - CR_VALUE_OUT_GROUND].ground);
+            }
+            if (key >= CR_VALUE_OUT_ALPHA && key < CR_VALUE_OUT_ALPHA + legs) {
+                return static_cast<float>(m.legs[key - CR_VALUE_OUT_ALPHA].alpha);
+            }
+            return 0.f;
+        default:
+            return 0.f;
+    }
+}
+
+int32_t cr_modstack_set_ground(cr_modstack* stack, cr_ground_fn fn, void* user) {
+    if (stack == nullptr) {
+        set_error("cr_modstack_set_ground: null stack");
+        return CR_ERR_ARG;
+    }
+    stack->ground = fn;
+    stack->ground_user = fn != nullptr ? user : nullptr;
     return CR_OK;
 }
 

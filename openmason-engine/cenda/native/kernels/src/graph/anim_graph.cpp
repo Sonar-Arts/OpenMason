@@ -133,6 +133,8 @@ struct BoundClip {
     bool additive_mesh = false;
     int additive_slot = -1;
     std::vector<int> curve_ids;
+    // Foot-lock marker channels (#159): per channel, the clip's (time, 1 = down / 0 = up) marker events by time.
+    std::vector<std::vector<std::pair<float, uint8_t>>> lock_events;
 
     void release() {
         if (rig_clip != nullptr) cr_clip_destroy(rig_clip);
@@ -181,6 +183,28 @@ struct Segment {
     float from = 0.f, delta = 0.f;
 };
 
+// Locomotion modifiers (#159): the graph-side half (inputs fed each frame, play-rate warping).
+struct OrientRt {
+    int mod = -1;    // graph modifier
+    int stack = -1;  // stack modifier
+    int angle_param = -1;
+};
+
+struct StrideRt {
+    int mod = -1, stack = -1;
+    int speed_param = -1, direction_param = -1;
+    std::vector<int> clips;  // clip nodes whose play rate it warps
+    float rate = 1.f;        // last frame's play rate (weighted)
+    float scale = 1.f;       // last frame's stride scale
+};
+
+struct FootRt {
+    int mod = -1, stack = -1;
+    int legs = 0;
+    std::string curve[CR_MAX_LEGS];
+    int channel[CR_MAX_LEGS]{-1, -1, -1, -1, -1};
+};
+
 struct SlotRt {
     int montage = -1;
     int section = 0;
@@ -223,6 +247,14 @@ struct cg_instance {
     std::vector<int> mod_index;          // graph modifier -> stack modifier (-1 = left out)
     std::vector<cr_target> host_targets; // by graph target
     std::vector<std::pair<int, int>> aliases;  // (stack slot, host target) copied each frame
+    // locomotion (#159)
+    std::vector<OrientRt> orients;
+    std::vector<StrideRt> strides;
+    std::vector<FootRt> feet;
+    std::vector<float> rate_mul;  // per node: play-rate warp of the frame
+    std::vector<std::pair<std::string, std::string>> lock_markers;  // per channel: (down, up)
+    std::vector<double> lock_acc;
+    float facing_x = 0.f, facing_z = -1.f;
     // scratch
     std::vector<cm_sync_member> sync_members;
     std::vector<int> sync_nodes;
@@ -890,6 +922,58 @@ void sample_curves(cg_instance& inst, const BoundClip& b, float time, float weig
     }
 }
 
+double lock_event_value(const std::vector<std::pair<float, uint8_t>>& ev, float time, bool loop);
+
+void sample_locks(cg_instance& inst, const BoundClip& b, float time, float weight) {
+    for (size_t c = 0; c < b.lock_events.size() && c < inst.lock_acc.size(); ++c) {
+        inst.lock_acc[c] += static_cast<double>(weight) * lock_event_value(b.lock_events[c], time, b.loop);
+    }
+}
+
+// A modifier's influence this frame: weight x weightParam x weightCurve, clamped to [0, 1].
+float modifier_weight(cg_instance& inst, const og::Modifier& md) {
+    float w = md.weight;
+    if (!md.weight_param.empty()) w *= static_cast<float>(param_value(inst, inst.g->doc.find_param(md.weight_param)));
+    if (!md.weight_curve.empty()) {
+        const int32_t cv = cg_instance_curve_find(&inst, md.weight_curve.c_str());
+        w *= cv >= 0 ? inst.curve_values[static_cast<size_t>(cv)] : 0.f;
+    }
+    return std::clamp(w, 0.f, 1.f);
+}
+
+// The locomotion modifiers' per-frame inputs (#159): angle, stride scale + direction, foot locks.
+void feed_locomotion(cg_instance& inst) {
+    for (const OrientRt& r : inst.orients) {
+        cr_modstack_set_value(inst.mods, r.stack, CR_VALUE_ANGLE, static_cast<float>(param_value(inst, r.angle_param)));
+    }
+    for (const StrideRt& r : inst.strides) {
+        float dx = inst.facing_x, dz = inst.facing_z;
+        if (r.direction_param >= 0) {
+            const float x = static_cast<float>(param_value(inst, r.direction_param, 0));
+            const float z = static_cast<float>(param_value(inst, r.direction_param, 1));
+            if (x * x + z * z > 1e-12f) {
+                dx = x;
+                dz = z;
+            }
+        }
+        cr_modstack_set_value(inst.mods, r.stack, CR_VALUE_SCALE, r.scale);
+        cr_modstack_set_value(inst.mods, r.stack, CR_VALUE_DIR_X, dx);
+        cr_modstack_set_value(inst.mods, r.stack, CR_VALUE_DIR_Z, dz);
+    }
+    for (const FootRt& r : inst.feet) {
+        for (int k = 0; k < r.legs; ++k) {
+            float lock = 0.f;
+            if (!r.curve[k].empty()) {
+                const int32_t cv = cg_instance_curve_find(&inst, r.curve[k].c_str());
+                lock = cv >= 0 ? inst.curve_values[static_cast<size_t>(cv)] : 0.f;
+            } else if (r.channel[k] >= 0) {
+                lock = static_cast<float>(inst.lock_acc[static_cast<size_t>(r.channel[k])]);
+            }
+            cr_modstack_set_value(inst.mods, r.stack, CR_VALUE_LOCK + k, std::clamp(lock, 0.f, 1.f));
+        }
+    }
+}
+
 // ---- binding ------------------------------------------------------------------------------------------
 
 int32_t bind_clip(cg_instance& inst, const cm_clip* clip, BoundClip& out, int32_t* out_dropped) {
@@ -969,6 +1053,19 @@ int32_t bind_clip(cg_instance& inst, const cm_clip* clip, BoundClip& out, int32_
         }
         b.curve_ids.push_back(id);
     }
+    b.lock_events.resize(inst.lock_markers.size());
+    for (int32_t k = 0, n = cm_clip_marker_count(b.doc); k < n; ++k) {
+        const char* name = nullptr;
+        float t = 0.f;
+        if (cm_clip_marker_get(b.doc, k, &name, &t) != CM_OK || name == nullptr) continue;
+        for (size_t c = 0; c < inst.lock_markers.size(); ++c) {
+            if (inst.lock_markers[c].first == name) b.lock_events[c].emplace_back(t, uint8_t{1});
+            else if (inst.lock_markers[c].second == name) b.lock_events[c].emplace_back(t, uint8_t{0});
+        }
+    }
+    for (auto& ev : b.lock_events) {
+        std::stable_sort(ev.begin(), ev.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+    }
     out.release();
     out = std::move(b);
     return CG_OK;
@@ -1018,6 +1115,104 @@ bool resolve_target(const cg_instance& inst, const std::string& ref, std::vector
     }
     slot = inst.g->doc.find_target(ref);
     return slot >= 0;
+}
+
+// The clip nodes under `node` (itself included).
+std::vector<int> clips_under(const cg_graph& g, int node) {
+    std::vector<int> out;
+    for (size_t i = 0; i < g.nodes.size(); ++i) {
+        if (g.nodes[i].type != og::NodeType::Clip) continue;
+        for (int n = static_cast<int>(i); n >= 0; n = g.nodes[static_cast<size_t>(n)].parent) {
+            if (n == node) {
+                out.push_back(static_cast<int>(i));
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+// The graph side of the locomotion modifiers (#159), after the stack exists: tuning values, per-frame inputs.
+void build_locomotion(cg_instance& inst) {
+    const og::Graph& d = inst.g->doc;
+    if (inst.character != nullptr) {
+        const std::string f = cc_char_get_string(inst.character, CC_FIELD_FACING);
+        if (f == "+z") inst.facing_z = 1.f;
+        if (f == "-x" || f == "+x") {
+            inst.facing_z = 0.f;
+            inst.facing_x = f == "-x" ? -1.f : 1.f;
+        }
+    }
+    for (size_t i = 0; i < d.modifiers.size(); ++i) {
+        const int si = inst.mod_index[i];
+        if (si < 0) continue;
+        const og::Modifier& m = d.modifiers[i];
+        auto set = [&](int key, float value) { cr_modstack_set_value(inst.mods, si, key, value); };
+        switch (m.type) {
+            case og::ModType::OrientationWarp: {
+                set(CR_VALUE_MAX_ANGLE, m.max_angle);
+                set(CR_VALUE_RATE, m.rate);
+                set(CR_VALUE_COUNTER, m.counter);
+                inst.orients.push_back(OrientRt{static_cast<int>(i), si, d.find_param(m.angle_param)});
+                break;
+            }
+            case og::ModType::StrideWarp: {
+                set(CR_VALUE_PELVIS, m.pelvis_weight);
+                StrideRt r;
+                r.mod = static_cast<int>(i);
+                r.stack = si;
+                r.speed_param = d.find_param(m.speed_param);
+                r.direction_param = m.direction_param.empty() ? -1 : d.find_param(m.direction_param);
+                const int node = m.node.empty() ? inst.g->root : d.find_node(m.node);
+                r.clips = clips_under(*inst.g, node);
+                inst.strides.push_back(std::move(r));
+                break;
+            }
+            case og::ModType::FootPlacement: {
+                set(CR_VALUE_PROBE_UP, m.probe_up);
+                set(CR_VALUE_PROBE_DOWN, m.probe_down);
+                set(CR_VALUE_MAX_DROP, m.max_drop);
+                set(CR_VALUE_MAX_RISE, m.max_rise);
+                set(CR_VALUE_MAX_ALIGN, m.max_align);
+                set(CR_VALUE_PELVIS_RATE, m.pelvis_rate);
+                set(CR_VALUE_FOOT_RATE, m.foot_rate);
+                set(CR_VALUE_GROUND_Y, m.ground_height);
+                set(CR_VALUE_UNLOCK_TIME, m.unlock_time);
+                set(CR_VALUE_MAX_LOCK_DISTANCE, m.max_lock_distance);
+                FootRt r;
+                r.mod = static_cast<int>(i);
+                r.stack = si;
+                r.legs = static_cast<int>(m.legs.size());
+                for (int k = 0; k < r.legs; ++k) {
+                    const og::Leg& l = m.legs[static_cast<size_t>(k)];
+                    r.curve[k] = l.lock_curve;
+                    if (!l.lock_down.empty()) {
+                        r.channel[k] = static_cast<int>(inst.lock_markers.size());
+                        inst.lock_markers.emplace_back(l.lock_down, l.lock_up);
+                    }
+                }
+                inst.feet.push_back(std::move(r));
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    inst.lock_acc.assign(inst.lock_markers.size(), 0.0);
+}
+
+// A clip's foot-lock channel at a time: 1 when the last marker event at or before it is a `down`.
+double lock_event_value(const std::vector<std::pair<float, uint8_t>>& ev, float time, bool loop) {
+    if (ev.empty()) return 0.0;
+    int last = -1;
+    for (size_t k = 0; k < ev.size(); ++k) {
+        if (ev[k].first <= time) last = static_cast<int>(k);
+    }
+    if (last < 0) {
+        if (!loop) return 0.0;
+        last = static_cast<int>(ev.size()) - 1;  // the previous cycle's last event
+    }
+    return ev[static_cast<size_t>(last)].second != 0 ? 1.0 : 0.0;
 }
 
 // Builds the instance's modifier stack; returns the number of colliders / modifiers left out.
@@ -1131,6 +1326,36 @@ int32_t build_modifiers(cg_instance& inst) {
                 c.p[0] = static_cast<float>(m.iterations);
                 break;
             }
+            case og::ModType::OrientationWarp:
+                c.type = CR_MOD_ORIENT_WARP;
+                joint(m.body);
+                // Spine joints the character lacks are left out (counted), the rest share the counter-turn.
+                for (const og::AimJoint& a : m.aim) {
+                    const int j = resolve_joint(inst, a.joint);
+                    if (j < 0) {
+                        ++unresolved;
+                        continue;
+                    }
+                    c.joint_weights[c.joint_count] = a.weight;
+                    c.joints[c.joint_count++] = j;
+                }
+                break;
+            case og::ModType::StrideWarp:
+            case og::ModType::FootPlacement:
+                c.type = m.type == og::ModType::StrideWarp ? CR_MOD_STRIDE_WARP : CR_MOD_FOOT_PLACEMENT;
+                joint(m.body);
+                for (const og::Leg& l : m.legs) {
+                    joint(l.upper);
+                    joint(l.mid);
+                    // No (or an unmapped) foot: the mid joint's tail is the ankle; an unmapped one is counted.
+                    int e = -1;
+                    if (!l.end.empty()) {
+                        e = resolve_joint(inst, l.end);
+                        if (e < 0) ++unresolved;
+                    }
+                    c.joints[c.joint_count++] = e;
+                }
+                break;
         }
         if (!ok) {
             ++unresolved;
@@ -1148,6 +1373,7 @@ int32_t build_modifiers(cg_instance& inst) {
         }
     }
     for (const auto& [st, host] : aliases) inst.aliases.emplace_back(static_cast<int>(d.targets.size()) + st, host);
+    build_locomotion(inst);
     for (const og::Collider& col : d.colliders) {
         const int j = resolve_joint(inst, col.joint);
         if (j < 0) {
@@ -1396,6 +1622,7 @@ cg_instance* cg_instance_create(const cg_graph* g, const cr_rig* rig, const cc_c
     inst->slots.resize(g->doc.slots.size());
     inst->rt.resize(n);
     inst->players.resize(n);
+    inst->rate_mul.assign(n, 1.f);
     inst->weights.assign(static_cast<size_t>(std::max(1, g->weight_floats)), 0.f);
     inst->ops.reserve(static_cast<size_t>(g->max_ops));
     inst->notifies.reserve(kMaxNotifies);
@@ -1573,6 +1800,24 @@ int32_t cg_instance_set_target(cg_instance* inst, int32_t target, int32_t kind, 
     }
     inst->host_targets[static_cast<size_t>(target)] = t;
     return CG_OK;
+}
+
+int32_t cg_instance_set_ground(cg_instance* inst, cr_ground_fn fn, void* user) {
+    if (inst == nullptr) return fail(CG_ERR_ARG, "cg_instance_set_ground: null instance");
+    if (inst->mods != nullptr) cr_modstack_set_ground(inst->mods, fn, user);
+    return CG_OK;
+}
+
+float cg_instance_modifier_value(const cg_instance* inst, int32_t modifier, int32_t key) {
+    if (inst == nullptr || modifier < 0 || static_cast<size_t>(modifier) >= inst->mod_index.size()) return 0.f;
+    if (key == CG_VALUE_PLAY_RATE || key == CG_VALUE_STRIDE) {
+        for (const StrideRt& r : inst->strides) {
+            if (r.mod == modifier) return key == CG_VALUE_PLAY_RATE ? r.rate : r.scale;
+        }
+        return 0.f;
+    }
+    const int si = inst->mod_index[static_cast<size_t>(modifier)];
+    return si < 0 || inst->mods == nullptr ? 0.f : cr_modstack_get_value(inst->mods, si, key);
 }
 
 int32_t cg_instance_set_root_motion(cg_instance* inst, int32_t mode) {
@@ -1794,6 +2039,30 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         }
     }
 
+    // Stride warping (#159): the play rate each stride warp allows, from the host's speed and the clips' speed
+    // (curves of the previous frame: this frame's are sampled after the clips advance).
+    for (StrideRt& r : inst->strides) {
+        for (int i : r.clips) inst->rate_mul[static_cast<size_t>(i)] = 1.f;
+    }
+    for (StrideRt& r : inst->strides) {
+        const og::Modifier& md = g.doc.modifiers[static_cast<size_t>(r.mod)];
+        const float w = modifier_weight(*inst, md);
+        const double speed = std::max(0.0, param_value(*inst, r.speed_param));
+        double anim = md.anim_speed;
+        if (!md.anim_speed_curve.empty()) {
+            const int32_t cv = cg_instance_curve_find(inst, md.anim_speed_curve.c_str());
+            if (cv >= 0 && inst->curve_values[static_cast<size_t>(cv)] > 0.f) anim = inst->curve_values[static_cast<size_t>(cv)];
+        }
+        double rate = 1.0, scale = 1.0;
+        if (anim > 1e-6) {
+            rate = std::clamp(speed / anim, static_cast<double>(md.rate_min), static_cast<double>(md.rate_max));
+            scale = std::clamp(speed / (anim * rate), static_cast<double>(md.stride_min), static_cast<double>(md.stride_max));
+        }
+        r.rate = static_cast<float>(1.0 + (rate - 1.0) * w);
+        r.scale = static_cast<float>(scale);
+        for (int i : r.clips) inst->rate_mul[static_cast<size_t>(i)] *= r.rate;
+    }
+
     // 2. time
     for (int i : g.order) {
         const CNode& c = g.nodes[static_cast<size_t>(i)];
@@ -1808,6 +2077,7 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         if (b.rig_clip == nullptr || b.duration <= 0.f || c.sync >= 0) continue;
         float rate = c.rate;
         if (c.rate_param >= 0) rate *= static_cast<float>(param_value(*inst, c.rate_param));
+        rate *= inst->rate_mul[static_cast<size_t>(i)];
         const float advance = rate * dt;
         p.time = clip_time(p.time + advance, b.duration, b.loop);
         p.advanced = b.loop ? advance : p.time - p.prev;
@@ -1823,6 +2093,7 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
             if (b.rig_clip == nullptr || b.duration <= 0.f) continue;
             float rate = c.rate;
             if (c.rate_param >= 0) rate *= static_cast<float>(param_value(*inst, c.rate_param));
+            rate *= inst->rate_mul[static_cast<size_t>(i)];
             inst->sync_members.push_back(cm_sync_member{b.doc, inst->players[static_cast<size_t>(i)].time, rate,
                                                         inst->rt[static_cast<size_t>(i)].influence, 0});
             inst->sync_nodes.push_back(i);
@@ -1878,15 +2149,19 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         }
     }
 
-    // Curves (they weigh the modifiers below).
+    // Curves (they weigh the modifiers below) and foot-lock marker channels (#159), weighted alike.
     double total = 0.0;
+    std::fill(inst->lock_acc.begin(), inst->lock_acc.end(), 0.0);
     for (int i : g.order) {
         const CNode& c = g.nodes[static_cast<size_t>(i)];
         if (c.type != og::NodeType::Clip) continue;
         const NodeRt& r = inst->rt[static_cast<size_t>(i)];
         if (!r.active || r.influence <= 0.f) continue;
         const BoundClip& b = inst->slots[static_cast<size_t>(c.clip_slot)];
-        if (b.rig_clip != nullptr) sample_curves(*inst, b, inst->players[static_cast<size_t>(i)].time, r.influence, total);
+        if (b.rig_clip != nullptr) {
+            sample_curves(*inst, b, inst->players[static_cast<size_t>(i)].time, r.influence, total);
+            sample_locks(*inst, b, inst->players[static_cast<size_t>(i)].time, r.influence);
+        }
     }
     for (int i : g.montage_slots) {
         const CNode& c = g.nodes[static_cast<size_t>(i)];
@@ -1894,11 +2169,16 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         const SlotRt& s = inst->mslots[static_cast<size_t>(c.montage_slot)];
         if (!r.active || s.seg_count == 0 || s.montage < 0) continue;
         const float w = r.influence * s.weight;
-        if (w > 0.f) sample_curves(*inst, inst->montages[static_cast<size_t>(s.montage)].clip, s.time, w, total);
+        if (w > 0.f) {
+            const BoundClip& mb = inst->montages[static_cast<size_t>(s.montage)].clip;
+            sample_curves(*inst, mb, s.time, w, total);
+            sample_locks(*inst, mb, s.time, w);
+        }
     }
     for (size_t k = 0; k < inst->curve_values.size(); ++k) {
         inst->curve_values[k] = total > 0.0 ? static_cast<float>(inst->curve_acc[k] / total) : 0.f;
     }
+    for (double& a : inst->lock_acc) a = total > 0.0 ? a / total : 0.0;
 
     // 3. pose
     inst->ops.clear();
@@ -1907,15 +2187,9 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         for (size_t m = 0; m < g.doc.modifiers.size(); ++m) {
             const int si = inst->mod_index[m];
             if (si < 0) continue;
-            const og::Modifier& md = g.doc.modifiers[m];
-            float w = md.weight;
-            if (!md.weight_param.empty()) w *= static_cast<float>(param_value(*inst, g.doc.find_param(md.weight_param)));
-            if (!md.weight_curve.empty()) {
-                const int32_t cv = cg_instance_curve_find(inst, md.weight_curve.c_str());
-                w *= cv >= 0 ? inst->curve_values[static_cast<size_t>(cv)] : 0.f;
-            }
-            cr_modstack_set_weight(inst->mods, si, std::clamp(w, 0.f, 1.f));
+            cr_modstack_set_weight(inst->mods, si, modifier_weight(*inst, g.doc.modifiers[m]));
         }
+        feed_locomotion(*inst);
         for (const auto& [slot, host] : inst->aliases) {
             cr_modstack_set_target(inst->mods, slot, &inst->host_targets[static_cast<size_t>(host)]);
         }
@@ -1927,7 +2201,9 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
     const int32_t rc = cr_poses_evaluate(inst->poses, inst->ops.data(), static_cast<int32_t>(inst->ops.size()),
                                          g.nodes[static_cast<size_t>(g.root)].out_slot, extras, extra_count,
                                          base_matrix, out_skin, out_world, out_child);
-    if (rc != CR_OK) return fail(CG_ERR_ARG, std::string("cg_instance_evaluate: ") + cr_last_error());
+    if (rc != CR_OK) {
+        return fail(rc == CR_ERR_HOST ? CG_ERR_HOST : CG_ERR_ARG, std::string("cg_instance_evaluate: ") + cr_last_error());
+    }
 
     // 4. outputs
     const float threshold = g.doc.notify_threshold;
