@@ -136,6 +136,11 @@ int32_t cc_char_role_get(const cc_char* c, int32_t index, const char** out_role,
 int32_t cc_char_role_set(cc_char* c, const char* role, const char* joint);
 /* The joint id for a role, or NULL. */
 const char* cc_char_role_joint(const cc_char* c, const char* role);
+/* Weighted bone mask authored by role (rig blending, OpenMason #156): cr_mask_set on the joint the role maps
+ * to in `rig` (flags CR_MASK_BRANCH, blend_depth as there). CC_ERR_RANGE when the role is unmapped or its
+ * joint is not in the rig. */
+int32_t cc_char_mask_role(const cc_char* c, const cr_rig* rig, cr_mask* mask, const char* role, float weight,
+                          uint32_t flags, int32_t blend_depth);
 
 /* --- Reference pose and limits ------------------------------------------------------------------ */
 

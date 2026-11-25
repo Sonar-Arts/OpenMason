@@ -120,6 +120,35 @@ public final class RigPoser {
     }
 
     /**
+     * The one pose call per character per frame (CR ABI 2): runs {@code program} on {@code workspace}, then
+     * composes {@code slot} with the extras added since {@link #clearExtras()} under {@code baseMatrix} (null =
+     * identity) into {@code out}. Allocation-free once the program, the extras and {@code out} have grown.
+     */
+    public JointPalette evaluate(PoseWorkspace workspace, PoseProgram program, int slot, Matrix4f baseMatrix,
+                                 JointPalette out) {
+        int n = workspace.rig().jointCount();
+        out.ensureCapacity(n);
+        MemorySegment baseSeg = MemorySegment.NULL;
+        if (baseMatrix != null) {
+            JointPalette.write(base, 0, baseMatrix);
+            baseSeg = base;
+        }
+        MemorySegment extraSeg = extraCount == 0 ? MemorySegment.NULL : extras;
+        try {
+            int rc = (int) CendaRig.POSES_EVALUATE.invokeExact(workspace.handle(), program.ops(), program.size(), slot,
+                extraSeg, extraCount, baseSeg, out.skinSegment(), out.worldSegment(), MemorySegment.NULL);
+            if (rc != CendaRig.OK) throw new IllegalArgumentException("cr_poses_evaluate: " + CendaRig.lastError());
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+        java.lang.ref.Reference.reachabilityFence(program);
+        out.setCount(n);
+        return out;
+    }
+
+    /**
      * Poses {@code rig} from explicit local transforms ({@code locals}: 9 floats per joint — pos, rot
      * degrees, scale — or null for the rest pose) plus the current extras, under {@code baseMatrix}.
      */

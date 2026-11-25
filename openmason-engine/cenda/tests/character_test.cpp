@@ -409,6 +409,26 @@ void test_metrics() {
     cr_rig_destroy(rig);
 }
 
+
+// A weighted bone mask authored by role (OpenMason #156): the spine role's branch at full weight.
+void test_mask_role() {
+    cr_rig* rig = biped();
+    cc_char* c = cc_char_create();
+    CHECK(cc_char_role_set(c, "spine", "spine") == CC_OK);
+    CHECK(cc_char_role_set(c, "ghost", "nowhere") == CC_OK);
+    cr_mask* m = cr_mask_create(rig, 0.f);
+    CHECK(cc_char_mask_role(c, rig, m, "spine", 1.f, CR_MASK_BRANCH, 2) == CC_OK);
+    float w[5];
+    CHECK(cr_mask_get(m, w) == CR_OK);
+    CHECK(w[0] == 0.f && w[1] == 0.5f && w[2] == 1.f && w[3] == 1.f && w[4] == 1.f);
+    CHECK(cc_char_mask_role(c, rig, m, "head", 1.f, 0, 0) == CC_ERR_RANGE);   // unmapped
+    CHECK(cc_char_mask_role(c, rig, m, "ghost", 1.f, 0, 0) == CC_ERR_RANGE);  // not in the rig
+    CHECK(cc_char_mask_role(c, rig, nullptr, "spine", 1.f, 0, 0) == CC_ERR_ARG);
+    cr_mask_destroy(m);
+    cc_char_destroy(c);
+    cr_rig_destroy(rig);
+}
+
 }  // namespace
 
 int main() {
@@ -418,6 +438,7 @@ int main() {
     test_refusals();
     test_editing();
     test_check();
+    test_mask_role();
     test_metrics();
     if (failures != 0) {
         std::fprintf(stderr, "character: %d check(s) failed\n", failures);

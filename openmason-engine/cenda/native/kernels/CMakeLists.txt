@@ -111,6 +111,7 @@ add_library(cenda_kernels SHARED
         src/nav/nav_world.cpp
         src/nav/nav_agents.cpp
         src/rig/rig.cpp
+        src/rig/pose.cpp
         src/rig/skin.cpp
         src/character/character.cpp
         src/character/profile.cpp

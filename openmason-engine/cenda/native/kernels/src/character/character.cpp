@@ -279,6 +279,21 @@ const char* cc_char_role_joint(const cc_char* c, const char* role) {
     return nullptr;
 }
 
+int32_t cc_char_mask_role(const cc_char* c, const cr_rig* rig, cr_mask* mask, const char* role, float weight,
+                          uint32_t flags, int32_t blend_depth) {
+    if (c == nullptr || rig == nullptr || mask == nullptr || role == nullptr || !std::isfinite(weight)) {
+        return error(CC_ERR_ARG, "cc_char_mask_role: bad arguments");
+    }
+    const char* joint = cc_char_role_joint(c, role);
+    if (joint == nullptr) return error(CC_ERR_RANGE, std::string("cc_char_mask_role: role '") + role + "' is not mapped");
+    const int32_t index = cr_rig_find(rig, joint);
+    if (index < 0) return error(CC_ERR_RANGE, std::string("cc_char_mask_role: joint of role '") + role + "' not in the rig");
+    if (cr_mask_set(mask, index, weight, flags, blend_depth) != CR_OK) {
+        return error(CC_ERR_ARG, std::string("cc_char_mask_role: ") + cr_last_error());
+    }
+    return CC_OK;
+}
+
 // --- Reference pose and limits ------------------------------------------------------------------------
 
 int32_t cc_char_pose_count(const cc_char* c) {

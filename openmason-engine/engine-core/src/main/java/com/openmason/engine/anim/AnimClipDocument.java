@@ -209,7 +209,7 @@ public final class AnimClipDocument implements AutoCloseable {
         cleanable.clean();
     }
 
-    private MemorySegment handle() {
+    MemorySegment handle() {
         MemorySegment h = state.handle;
         if (h == null) throw new IllegalStateException("AnimClipDocument is closed");
         return h;

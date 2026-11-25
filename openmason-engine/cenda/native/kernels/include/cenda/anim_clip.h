@@ -165,6 +165,27 @@ int32_t cm_clip_marker_position(const cm_clip* c, float time, int32_t* out_marke
 /* The inverse: the clip time at fraction of the way from marker to the next. */
 float cm_clip_marker_time(const cm_clip* c, int32_t marker, float fraction);
 
+/* --- Sync groups (OpenMason #156) ------------------------------------------------------------------ */
+
+/* One clip of a sync group (24 bytes; pointer padded to 8). */
+typedef struct cm_sync_member {
+    const cm_clip* clip;
+    float time;      /* in/out: the clip's time (looping clips: wrapped into [0, duration)) */
+    float rate;      /* playback rate (only the leader's is used) */
+    float weight;    /* blend weight: with leader < 0 the heaviest member leads (the first of equals) */
+    int32_t reserved;
+} cm_sync_member;
+
+/* Advances a sync group by dt seconds (Unreal sync groups and markers): the leader plays at its own rate
+ * (looping clips wrap, others clamp); every follower then takes the leader's PHASE. With sync markers that
+ * phase is the leader's position between markers (cm_clip_marker_position): a follower moves to the same
+ * fraction between its own markers of the same name, choosing among same-named markers the one reached
+ * soonest going forward from its current time, so clips of different lengths keep their feet in step. A
+ * follower without that marker (or a leader before its first marker / without markers) takes the leader's
+ * normalized time instead. leader = an index, or -1 for the heaviest. Returns the leader's index, or
+ * CM_ERR_ARG. */
+int32_t cm_sync_advance(cm_sync_member* members, int32_t count, int32_t leader, float dt);
+
 /* --- Root motion and additive ------------------------------------------------------------------------ */
 
 enum {

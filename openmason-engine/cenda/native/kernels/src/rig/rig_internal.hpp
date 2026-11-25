@@ -39,7 +39,45 @@ struct Binding {
     std::vector<uint8_t> masked;  // per joint
 };
 
-struct Clip;
+// One joint's local pose (the 9 floats of cr_rig_local_pose).
+struct Pose {
+    float pos[3];
+    float rot[3];
+    float scale[3];
+};
+
+// A local pose of every joint + whether the pose drives it (see rig.h "Pose pipeline").
+struct PoseBuf {
+    std::vector<Pose> v;
+    std::vector<uint8_t> driven;
+};
+
+// Float sampling helpers with the retired Java AnimSampler / AnimLayering operation order (rig.cpp).
+float lerp_angle(float a, float b, float u);
+void sample_track(const cr_clip& clip, int32_t track, float t, Pose& out);
+void lerp_pose(Pose& a, const Pose& b, float w);
+// lerp_pose with the rotation slerped as a quaternion (pose.cpp).
+void lerp_pose_quat(Pose& a, const Pose& b, float w);
+float wrap_time(float elapsed, float duration, int32_t loop);
+float clip_weight(const cr_clip& clip, float elapsed);
+// The clip's per-joint binding on a rig (cached on the rig; a copy).
+Binding binding_for(const cr_rig& rig, const cr_clip& clip);
+// Into the caller's binding (reuses its vectors: no allocation once they have grown).
+void binding_into(const cr_rig& rig, const cr_clip& clip, Binding& out);
+
+// Pose ops shared by cr_rig_pose (ABI 1 entry points) and cr_poses (pose.cpp).
+void pose_rest(const cr_rig& rig, PoseBuf& dst);
+// scratch: a binding the call may overwrite.
+void pose_sample(const cr_rig& rig, const cr_clip& clip, float elapsed, bool clip_mask, PoseBuf& dst,
+                 Binding& scratch);
+// Override layer: dst = lerp(dst or rest, src, min(weight·mask_j, 1)) on joints src drives.
+void pose_layer_override(const cr_rig& rig, PoseBuf& dst, const PoseBuf& src, float weight, const float* mask,
+                         uint32_t flags);
+
+// Composes local poses into skin / world / child matrices (rig.cpp). who = the API name for errors.
+int32_t compose_pose(const cr_rig* rig, const std::vector<Pose>& poses, const cr_joint_extra* extras,
+                     int32_t extra_count, const float* base_matrix, float* out_skin, float* out_world,
+                     float* out_child, const char* who);
 
 }  // namespace cenda::rig
 

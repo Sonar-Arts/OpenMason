@@ -184,6 +184,29 @@ public final class RigClip {
         }
     }
 
+    private static final ThreadLocal<MemorySegment> ROOT_SCRATCH =
+        ThreadLocal.withInitial(() -> Arena.ofAuto().allocate(CendaRig.ROOT_MOTION_BYTES, 4));
+
+    /**
+     * The root motion of {@code joint}'s track over {@code [prevTime, prevTime + delta]} elapsed seconds on
+     * {@code axes} ({@link PoseProgram#ROOT_X} ...): {@code out[0..2]} translation in the root's frame at the
+     * start of the step (its yaw removed when {@link PoseProgram#ROOT_YAW} is extracted), {@code out[3]} the
+     * yaw turn in degrees. Looping clips wrap and count whole cycles. A joint the clip does not key moves nothing.
+     */
+    public float[] rootMotion(Rig rig, int joint, int axes, float prevTime, float delta, float[] out) {
+        MemorySegment seg = ROOT_SCRATCH.get();
+        try {
+            int rc = (int) CendaRig.CLIP_ROOT_MOTION.invokeExact(handle, rig.handle(), joint, axes, prevTime, delta, seg);
+            if (rc != CendaRig.OK) throw new IllegalArgumentException("cr_clip_root_motion: " + CendaRig.lastError());
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+        MemorySegment.copy(seg, CendaRig.F32, 0, out, 0, 4);
+        return out;
+    }
+
     /**
      * Samples one track at a wrapped time into {@code out}: pos[0..2], rotDeg[3..5], scale[6..8].
      */

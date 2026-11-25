@@ -93,6 +93,7 @@ public final class CendaCharacter {
     static final MethodHandle METRICS_GET;
     static final MethodHandle METRICS_SET;
     static final MethodHandle COMPUTE_METRICS;
+    static final MethodHandle MASK_ROLE;
     static final MethodHandle CHECK;
     static final MethodHandle REPORT_COUNT;
     static final MethodHandle REPORT_GET;
@@ -188,6 +189,8 @@ public final class CendaCharacter {
         METRICS_SET = handle(lookup, "cc_char_metrics_set", FunctionDescriptor.of(I32, ADDR, ADDR));
         COMPUTE_METRICS = handle(lookup, "cc_char_compute_metrics",
             FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, ADDR));
+        MASK_ROLE = handle(lookup, "cc_char_mask_role",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, F32, I32, I32));
         CHECK = handle(lookup, "cc_char_check", FunctionDescriptor.of(ADDR, ADDR, ADDR));
         REPORT_COUNT = handle(lookup, "cc_report_count", FunctionDescriptor.of(I32, ADDR));
         REPORT_GET = handle(lookup, "cc_report_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));

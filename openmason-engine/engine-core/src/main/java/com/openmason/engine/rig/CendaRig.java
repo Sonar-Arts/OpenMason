@@ -28,7 +28,7 @@ public final class CendaRig {
     private static final Logger LOGGER = LoggerFactory.getLogger(CendaRig.class);
 
     /** Must equal {@code CR_ABI_VERSION} in rig.h (build-kernels.sh checks both sides). */
-    static final int EXPECTED_ABI = 1;
+    static final int EXPECTED_ABI = 2;
 
     static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     static final ValueLayout.OfFloat F32 = ValueLayout.JAVA_FLOAT;
@@ -48,6 +48,10 @@ public final class CendaRig {
     static final long EXTRA_BYTES = 24;
     /** {@code cr_skin_entry}. */
     static final long SKIN_ENTRY_BYTES = 40;
+    /** {@code cr_pose_op} (ABI 2). */
+    static final long OP_BYTES = 48;
+    /** {@code cr_root_motion}. */
+    static final long ROOT_MOTION_BYTES = 16;
 
     static final int OK = 0;
 
@@ -68,6 +72,25 @@ public final class CendaRig {
     static final MethodHandle RIG_POSE;
     static final MethodHandle RIG_POSE_LOCALS;
     static final MethodHandle RIG_LOCAL_POSE;
+    static final MethodHandle POSES_CREATE;
+    static final MethodHandle POSES_DESTROY;
+    static final MethodHandle POSES_GET;
+    static final MethodHandle POSES_SET;
+    static final MethodHandle POSES_RUN;
+    static final MethodHandle POSES_EVALUATE;
+    static final MethodHandle MASK_CREATE;
+    static final MethodHandle MASK_DESTROY;
+    static final MethodHandle MASK_FILL;
+    static final MethodHandle MASK_SET;
+    static final MethodHandle MASK_GET;
+    static final MethodHandle MASK_SET_ALL;
+    static final MethodHandle MASK_FROM_CLIP;
+    static final MethodHandle INERTIA_CREATE;
+    static final MethodHandle INERTIA_DESTROY;
+    static final MethodHandle INERTIA_REQUEST;
+    static final MethodHandle INERTIA_RESET;
+    static final MethodHandle INERTIA_ACTIVE;
+    static final MethodHandle CLIP_ROOT_MOTION;
     static final MethodHandle SKIN_CREATE;
     static final MethodHandle SKIN_DESTROY;
     static final MethodHandle SKIN_CLONE;
@@ -144,6 +167,27 @@ public final class CendaRig {
             FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
         RIG_LOCAL_POSE = handle(lookup, "cr_rig_local_pose",
             FunctionDescriptor.of(I32, ADDR, ADDR, F32, ADDR, I32, ADDR));
+        POSES_CREATE = handle(lookup, "cr_poses_create", FunctionDescriptor.of(ADDR, ADDR, I32));
+        POSES_DESTROY = handle(lookup, "cr_poses_destroy", FunctionDescriptor.ofVoid(ADDR));
+        POSES_GET = handle(lookup, "cr_poses_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
+        POSES_SET = handle(lookup, "cr_poses_set", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
+        POSES_RUN = handle(lookup, "cr_poses_run", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
+        POSES_EVALUATE = handle(lookup, "cr_poses_evaluate",
+            FunctionDescriptor.of(I32, ADDR, ADDR, I32, I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
+        MASK_CREATE = handle(lookup, "cr_mask_create", FunctionDescriptor.of(ADDR, ADDR, F32));
+        MASK_DESTROY = handle(lookup, "cr_mask_destroy", FunctionDescriptor.ofVoid(ADDR));
+        MASK_FILL = handle(lookup, "cr_mask_fill", FunctionDescriptor.of(I32, ADDR, F32));
+        MASK_SET = handle(lookup, "cr_mask_set", FunctionDescriptor.of(I32, ADDR, I32, F32, I32, I32));
+        MASK_GET = handle(lookup, "cr_mask_get", FunctionDescriptor.of(I32, ADDR, ADDR));
+        MASK_SET_ALL = handle(lookup, "cr_mask_set_all", FunctionDescriptor.of(I32, ADDR, ADDR));
+        MASK_FROM_CLIP = handle(lookup, "cr_mask_from_clip", FunctionDescriptor.of(I32, ADDR, ADDR));
+        INERTIA_CREATE = handle(lookup, "cr_inertia_create", FunctionDescriptor.of(ADDR, ADDR));
+        INERTIA_DESTROY = handle(lookup, "cr_inertia_destroy", FunctionDescriptor.ofVoid(ADDR));
+        INERTIA_REQUEST = handle(lookup, "cr_inertia_request", FunctionDescriptor.of(I32, ADDR, F32), critical);
+        INERTIA_RESET = handle(lookup, "cr_inertia_reset", FunctionDescriptor.of(I32, ADDR), critical);
+        INERTIA_ACTIVE = handle(lookup, "cr_inertia_active", FunctionDescriptor.of(I32, ADDR), critical);
+        CLIP_ROOT_MOTION = handle(lookup, "cr_clip_root_motion",
+            FunctionDescriptor.of(I32, ADDR, ADDR, I32, I32, F32, F32, ADDR));
         SKIN_CREATE = handle(lookup, "cr_skin_create", FunctionDescriptor.of(ADDR, I32));
         SKIN_DESTROY = handle(lookup, "cr_skin_destroy", FunctionDescriptor.ofVoid(ADDR));
         SKIN_CLONE = handle(lookup, "cr_skin_clone", FunctionDescriptor.of(ADDR, ADDR));

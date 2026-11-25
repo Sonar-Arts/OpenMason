@@ -56,22 +56,22 @@ float ease(int32_t easing, float t) {
     }
 }
 
+}  // namespace
+
 float lerp_angle(float a, float b, float u) {
     const float delta = std::fmod(std::fmod(b - a, 360.f) + 540.f, 360.f) - 180.f;
     return a + delta * u;
 }
 
-struct Pose {
-    float pos[3];
-    float rot[3];
-    float scale[3];
-};
+namespace {
 
 void pose_of(const cr_key& k, Pose& out) {
     std::memcpy(out.pos, k.pos, sizeof out.pos);
     std::memcpy(out.rot, k.rot_deg, sizeof out.rot);
     std::memcpy(out.scale, k.scale, sizeof out.scale);
 }
+
+}  // namespace
 
 void sample_track(const cr_clip& clip, int32_t track, float t, Pose& out) {
     const cr_track_desc& td = clip.tracks[static_cast<size_t>(track)];
@@ -139,6 +139,8 @@ float clip_weight(const cr_clip& clip, float elapsed) {
     const float v = std::min(in, out);
     return v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
 }
+
+namespace {
 
 // ---- matrices --------------------------------------------------------------------------------
 
@@ -214,78 +216,135 @@ Binding make_binding(const cr_rig& rig, const cr_clip& clip) {
     return b;
 }
 
+}  // namespace
+
 // Copy of the binding (tiny: two small vectors); the cache stays locked only for the lookup.
 Binding binding_for(const cr_rig& rig, const cr_clip& clip) {
+    Binding b;
+    binding_into(rig, clip, b);
+    return b;
+}
+
+void binding_into(const cr_rig& rig, const cr_clip& clip, Binding& out) {
     {
         std::lock_guard<std::mutex> lock(rig.binding_mutex);
         for (auto it = rig.bindings.begin(); it != rig.bindings.end(); ++it) {
             if (it->clip_serial == clip.serial) {
                 rig.bindings.splice(rig.bindings.begin(), rig.bindings, it);
-                return rig.bindings.front();
+                const Binding& hit = rig.bindings.front();
+                out.clip_serial = hit.clip_serial;
+                out.track.assign(hit.track.begin(), hit.track.end());
+                out.masked.assign(hit.masked.begin(), hit.masked.end());
+                return;
             }
         }
     }
     Binding b = make_binding(rig, clip);
+    out.clip_serial = b.clip_serial;
+    out.track.assign(b.track.begin(), b.track.end());
+    out.masked.assign(b.masked.begin(), b.masked.end());
     std::lock_guard<std::mutex> lock(rig.binding_mutex);
-    rig.bindings.push_front(b);
+    rig.bindings.push_front(std::move(b));
     if (rig.bindings.size() > MAX_BINDINGS) rig.bindings.pop_back();
-    return b;
 }
+
+// ---- pose ops shared with pose.cpp -----------------------------------------------------------
+
+void pose_rest(const cr_rig& rig, PoseBuf& dst) {
+    const size_t n = rig.joints.size();
+    dst.v.resize(n);
+    dst.driven.assign(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        const auto& j = rig.joints[i];
+        std::memcpy(dst.v[i].pos, j.pos, sizeof j.pos);
+        std::memcpy(dst.v[i].rot, j.rot, sizeof j.rot);
+        std::memcpy(dst.v[i].scale, j.scale, sizeof j.scale);
+    }
+}
+
+void pose_sample(const cr_rig& rig, const cr_clip& clip, float elapsed, bool clip_mask, PoseBuf& dst,
+                 Binding& scratch) {
+    pose_rest(rig, dst);
+    const float t = wrap_time(elapsed, clip.desc.duration, clip.desc.loop);
+    binding_into(rig, clip, scratch);
+    const size_t n = rig.joints.size();
+    for (size_t i = 0; i < n; ++i) {
+        if (scratch.track[i] < 0 || (clip_mask && !scratch.masked[i])) continue;
+        sample_track(clip, scratch.track[i], t, dst.v[i]);
+        dst.driven[i] = 1;
+    }
+}
+
+namespace {
+
+// The rest values of one joint.
+Pose rest_of(const Joint& j) {
+    Pose p;
+    std::memcpy(p.pos, j.pos, sizeof j.pos);
+    std::memcpy(p.rot, j.rot, sizeof j.rot);
+    std::memcpy(p.scale, j.scale, sizeof j.scale);
+    return p;
+}
+
+}  // namespace
+
+void pose_layer_override(const cr_rig& rig, PoseBuf& dst, const PoseBuf& src, float weight, const float* mask,
+                         uint32_t flags) {
+    const size_t n = rig.joints.size();
+    const bool passthrough = (flags & CR_POSE_NO_PASSTHROUGH) == 0;
+    const bool quat = (flags & CR_POSE_QUAT) != 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (!src.driven[i]) continue;
+        // The ABI 1 overlay fold: lerp weight = min(weight, 1), lerp_pose short-circuits 0 and 1.
+        float w = mask != nullptr ? weight * mask[i] : weight;
+        w = std::min(w, 1.f);
+        if (w <= 0.f) continue;
+        if (!passthrough) dst.v[i] = rest_of(rig.joints[i]);
+        if (quat) {
+            lerp_pose_quat(dst.v[i], src.v[i], w);
+        } else {
+            lerp_pose(dst.v[i], src.v[i], w);
+        }
+        dst.driven[i] = 1;
+    }
+}
+
+namespace {
 
 struct LayerFrame {
     const cr_clip* clip;
-    float time;   // wrapped
-    float weight; // caller weight * clip envelope
+    float elapsed; // unwrapped (pose_sample wraps)
+    float weight;  // caller weight * clip envelope
     int32_t priority;
-    Binding binding;
 };
 
-// Local pose per joint for a frame. Returns false on a bad argument.
+// Local pose per joint for an ABI 1 frame: sample the base, then one override layer per overlay in
+// ascending priority. Returns false on a bad argument.
 bool local_poses(const cr_rig& rig, const cr_clip* base_clip, float base_time, const cr_layer* overlays,
-                 int32_t overlay_count, std::vector<Pose>& out, std::vector<uint8_t>& animated) {
-    const size_t n = rig.joints.size();
-    out.resize(n);
-    animated.assign(n, 0);
-    for (size_t i = 0; i < n; ++i) {
-        const auto& j = rig.joints[i];
-        std::memcpy(out[i].pos, j.pos, sizeof j.pos);
-        std::memcpy(out[i].rot, j.rot, sizeof j.rot);
-        std::memcpy(out[i].scale, j.scale, sizeof j.scale);
-    }
+                 int32_t overlay_count, PoseBuf& out) {
+    thread_local Binding scratch;
+    thread_local PoseBuf layer;
+    thread_local std::vector<LayerFrame> frames;
     if (base_clip != nullptr) {
-        const float t = wrap_time(base_time, base_clip->desc.duration, base_clip->desc.loop);
-        Binding b = binding_for(rig, *base_clip);
-        for (size_t i = 0; i < n; ++i) {
-            if (b.track[i] >= 0) {
-                sample_track(*base_clip, b.track[i], t, out[i]);
-                animated[i] = 1;
-            }
-        }
+        pose_sample(rig, *base_clip, base_time, false, out, scratch);
+    } else {
+        pose_rest(rig, out);
     }
     if (overlay_count > 0) {
         if (overlays == nullptr) return false;
-        std::vector<LayerFrame> frames;
-        frames.reserve(static_cast<size_t>(overlay_count));
+        frames.clear();
         for (int32_t o = 0; o < overlay_count; ++o) {
-            const cr_layer& layer = overlays[o];
-            if (layer.clip == nullptr) continue;
-            const float w = layer.weight * clip_weight(*layer.clip, layer.time);
+            const cr_layer& l = overlays[o];
+            if (l.clip == nullptr) continue;
+            const float w = l.weight * clip_weight(*l.clip, l.time);
             if (w <= 0.f) continue;
-            frames.push_back(LayerFrame{layer.clip,
-                                        wrap_time(layer.time, layer.clip->desc.duration, layer.clip->desc.loop),
-                                        w, layer.clip->desc.priority, binding_for(rig, *layer.clip)});
+            frames.push_back(LayerFrame{l.clip, l.time, w, l.clip->desc.priority});
         }
         std::stable_sort(frames.begin(), frames.end(),
                          [](const LayerFrame& a, const LayerFrame& b) { return a.priority < b.priority; });
         for (const LayerFrame& f : frames) {
-            const float w = std::min(f.weight, 1.f);
-            for (size_t i = 0; i < n; ++i) {
-                if (!f.binding.masked[i] || f.binding.track[i] < 0) continue;
-                Pose s;
-                sample_track(*f.clip, f.binding.track[i], f.time, s);
-                lerp_pose(out[i], s, w);
-                animated[i] = 1;
-            }
+            pose_sample(rig, *f.clip, f.elapsed, true, layer, scratch);
+            pose_layer_override(rig, out, layer, f.weight, nullptr, 0);
         }
     }
     return true;
@@ -514,27 +573,27 @@ int32_t cr_rig_local_pose(const cr_rig* rig, const cr_clip* base_clip, float bas
         set_error("cr_rig_local_pose: bad arguments");
         return CR_ERR_ARG;
     }
-    std::vector<Pose> poses;
-    std::vector<uint8_t> animated;
-    if (!local_poses(*rig, base_clip, base_time, overlays, overlay_count, poses, animated)) {
+    thread_local PoseBuf poses;
+    if (!local_poses(*rig, base_clip, base_time, overlays, overlay_count, poses)) {
         set_error("cr_rig_local_pose: overlays null");
         return CR_ERR_ARG;
     }
-    for (size_t i = 0; i < poses.size(); ++i) {
+    for (size_t i = 0; i < poses.v.size(); ++i) {
         float* o = out_local + i * 9;
-        std::memcpy(o, poses[i].pos, 12);
-        std::memcpy(o + 3, poses[i].rot, 12);
-        std::memcpy(o + 6, poses[i].scale, 12);
+        std::memcpy(o, poses.v[i].pos, 12);
+        std::memcpy(o + 3, poses.v[i].rot, 12);
+        std::memcpy(o + 6, poses.v[i].scale, 12);
     }
     return CR_OK;
 }
 
 }  // extern "C"
 
-namespace {
+namespace cenda::rig {
 
-int32_t compose(const cr_rig* rig, const std::vector<Pose>& poses, const cr_joint_extra* extras, int32_t extra_count,
-                const float* base_matrix, float* out_skin, float* out_world, float* out_child, const char* who) {
+int32_t compose_pose(const cr_rig* rig, const std::vector<Pose>& poses, const cr_joint_extra* extras,
+                     int32_t extra_count, const float* base_matrix, float* out_skin, float* out_world,
+                     float* out_child, const char* who) {
     thread_local std::vector<Mat4> world;
     thread_local std::vector<Mat4> child;
     thread_local std::vector<int32_t> extra_of;
@@ -575,7 +634,7 @@ int32_t compose(const cr_rig* rig, const std::vector<Pose>& poses, const cr_join
     return CR_OK;
 }
 
-}  // namespace
+}  // namespace cenda::rig
 
 extern "C" {
 
@@ -586,13 +645,12 @@ int32_t cr_rig_pose(const cr_rig* rig, const cr_clip* base_clip, float base_time
         set_error("cr_rig_pose: bad arguments");
         return CR_ERR_ARG;
     }
-    thread_local std::vector<Pose> poses;
-    thread_local std::vector<uint8_t> animated;
-    if (!local_poses(*rig, base_clip, base_time, overlays, overlay_count, poses, animated)) {
+    thread_local PoseBuf poses;
+    if (!local_poses(*rig, base_clip, base_time, overlays, overlay_count, poses)) {
         set_error("cr_rig_pose: overlays null");
         return CR_ERR_ARG;
     }
-    return compose(rig, poses, extras, extra_count, base_matrix, out_skin, out_world, out_child, "cr_rig_pose");
+    return compose_pose(rig, poses.v, extras, extra_count, base_matrix, out_skin, out_world, out_child, "cr_rig_pose");
 }
 
 int32_t cr_rig_pose_locals(const cr_rig* rig, const float* locals, const cr_joint_extra* extras, int32_t extra_count,
@@ -616,8 +674,8 @@ int32_t cr_rig_pose_locals(const cr_rig* rig, const float* locals, const cr_join
             std::memcpy(poses[i].scale, j.scale, 12);
         }
     }
-    return compose(rig, poses, extras, extra_count, base_matrix, out_skin, out_world, out_child,
-                   "cr_rig_pose_locals");
+    return compose_pose(rig, poses, extras, extra_count, base_matrix, out_skin, out_world, out_child,
+                        "cr_rig_pose_locals");
 }
 
 }  // extern "C"

@@ -460,6 +460,65 @@ void test_roles() {
     cr_rig_destroy(rig);
 }
 
+
+// Sync groups (OpenMason #156): a 1.0 s walk leads a 0.6 s run; the run keeps the walk's marker phase.
+cm_clip* sync_clip(float duration, std::initializer_list<std::pair<const char*, float>> markers) {
+    cm_clip* c = cm_clip_create();
+    cm_header h{30.f, duration, 1, 0, 0.f, 0.f, 0};
+    cm_clip_header_set(c, &h);
+    for (const auto& m : markers) cm_clip_marker_add(c, m.first, m.second);
+    return c;
+}
+
+std::string marker_name(const cm_clip* c, int32_t index) {
+    const char* name = nullptr;
+    float t = 0.f;
+    if (index < 0 || cm_clip_marker_get(c, index, &name, &t) != CM_OK) return "";
+    return name;
+}
+
+void test_sync_groups() {
+    cm_clip* walk = sync_clip(1.0f, {{"L", 0.1f}, {"R", 0.6f}});
+    cm_clip* run = sync_clip(0.6f, {{"L", 0.05f}, {"R", 0.35f}});
+    cm_clip* hop = sync_clip(0.8f, {{"L", 0.f}, {"R", 0.2f}, {"L", 0.4f}, {"R", 0.6f}});  // two cycles
+    cm_clip* plain = sync_clip(2.0f, {});
+    cm_sync_member g[4] = {{walk, 0.f, 1.f, 0.7f, 0}, {run, 0.3f, 1.f, 0.3f, 0}, {hop, 0.f, 1.f, 0.f, 0},
+                           {plain, 0.f, 1.f, 0.f, 0}};
+    float hop_prev = 0.f;
+    float hop_travel = 0.f;
+    for (int step = 0; step < 400; ++step) {
+        CHECK(cm_sync_advance(g, 4, -1, 1.f / 60.f) == 0);  // the heaviest leads
+        int32_t lm = -1, fm = -1, hm = -1;
+        float lf = 0.f, ff = 0.f, hf = 0.f;
+        cm_clip_marker_position(walk, g[0].time, &lm, &lf);
+        cm_clip_marker_position(run, g[1].time, &fm, &ff);
+        cm_clip_marker_position(hop, g[2].time, &hm, &hf);
+        CHECK(marker_name(walk, lm) == marker_name(run, fm));
+        CHECK(std::fabs(lf - ff) < 1e-4f);
+        CHECK(marker_name(walk, lm) == marker_name(hop, hm));
+        CHECK(std::fabs(lf - hf) < 1e-4f);
+        // The follower with no markers runs on normalized time.
+        CHECK(std::fabs(g[3].time / 2.f - g[0].time / 1.f) < 1e-5f);
+        // The two-cycle follower only ever moves forward (never jumps back a cycle).
+        float d = g[2].time - hop_prev;
+        if (d < 0.f) d += 0.8f;
+        CHECK(d < 0.4f);
+        if (step > 0) hop_travel += d;  // step 0 aligns the follower to the leader's phase
+        hop_prev = g[2].time;
+    }
+    // Marker spans: walk 0.5 s, hop 0.2 s, so the hop plays at 0.4x the walk's speed after the first step.
+    CHECK(std::fabs(hop_travel - 399.f / 60.f * 0.4f) < 1e-3f);
+    // An explicit leader; bad arguments.
+    CHECK(cm_sync_advance(g, 4, 1, 0.01f) == 1);
+    CHECK(cm_sync_advance(g, 4, 7, 0.01f) == CM_ERR_ARG);
+    cm_sync_member none{nullptr, 0.f, 1.f, 1.f, 0};
+    CHECK(cm_sync_advance(&none, 1, -1, 0.01f) == CM_ERR_ARG);
+    cm_clip_destroy(plain);
+    cm_clip_destroy(hop);
+    cm_clip_destroy(run);
+    cm_clip_destroy(walk);
+}
+
 }  // namespace
 
 int main() {
@@ -471,6 +530,7 @@ int main() {
     test_notify_firing();
     test_curves_and_markers();
     test_roles();
+    test_sync_groups();
     if (failures != 0) {
         std::fprintf(stderr, "anim_clip: %d check(s) failed\n", failures);
         return 1;

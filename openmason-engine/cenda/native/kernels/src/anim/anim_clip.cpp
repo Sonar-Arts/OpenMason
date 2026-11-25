@@ -744,4 +744,69 @@ cm_clip* cm_clip_to_roles(const cm_clip* c, const cc_char* character) {
     CM_GUARD_END(nullptr)
 }
 
+// --- Sync groups ----------------------------------------------------------------------------------------
+
+int32_t cm_sync_advance(cm_sync_member* members, int32_t count, int32_t leader, float dt) {
+    if (members == nullptr || count < 1 || leader >= count || !finite(dt)) {
+        return fail(CM_ERR_ARG, "cm_sync_advance: bad arguments");
+    }
+    for (int32_t i = 0; i < count; ++i) {
+        if (members[i].clip == nullptr || !finite(members[i].time)) {
+            return fail(CM_ERR_ARG, "cm_sync_advance: member " + std::to_string(i) + " has no clip or a bad time");
+        }
+    }
+    if (leader < 0) {
+        leader = 0;
+        for (int32_t i = 1; i < count; ++i) {
+            if (members[i].weight > members[leader].weight) leader = i;
+        }
+    }
+    // Clip time rules: looping wraps into [0, duration), others clamp.
+    const auto place = [](const oa::Clip& k, double t) {
+        const double d = k.duration;
+        if (d <= 0.0) return 0.0;
+        if (k.loop) {
+            t = t - d * std::floor(t / d);
+            return t >= d ? 0.0 : t;
+        }
+        return std::clamp(t, 0.0, d);
+    };
+    cm_sync_member& lead = members[leader];
+    const oa::Clip& lk = lead.clip->clip;
+    lead.time = static_cast<float>(place(lk, static_cast<double>(lead.time) + static_cast<double>(lead.rate) * dt));
+    int32_t marker = -1;
+    float fraction = 0.f;
+    if (!lk.markers.empty()) cm_clip_marker_position(lead.clip, lead.time, &marker, &fraction);
+    const std::string* name = marker >= 0 ? &lk.markers[static_cast<std::size_t>(marker)].name : nullptr;
+    const double phase = lk.duration > 0.0 ? lead.time / lk.duration : 0.0;
+    for (int32_t i = 0; i < count; ++i) {
+        if (i == leader) continue;
+        cm_sync_member& m = members[i];
+        const oa::Clip& k = m.clip->clip;
+        const double d = k.duration;
+        double best = -1.0;
+        double best_dist = 0.0;
+        if (name != nullptr) {
+            for (std::size_t j = 0; j < k.markers.size(); ++j) {
+                if (k.markers[j].name != *name) continue;
+                const double t = cm_clip_marker_time(m.clip, static_cast<int32_t>(j), fraction);
+                // Forward distance from the follower's current time (wrapping for loops).
+                double dist = t - m.time;
+                if (k.loop && d > 0.0) {
+                    dist = dist - d * std::floor(dist / d);
+                } else if (dist < 0.0) {
+                    dist = d + (m.time - t);  // backwards only when nothing lies ahead
+                }
+                if (best < 0.0 || dist < best_dist) {
+                    best = t;
+                    best_dist = dist;
+                }
+            }
+        }
+        if (best < 0.0) best = place(k, phase * d);
+        m.time = static_cast<float>(best);
+    }
+    return leader;
+}
+
 }  // extern "C"

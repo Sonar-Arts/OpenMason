@@ -29,6 +29,16 @@
  * POSE (cr_rig_pose): per joint, start from the base clip's sample (or the rest pose), fold the
  * overlays in ascending priority (stable), add the caller's per-joint extras (pre-rotation yaw/pitch
  * for head tracking, additive Euler degrees for code-driven turns), compose W, write K and/or B·W.
+ * Since ABI 2 cr_rig_pose is itself a small pose program (sample, then one override layer per
+ * overlay), bit-identical to ABI 1.
+ *
+ * POSE PIPELINE (ABI 2, OpenMason #156). The operations an animation graph is built from, on POSE
+ * SLOTS (cr_poses: N local poses of one rig, allocated once): rest, sample, copy, n-way weighted
+ * blend, override / additive layers under a weighted bone mask (cr_mask), additive deltas against a
+ * reference pose in local or mesh space, inertialized transitions (cr_inertia) and root-motion
+ * removal. A frame is a list of cr_pose_op run by ONE call (cr_poses_evaluate: run + compose); the
+ * graph (#157) compiles to such lists. Clip-time helpers sit beside it: root-motion extraction
+ * (cr_clip_root_motion) here, sync groups over sync markers in anim_clip.h (cm_sync_advance).
  *
  * SKIN AUTHORING (cr_skin_*): an editable per-vertex weight set (up to CR_MAX_INFLUENCES influences
  * per vertex, sparse: vertices without entries follow their part). Auto weights, brush painting,
@@ -46,11 +56,14 @@
 extern "C" {
 #endif
 
-#define CR_ABI_VERSION 1
+#define CR_ABI_VERSION 2
 
 typedef struct cr_rig cr_rig;
 typedef struct cr_clip cr_clip;
 typedef struct cr_skin cr_skin;
+typedef struct cr_poses cr_poses;
+typedef struct cr_mask cr_mask;
+typedef struct cr_inertia cr_inertia;
 
 /* Results. */
 enum {
@@ -224,6 +237,156 @@ int32_t cr_rig_local_pose(const cr_rig* rig,
                           const cr_clip* base_clip, float base_time,
                           const cr_layer* overlays, int32_t overlay_count,
                           float* out_local);
+
+/* ---------------------------------------------------------------------------------------------- */
+/* Pose pipeline (ABI 2).                                                                          */
+/*                                                                                                 */
+/* A POSE is the local transform of every joint (pos, rot Euler XYZ degrees, scale: the 9 floats   */
+/* of cr_rig_local_pose) plus a DRIVEN flag per joint: whether the pose sets that joint (a sampled */
+/* clip drives the joints it has tracks for; the rest pose drives none). Layers and additive       */
+/* deltas only touch joints their source drives, so an overlay leaves the joints it does not key   */
+/* alone (the ABI 1 rule). Blends and layers interpolate rotations per Euler component along the   */
+/* shortest path (the ABI 1 rule, bit-identical) unless CR_POSE_QUAT asks for quaternions.         */
+
+/* Pose flags (cr_pose_op.flags). */
+enum {
+    CR_POSE_QUAT = 1u << 0,           /* BLEND / override LAYER: blend rotations as quaternions
+                                         (normalized weighted sum, hemisphere-aligned) instead of
+                                         per Euler component */
+    CR_POSE_MESH_SPACE = 1u << 1,     /* MAKE_ADDITIVE / additive LAYER: the rotation delta lives in
+                                         model (mesh) space: applied after the parent chain, so a
+                                         delta on the spine does not swing the arms' mesh-space aim */
+    CR_POSE_NO_PASSTHROUGH = 1u << 2, /* override LAYER (Maya passthrough off): a partial weight blends
+                                         from the REST pose, not from the layers below */
+    CR_POSE_CLIP_MASK = 1u << 3       /* SAMPLE: drive only the joints the clip's name mask covers
+                                         (an ABI 1 overlay) */
+};
+
+/* Layer blend modes (cr_pose_op.mode for CR_OP_LAYER). */
+enum {
+    CR_BLEND_OVERRIDE = 0,  /* dst = lerp(dst, src, w) on joints src drives */
+    CR_BLEND_ADDITIVE = 1   /* dst = dst (+) w·src, src a delta from CR_OP_MAKE_ADDITIVE */
+};
+
+/* Root-motion axes (same bits as anim_clip.h CM_ROOT_*). */
+enum {
+    CR_ROOT_X = 1u << 0,
+    CR_ROOT_Y = 1u << 1,
+    CR_ROOT_Z = 1u << 2,
+    CR_ROOT_YAW = 1u << 3
+};
+
+/* Pose operations. Slots are indices into the cr_poses the program runs on; `object` is the clip /
+ * mask / inertializer / weights pointer the op names. */
+enum {
+    CR_OP_REST = 0,         /* dst = the rest pose, nothing driven */
+    CR_OP_SAMPLE = 1,       /* dst = rest + `object` (cr_clip) sampled at `time` elapsed seconds (wrapped
+                               or clamped like cr_rig_pose); drives the joints the clip has tracks for
+                               (with CR_POSE_CLIP_MASK: only those its mask covers) */
+    CR_OP_COPY = 2,         /* dst = slot a */
+    CR_OP_BLEND = 3,        /* dst = weighted blend of slots a .. a+b-1 (b = count >= 1), `object` = const
+                               float weights[b] (normalized by their sum; <= 0 = skipped; all zero = rest).
+                               Every source contributes its value for every joint (rest where it drives
+                               nothing); drives the union. A single positive weight copies exactly */
+    CR_OP_LAYER = 4,        /* dst (in/out) layered with slot a by `mode` at `weight` x the mask weight of
+                               each joint (`object` = cr_mask, null = 1 everywhere); weights clamp to 1 */
+    CR_OP_MAKE_ADDITIVE = 5,/* dst = slot a - slot b (the reference): translation difference, scale ratio,
+                               rotation q_b^-1·q_a (local) or Q_a·Q_b^-1 (mesh space, CR_POSE_MESH_SPACE).
+                               A joint whose values are equal in both gets an exact zero delta */
+    CR_OP_INERTIALIZE = 6,  /* dst (in/out) = dst + the inertializer's decaying offset after `param` (dt)
+                               more seconds; records dst as the inertializer's latest output (`object`) */
+    CR_OP_REMOVE_ROOT = 7   /* in dst, joint b keeps the extracted `axes` of clip `object` at time 0: the
+                               translation axes are pinned to the clip's first frame and the yaw turned
+                               back to it (what cr_clip_root_motion reported moves the character) */
+};
+
+/* One operation (48 bytes on every 64-bit platform). Unused fields 0. */
+typedef struct cr_pose_op {
+    int32_t op;           /* CR_OP_* */
+    int32_t dst;          /* destination slot */
+    int32_t a;            /* source slot / first slot */
+    int32_t b;            /* BLEND: slot count; MAKE_ADDITIVE: reference slot; REMOVE_ROOT: joint */
+    const void* object;   /* clip / mask / inertializer / weights (pointer padded to 8 bytes) */
+    float time;           /* SAMPLE: elapsed seconds */
+    float weight;         /* LAYER: layer weight */
+    float param;          /* INERTIALIZE: dt seconds */
+    int32_t mode;         /* LAYER: CR_BLEND_* */
+    uint32_t flags;       /* CR_POSE_* */
+    uint32_t axes;        /* REMOVE_ROOT: CR_ROOT_* */
+} cr_pose_op;
+
+/* slot_count local poses (1..1024) of one rig, all at rest. The rig must outlive it. A cr_poses belongs
+ * to one thread at a time; running a program never allocates. */
+cr_poses* cr_poses_create(const cr_rig* rig, int32_t slot_count);
+void cr_poses_destroy(cr_poses* poses);
+int32_t cr_poses_slot_count(const cr_poses* poses);
+/* A slot's local values (joint_count*9 floats, as cr_rig_local_pose) and driven flags (joint_count
+ * bytes, 0/1); either output may be null. */
+int32_t cr_poses_get(const cr_poses* poses, int32_t slot, float* out_local, uint8_t* out_driven);
+/* Sets a slot (an editor's current transforms). driven null = every joint driven. */
+int32_t cr_poses_set(cr_poses* poses, int32_t slot, const float* local, const uint8_t* driven);
+/* Runs ops in order. On a bad op returns CR_ERR_ARG / CR_ERR_RANGE (cr_last_error names the op index);
+ * the ops before it have run. */
+int32_t cr_poses_run(cr_poses* poses, const cr_pose_op* ops, int32_t op_count);
+/* Composes one slot like cr_rig_pose (extras, base matrix, outputs as there). */
+int32_t cr_poses_compose(const cr_poses* poses, int32_t slot,
+                         const cr_joint_extra* extras, int32_t extra_count,
+                         const float* base_matrix,
+                         float* out_skin, float* out_world, float* out_child);
+/* The one call per character per frame: cr_poses_run, then cr_poses_compose of `slot`. */
+int32_t cr_poses_evaluate(cr_poses* poses, const cr_pose_op* ops, int32_t op_count, int32_t slot,
+                          const cr_joint_extra* extras, int32_t extra_count,
+                          const float* base_matrix,
+                          float* out_skin, float* out_world, float* out_child);
+
+/* Weighted bone masks (Unity Avatar Mask, Unreal layered blend per bone): a weight in [0,1] per joint.
+ * The rig must outlive the mask. */
+enum {
+    CR_MASK_BRANCH = 1u << 0   /* cr_mask_set: the joint's descendants take the weight too */
+};
+cr_mask* cr_mask_create(const cr_rig* rig, float fill);
+void cr_mask_destroy(cr_mask* mask);
+int32_t cr_mask_joint_count(const cr_mask* mask);
+int32_t cr_mask_fill(cr_mask* mask, float weight);
+/* Sets `joint` to weight (clamped to [0,1]); with CR_MASK_BRANCH every descendant too. blend_depth > 0
+ * ramps the weight down the branch (Unreal's blend depth): a joint d levels below `joint` gets
+ * weight·min(1, (d+1)/blend_depth). Later sets overwrite earlier ones. */
+int32_t cr_mask_set(cr_mask* mask, int32_t joint, float weight, uint32_t flags, int32_t blend_depth);
+/* joint_count floats in / out. */
+int32_t cr_mask_get(const cr_mask* mask, float* out_weights);
+int32_t cr_mask_set_all(cr_mask* mask, const float* weights);
+/* 1 on the joints a clip's name mask covers (every joint for an empty mask), else 0. */
+int32_t cr_mask_from_clip(cr_mask* mask, const cr_clip* clip);
+
+/* Inertialization (Unreal; Bollo, GDC 2018): on a source switch the old pose is not evaluated any
+ * more; the difference between the last output and the new source's pose, and the last output's
+ * velocity, decay to zero over the blend time with a quintic (continuous in position, velocity and
+ * acceleration, no overshoot). Per joint: translation and rotation as a magnitude along one axis,
+ * scale per component. */
+cr_inertia* cr_inertia_create(const cr_rig* rig);
+void cr_inertia_destroy(cr_inertia* inertia);
+/* Start a transition: the next CR_OP_INERTIALIZE measures the offset from the recorded outputs (needs
+ * one recorded frame; velocity needs two) to the pose it is given. blend_time <= 0 = an instant cut. */
+int32_t cr_inertia_request(cr_inertia* inertia, float blend_time);
+/* Forget the history and any running transition. */
+int32_t cr_inertia_reset(cr_inertia* inertia);
+/* 1 while a transition is running. */
+int32_t cr_inertia_active(const cr_inertia* inertia);
+
+/* Root motion (16 bytes): what the root joint moved between two times, for the host to move the
+ * character by. With CR_ROOT_YAW extracted, translation is in the root's frame at the start of the
+ * step (its heading removed), so the host rotates it by the character's facing; without it, in the
+ * root's parent frame (model space for a root joint). yaw_deg is the turn about +Y. */
+typedef struct cr_root_motion {
+    float translation[3];
+    float yaw_deg;
+} cr_root_motion;
+
+/* The root motion of `joint`'s track in `clip` over [prev_time, prev_time + delta] elapsed seconds
+ * (looping clips wrap and count whole cycles; others clamp), on `axes` (CR_ROOT_*). A joint the clip does
+ * not key moves nothing. The yaw is the heading of the joint's +Z axis about +Y. */
+int32_t cr_clip_root_motion(const cr_clip* clip, const cr_rig* rig, int32_t joint, uint32_t axes,
+                            float prev_time, float delta, cr_root_motion* out);
 
 /* ---------------------------------------------------------------------------------------------- */
 /* Skin weights.                                                                                   */

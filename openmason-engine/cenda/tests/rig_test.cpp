@@ -401,6 +401,394 @@ void test_skin_ops() {
     cr_rig_destroy(rig);
 }
 
+
+// ---- ABI 2 pose pipeline (OpenMason #156) ---------------------------------------------------------
+
+cr_pose_op op_of(int32_t op, int32_t dst) {
+    cr_pose_op o{};
+    o.op = op;
+    o.dst = dst;
+    return o;
+}
+
+// A chain of n parts (joint i's parent = i-1), names j0..j(n-1).
+cr_rig* chain(int n) {
+    std::vector<cr_joint_desc> j;
+    for (int i = 0; i < n; ++i) j.push_back(part(i - 1, 0, static_cast<float>(i), 0, 0, 0, 0));
+    static const char* names[8] = {"j0", "j1", "j2", "j3", "j4", "j5", "j6", "j7"};
+    return cr_rig_create(j.data(), n, names, names);
+}
+
+// Slot values helper: every joint rot y = ry, driven.
+void set_all_rot(cr_poses* poses, int slot, int n, float ry, float rx = 0.f) {
+    std::vector<float> v(static_cast<size_t>(n) * 9, 0.f);
+    for (size_t i = 0; i < static_cast<size_t>(n); ++i) {
+        v[i * 9 + 3] = rx;
+        v[i * 9 + 4] = ry;
+        v[i * 9 + 6] = v[i * 9 + 7] = v[i * 9 + 8] = 1.f;
+    }
+    CHECK(cr_poses_set(poses, slot, v.data(), nullptr) == CR_OK);
+}
+
+std::vector<float> locals_of(cr_poses* poses, int slot, int n) {
+    std::vector<float> v(static_cast<size_t>(n) * 9);
+    CHECK(cr_poses_get(poses, slot, v.data(), nullptr) == CR_OK);
+    return v;
+}
+
+void test_program_matches_rig_pose() {
+    // Bones and parts, base clip + a masked overlay with fades: the op program reproduces cr_rig_pose bit
+    // for bit (same float code).
+    cr_joint_desc j[4] = {bone(-1, 0.f, 1.f), part(0, 0, 1, 0, 0, 0, 0), bone(0, 0.5f, 1.f), part(2, 0, 2, 0, 0, 0, 0)};
+    const char* ids[4] = {"b0", "p1", "b2", "p3"};
+    const char* names[4] = {"spine", "torso", "neck", "head"};
+    cr_rig* rig = cr_rig_create(j, 4, ids, names);
+    cr_key bk[4] = {key(0.f, 0.f), key(1.f, 33.f, CR_EASE_IN_OUT), key(0.f, -20.f), key(1.f, 70.f)};
+    cr_track_desc bt[2] = {{0, 2}, {2, 2}};
+    const char* bid[2] = {"b0", "b2"};
+    cr_clip_desc bd{1.f, 1, CR_LAYER_BASE, 0, 0.f, 0.f};
+    cr_clip* base = cr_clip_create(&bd, bt, 2, bk, 4, bid, nullptr, nullptr, 0);
+    cr_key ok[4] = {key(0.f, 45.f), key(0.7f, -60.f, CR_EASE_OUT), key(0.f, 10.f), key(0.7f, 11.f)};
+    const char* oid[2] = {"p1", "b2"};
+    const char* mask[1] = {"NECK"};
+    cr_clip_desc od{0.7f, 0, CR_LAYER_OVERLAY, 2, 0.2f, 0.3f};
+    cr_clip* over = cr_clip_create(&od, bt, 2, ok, 4, oid, nullptr, mask, 1);
+    float bm[16] = {0.9f, 0, 0.1f, 0, 0, 1, 0, 0, -0.1f, 0, 0.9f, 0, 3, 4, 5, 1};
+    cr_joint_extra ex{3, 12.f, -7.f, {1.f, 2.f, 3.f}};
+
+    cr_poses* poses = cr_poses_create(rig, 2);
+    CHECK(poses != nullptr);
+    for (float t : {0.f, 0.1f, 0.33f, 0.6f, 1.4f}) {
+        const float w = 0.8f;
+        cr_layer layer{over, t * 0.5f, w};
+        std::vector<float> a(64 * 2), b(64 * 2);
+        CHECK(cr_rig_pose(rig, base, t, &layer, 1, &ex, 1, bm, a.data(), a.data() + 64, nullptr) == CR_OK);
+        cr_pose_op ops[3] = {op_of(CR_OP_SAMPLE, 0), op_of(CR_OP_SAMPLE, 1), op_of(CR_OP_LAYER, 0)};
+        ops[0].object = base;
+        ops[0].time = t;
+        ops[1].object = over;
+        ops[1].time = t * 0.5f;
+        ops[1].flags = CR_POSE_CLIP_MASK;
+        ops[2].a = 1;
+        ops[2].weight = w * cr_clip_weight(over, t * 0.5f);
+        ops[2].mode = CR_BLEND_OVERRIDE;
+        CHECK(cr_poses_evaluate(poses, ops, 3, 0, &ex, 1, bm, b.data(), b.data() + 64, nullptr) == CR_OK);
+        CHECK(std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0);
+    }
+    // Errors name the op.
+    cr_pose_op bad = op_of(CR_OP_COPY, 0);
+    bad.a = 9;
+    CHECK(cr_poses_run(poses, &bad, 1) == CR_ERR_RANGE);
+    CHECK(std::strstr(cr_last_error(), "op 0") != nullptr);
+    cr_poses_destroy(poses);
+    cr_clip_destroy(over);
+    cr_clip_destroy(base);
+    cr_rig_destroy(rig);
+}
+
+void test_weighted_mask_ramps() {
+    cr_rig* rig = chain(6);
+    cr_mask* m = cr_mask_create(rig, 0.f);
+    std::vector<float> w(6);
+    // Blend depth 3 from j1: 1/3, 2/3, 1, 1 down the branch, j0 untouched.
+    CHECK(cr_mask_set(m, 1, 1.f, CR_MASK_BRANCH, 3) == CR_OK);
+    CHECK(cr_mask_get(m, w.data()) == CR_OK);
+    CHECK(w[0] == 0.f);
+    CHECK(near(w[1], 1.f / 3.f) && near(w[2], 2.f / 3.f) && w[3] == 1.f && w[4] == 1.f && w[5] == 1.f);
+    // Branch without depth: flat weight; a later single-joint set overwrites.
+    CHECK(cr_mask_set(m, 3, 0.5f, CR_MASK_BRANCH, 0) == CR_OK);
+    CHECK(cr_mask_set(m, 5, 0.25f, 0, 0) == CR_OK);
+    CHECK(cr_mask_get(m, w.data()) == CR_OK);
+    CHECK(w[3] == 0.5f && w[4] == 0.5f && w[5] == 0.25f && near(w[2], 2.f / 3.f));
+    CHECK(cr_mask_set(m, 9, 1.f, 0, 0) == CR_ERR_RANGE);
+
+    // Layering with the ramp: rest (0) toward 90 degrees about Y per joint weight.
+    CHECK(cr_mask_fill(m, 0.f) == CR_OK);
+    CHECK(cr_mask_set(m, 1, 1.f, CR_MASK_BRANCH, 4) == CR_OK);  // 1/4, 2/4, 3/4, 1, 1
+    cr_poses* poses = cr_poses_create(rig, 2);
+    set_all_rot(poses, 1, 6, 90.f);
+    cr_pose_op ops[2] = {op_of(CR_OP_REST, 0), op_of(CR_OP_LAYER, 0)};
+    ops[1].a = 1;
+    ops[1].object = m;
+    ops[1].weight = 1.f;
+    CHECK(cr_poses_run(poses, ops, 2) == CR_OK);
+    std::vector<float> v = locals_of(poses, 0, 6);
+    const float want[6] = {0.f, 22.5f, 45.f, 67.5f, 90.f, 90.f};
+    for (size_t i = 0; i < 6; ++i) CHECK(near(v[i * 9 + 4], want[i], 1e-4f));
+    // Half layer weight halves every joint's weight.
+    ops[1].weight = 0.5f;
+    CHECK(cr_poses_run(poses, ops, 2) == CR_OK);
+    v = locals_of(poses, 0, 6);
+    for (size_t i = 0; i < 6; ++i) CHECK(near(v[i * 9 + 4], want[i] * 0.5f, 1e-4f));
+    // Passthrough off: a partial weight blends from the rest pose, not the layers below.
+    set_all_rot(poses, 0, 6, 40.f);
+    cr_pose_op opaque = op_of(CR_OP_LAYER, 0);
+    opaque.a = 1;
+    opaque.weight = 0.5f;
+    opaque.flags = CR_POSE_NO_PASSTHROUGH;
+    CHECK(cr_poses_run(poses, &opaque, 1) == CR_OK);
+    v = locals_of(poses, 0, 6);
+    CHECK(near(v[4], 45.f, 1e-4f));
+    cr_poses_destroy(poses);
+    cr_mask_destroy(m);
+    cr_rig_destroy(rig);
+}
+
+void test_blend() {
+    cr_rig* rig = chain(2);
+    cr_poses* poses = cr_poses_create(rig, 4);
+    set_all_rot(poses, 0, 2, 0.f);
+    set_all_rot(poses, 1, 2, 90.f, 10.f);
+    set_all_rot(poses, 2, 2, 170.f);
+    // Euler running mean: equal weights of 0 and 90 = 45.
+    float w2[3] = {1.f, 1.f, 0.f};
+    cr_pose_op b = op_of(CR_OP_BLEND, 3);
+    b.a = 0;
+    b.b = 3;
+    b.object = w2;
+    CHECK(cr_poses_run(poses, &b, 1) == CR_OK);
+    std::vector<float> v = locals_of(poses, 3, 2);
+    CHECK(near(v[4], 45.f, 1e-4f) && near(v[3], 5.f, 1e-4f));
+    // Three-way: (0 + 90 + 170) / 3 via shortest paths.
+    float w3[3] = {1.f, 1.f, 1.f};
+    b.object = w3;
+    CHECK(cr_poses_run(poses, &b, 1) == CR_OK);
+    v = locals_of(poses, 3, 2);
+    CHECK(near(v[4], 260.f / 3.f, 1e-3f));
+    // A single positive weight copies exactly; the destination may be a source.
+    float w1[3] = {0.f, 2.f, 0.f};
+    b.object = w1;
+    b.dst = 1;
+    std::vector<float> before = locals_of(poses, 1, 2);
+    CHECK(cr_poses_run(poses, &b, 1) == CR_OK);
+    CHECK(locals_of(poses, 1, 2) == before);
+    // Quaternions: halfway between 0 and 90 about Y is 45 about Y.
+    set_all_rot(poses, 1, 2, 90.f);
+    b.dst = 3;
+    b.object = w2;
+    b.flags = CR_POSE_QUAT;
+    CHECK(cr_poses_run(poses, &b, 1) == CR_OK);
+    v = locals_of(poses, 3, 2);
+    CHECK(near(v[3], 0.f, 1e-4f) && near(v[4], 45.f, 1e-4f) && near(v[5], 0.f, 1e-4f));
+    cr_poses_destroy(poses);
+    cr_rig_destroy(rig);
+}
+
+void test_additive() {
+    cr_rig* rig = chain(3);
+    cr_poses* poses = cr_poses_create(rig, 5);
+    // Slot 0: an arbitrary pose; slot 1: another.
+    std::vector<float> a(27), b(27);
+    for (size_t i = 0; i < 27; ++i) {
+        a[i] = 0.37f * static_cast<float>(i) - 2.f;
+        b[i] = 1.f + 0.11f * static_cast<float>(i * i % 7);
+    }
+    for (size_t i = 0; i < 3; ++i) a[i * 9 + 6] = a[i * 9 + 7] = a[i * 9 + 8] = 1.25f;
+    CHECK(cr_poses_set(poses, 0, a.data(), nullptr) == CR_OK);
+    CHECK(cr_poses_set(poses, 1, b.data(), nullptr) == CR_OK);
+
+    // Additive identity: a pose minus itself is an exact zero delta, and applying it (any weight, local or
+    // mesh space) leaves the pose bit-identical.
+    for (uint32_t space : {0u, static_cast<uint32_t>(CR_POSE_MESH_SPACE)}) {
+        cr_pose_op mk = op_of(CR_OP_MAKE_ADDITIVE, 2);
+        mk.a = 0;
+        mk.b = 0;
+        mk.flags = space;
+        CHECK(cr_poses_run(poses, &mk, 1) == CR_OK);
+        std::vector<float> d = locals_of(poses, 2, 3);
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t c = 0; c < 6; ++c) CHECK(d[i * 9 + c] == 0.f);
+            for (size_t c = 6; c < 9; ++c) CHECK(d[i * 9 + c] == 1.f);
+        }
+        for (float w : {1.f, 0.5f, 0.123f}) {
+            CHECK(cr_poses_set(poses, 3, b.data(), nullptr) == CR_OK);
+            cr_pose_op ap = op_of(CR_OP_LAYER, 3);
+            ap.a = 2;
+            ap.mode = CR_BLEND_ADDITIVE;
+            ap.weight = w;
+            ap.flags = space;
+            CHECK(cr_poses_run(poses, &ap, 1) == CR_OK);
+            CHECK(locals_of(poses, 3, 3) == b);
+        }
+    }
+
+    // Local additive: +30 about Y (and +1 x, scale x2) over a base turned 20 about X.
+    set_all_rot(poses, 0, 3, 30.f);
+    set_all_rot(poses, 1, 3, 0.f);
+    std::vector<float> src = locals_of(poses, 0, 3);
+    src[0] = 1.f;
+    src[6] = 2.f;
+    CHECK(cr_poses_set(poses, 0, src.data(), nullptr) == CR_OK);
+    cr_pose_op mk = op_of(CR_OP_MAKE_ADDITIVE, 2);
+    mk.a = 0;
+    mk.b = 1;
+    CHECK(cr_poses_run(poses, &mk, 1) == CR_OK);
+    std::vector<float> d = locals_of(poses, 2, 3);
+    CHECK(near(d[4], 30.f, 1e-4f) && d[0] == 1.f && d[6] == 2.f);
+    set_all_rot(poses, 3, 3, 0.f, 20.f);
+    cr_pose_op ap = op_of(CR_OP_LAYER, 3);
+    ap.a = 2;
+    ap.mode = CR_BLEND_ADDITIVE;
+    ap.weight = 0.5f;
+    CHECK(cr_poses_run(poses, &ap, 1) == CR_OK);
+    std::vector<float> o = locals_of(poses, 3, 3);
+    // q = Rx(20)·Ry(15): Euler XYZ (20, 15, 0) exactly that composition.
+    CHECK(near(o[3], 20.f, 1e-3f) && near(o[4], 15.f, 1e-3f) && near(o[5], 0.f, 1e-3f));
+    CHECK(near(o[0], 0.5f) && near(o[6], 1.5f));
+
+    // Mesh space: the delta is "turn the whole chain 30 about Y" (only the root differs). Applied over a
+    // base whose root is tilted 20 about X, the root's local becomes Ry30·Rx20 and the children keep their
+    // locals (they inherit the turn through the parent, mesh-space deltas equal).
+    std::vector<float> ref = locals_of(poses, 1, 3);  // all zero rotation
+    std::vector<float> turned = ref;
+    turned[4] = 30.f;
+    CHECK(cr_poses_set(poses, 0, turned.data(), nullptr) == CR_OK);
+    mk.flags = CR_POSE_MESH_SPACE;
+    CHECK(cr_poses_run(poses, &mk, 1) == CR_OK);
+    std::vector<float> base = ref;
+    base[3] = 20.f;        // root Rx20
+    base[9 + 5] = 15.f;    // child Rz15
+    CHECK(cr_poses_set(poses, 3, base.data(), nullptr) == CR_OK);
+    ap.weight = 1.f;
+    ap.flags = CR_POSE_MESH_SPACE;
+    CHECK(cr_poses_run(poses, &ap, 1) == CR_OK);
+    o = locals_of(poses, 3, 3);
+    // Ry30·Rx20 is not an XYZ product of those two; compare the composed world matrices instead.
+    std::vector<float> w(48), want(48);
+    CHECK(cr_poses_compose(poses, 3, nullptr, 0, nullptr, nullptr, w.data(), nullptr) == CR_OK);
+    CHECK(near(o[9 + 3], 0.f, 1e-4f) && near(o[9 + 4], 0.f, 1e-4f) && near(o[9 + 5], 15.f, 1e-4f));
+    CHECK(near(o[18 + 3], 0.f, 1e-4f) && near(o[18 + 4], 0.f, 1e-4f) && near(o[18 + 5], 0.f, 1e-4f));
+    // Root world rotation = Ry(30)·Rx(20): its +Z axis = Ry30·(0, -sin20, cos20).
+    const float s20 = std::sin(20.f * 3.14159265f / 180.f), c20 = std::cos(20.f * 3.14159265f / 180.f);
+    const float s30 = 0.5f, c30 = std::sqrt(3.f) / 2.f;
+    CHECK(near(w[8], s30 * c20, 1e-5f) && near(w[9], -s20, 1e-5f) && near(w[10], c30 * c20, 1e-5f));
+    cr_poses_destroy(poses);
+    cr_rig_destroy(rig);
+}
+
+// One joint, a scalar driven along X: the source moves toward the target until the switch.
+void test_inertialization() {
+    cr_rig* rig = chain(1);
+    cr_poses* poses = cr_poses_create(rig, 1);
+    cr_inertia* in = cr_inertia_create(rig);
+    const float dt = 1e-3f;
+    const float v = -2.f;  // source velocity (toward the target at 0)
+    cr_pose_op op = op_of(CR_OP_INERTIALIZE, 0);
+    op.object = in;
+    op.param = dt;
+    std::vector<float> pose(9, 0.f);
+    pose[6] = pose[7] = pose[8] = 1.f;
+    float prev = 0.f, prev_rot = 0.f;
+    const float wv = 90.f;  // rotation source: degrees per second about Y, away from 0... toward the target 0
+    for (int k = 0; k < 50; ++k) {
+        pose[0] = 1.f + v * dt * static_cast<float>(k);
+        pose[4] = 30.f - wv * dt * static_cast<float>(k);
+        CHECK(cr_poses_set(poses, 0, pose.data(), nullptr) == CR_OK);
+        CHECK(cr_poses_run(poses, &op, 1) == CR_OK);
+        std::vector<float> o = locals_of(poses, 0, 1);
+        CHECK(o[0] == pose[0] && o[4] == pose[4]);  // no transition: untouched
+        prev = o[0];
+        prev_rot = o[4];
+    }
+    // Switch to a target at rest (0) with a 0.25 s inertialization.
+    CHECK(cr_inertia_request(in, 0.25f) == CR_OK);
+    CHECK(cr_inertia_active(in) == 1);
+    std::vector<float> target(9, 0.f);
+    target[6] = target[7] = target[8] = 1.f;
+    CHECK(cr_poses_set(poses, 0, target.data(), nullptr) == CR_OK);
+    CHECK(cr_poses_run(poses, &op, 1) == CR_OK);
+    std::vector<float> o = locals_of(poses, 0, 1);
+    // Position: continuous (the step is one frame of the old velocity), velocity continuous.
+    CHECK(near((o[0] - prev) / dt, v, 0.05f));
+    CHECK(near((o[4] - prev_rot) / dt, -wv, 1.f));
+    // It then decays monotonically to the target without overshoot, and lands exactly on it.
+    float last = o[0], last_rot = o[4];
+    int frames = 0;
+    while (cr_inertia_active(in) && frames < 1000) {
+        CHECK(cr_poses_set(poses, 0, target.data(), nullptr) == CR_OK);
+        CHECK(cr_poses_run(poses, &op, 1) == CR_OK);
+        o = locals_of(poses, 0, 1);
+        CHECK(o[0] <= last + 1e-6f && o[0] >= 0.f);
+        CHECK(o[4] <= last_rot + 1e-4f && o[4] >= -1e-4f);
+        last = o[0];
+        last_rot = o[4];
+        ++frames;
+    }
+    CHECK(frames > 200 && frames <= 251);
+    CHECK(o == target);
+    // An instant cut lands on the target at once.
+    pose[0] = 5.f;
+    CHECK(cr_poses_set(poses, 0, pose.data(), nullptr) == CR_OK);
+    CHECK(cr_poses_run(poses, &op, 1) == CR_OK);
+    CHECK(cr_inertia_request(in, 0.f) == CR_OK);
+    CHECK(cr_poses_set(poses, 0, target.data(), nullptr) == CR_OK);
+    CHECK(cr_poses_run(poses, &op, 1) == CR_OK);
+    CHECK(locals_of(poses, 0, 1) == target);
+    CHECK(cr_inertia_active(in) == 0);
+    cr_inertia_destroy(in);
+    cr_poses_destroy(poses);
+    cr_rig_destroy(rig);
+}
+
+void test_root_motion() {
+    cr_rig* rig = chain(2);
+    // Root walks +2 along X in one looping second while facing +X (yaw 90).
+    cr_key k[2] = {key(0.f, 90.f), key(1.f, 90.f)};
+    k[1].pos[0] = 2.f;
+    cr_track_desc t[1] = {{0, 2}};
+    const char* tid[1] = {"j0"};
+    cr_clip_desc d{1.f, 1, CR_LAYER_BASE, 0, 0.f, 0.f};
+    cr_clip* walk = cr_clip_create(&d, t, 1, k, 2, tid, nullptr, nullptr, 0);
+    cr_root_motion m{};
+    const uint32_t all = CR_ROOT_X | CR_ROOT_Y | CR_ROOT_Z | CR_ROOT_YAW;
+    // In the root's own frame the walk is forward (+Z): 1 block in half a second.
+    CHECK(cr_clip_root_motion(walk, rig, 0, all, 0.25f, 0.5f, &m) == CR_OK);
+    CHECK(near(m.translation[0], 0.f, 1e-5f) && near(m.translation[2], 1.f, 1e-5f) && m.yaw_deg == 0.f);
+    // Across the loop seam, and over whole cycles.
+    CHECK(cr_clip_root_motion(walk, rig, 0, all, 0.75f, 0.5f, &m) == CR_OK);
+    CHECK(near(m.translation[2], 1.f, 1e-5f));
+    CHECK(cr_clip_root_motion(walk, rig, 0, all, 0.f, 2.5f, &m) == CR_OK);
+    CHECK(near(m.translation[2], 5.f, 1e-4f));
+    CHECK(cr_clip_root_motion(walk, rig, 0, all, 0.5f, -0.75f, &m) == CR_OK);
+    CHECK(near(m.translation[2], -1.5f, 1e-5f));
+    // Without yaw extraction the translation stays in the clip's frame (+X).
+    CHECK(cr_clip_root_motion(walk, rig, 0, CR_ROOT_X | CR_ROOT_Z, 0.25f, 0.5f, &m) == CR_OK);
+    CHECK(near(m.translation[0], 1.f, 1e-5f) && near(m.translation[2], 0.f, 1e-5f));
+    // A joint the clip does not key moves nothing.
+    CHECK(cr_clip_root_motion(walk, rig, 1, all, 0.25f, 0.5f, &m) == CR_OK);
+    CHECK(m.translation[0] == 0.f && m.translation[2] == 0.f);
+
+    // A turning clip: yaw 0 -> 90 over a non-looping second, moving +1 Z.
+    cr_key tk[2] = {key(0.f, 0.f), key(1.f, 90.f)};
+    tk[1].pos[2] = 1.f;
+    cr_clip_desc td{1.f, 0, CR_LAYER_BASE, 0, 0.f, 0.f};
+    cr_clip* turn = cr_clip_create(&td, t, 1, tk, 2, tid, nullptr, nullptr, 0);
+    CHECK(cr_clip_root_motion(turn, rig, 0, all, 0.f, 0.5f, &m) == CR_OK);
+    CHECK(near(m.yaw_deg, 45.f, 1e-4f) && near(m.translation[2], 0.5f, 1e-5f));
+    CHECK(cr_clip_root_motion(turn, rig, 0, all, 0.9f, 5.f, &m) == CR_OK);  // clamps at the end
+    CHECK(near(m.yaw_deg, 9.f, 1e-3f));
+
+    // REMOVE_ROOT keeps the root at its first frame on the extracted axes.
+    cr_poses* poses = cr_poses_create(rig, 1);
+    cr_pose_op ops[2] = {op_of(CR_OP_SAMPLE, 0), op_of(CR_OP_REMOVE_ROOT, 0)};
+    ops[0].object = turn;
+    ops[0].time = 0.5f;
+    ops[1].object = turn;
+    ops[1].b = 0;
+    ops[1].axes = CR_ROOT_X | CR_ROOT_Z | CR_ROOT_YAW;
+    CHECK(cr_poses_run(poses, ops, 2) == CR_OK);
+    std::vector<float> o = locals_of(poses, 0, 2);
+    CHECK(o[2] == 0.f && near(o[4], 0.f, 1e-4f));
+    // Only Z: the turn stays.
+    ops[1].axes = CR_ROOT_Z;
+    CHECK(cr_poses_run(poses, ops, 2) == CR_OK);
+    o = locals_of(poses, 0, 2);
+    CHECK(o[2] == 0.f && near(o[4], 45.f, 1e-4f));
+    cr_poses_destroy(poses);
+    cr_clip_destroy(turn);
+    cr_clip_destroy(walk);
+    cr_rig_destroy(rig);
+}
 }  // namespace
 
 int main() {
@@ -411,6 +799,12 @@ int main() {
     test_sampling();
     test_overlays_and_binding();
     test_skin_ops();
+    test_program_matches_rig_pose();
+    test_weighted_mask_ramps();
+    test_blend();
+    test_additive();
+    test_inertialization();
+    test_root_motion();
     if (failures != 0) {
         std::fprintf(stderr, "rig: %d check(s) failed\n", failures);
         return 1;

@@ -42,6 +42,8 @@ public final class CendaAnimClip {
     static final long FIRED_BYTES = 16;
     /** {@code cm_curve_key}. */
     static final long CURVE_KEY_BYTES = 20;
+    /** {@code cm_sync_member}. */
+    static final long SYNC_MEMBER_BYTES = 24;
 
     static final int OK = 0;
 
@@ -96,6 +98,7 @@ public final class CendaAnimClip {
     static final MethodHandle ADDITIVE_SET;
     static final MethodHandle BIND_ROLES;
     static final MethodHandle TO_ROLES;
+    static final MethodHandle SYNC_ADVANCE;
 
     static {
         String failure = null;
@@ -171,6 +174,7 @@ public final class CendaAnimClip {
         ADDITIVE_SET = handle(lookup, "cm_clip_additive_set", FunctionDescriptor.of(I32, ADDR, I32, F32, ADDR, I32));
         BIND_ROLES = handle(lookup, "cm_clip_bind_roles", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR));
         TO_ROLES = handle(lookup, "cm_clip_to_roles", FunctionDescriptor.of(ADDR, ADDR, ADDR));
+        SYNC_ADVANCE = handle(lookup, "cm_sync_advance", FunctionDescriptor.of(I32, ADDR, I32, I32, F32));
     }
 
     private CendaAnimClip() {

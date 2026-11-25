@@ -381,6 +381,23 @@ public final class CharacterDefinition implements AutoCloseable {
 
     // --- Roles -----------------------------------------------------------------------------------
 
+    /**
+     * A weighted bone mask authored by role (OpenMason #156): sets the joint {@code role} maps to in {@code rig}
+     * on {@code mask} ({@link com.openmason.engine.rig.BoneMask#set}; {@code flags} BoneMask.BRANCH, blend depth
+     * as there). Throws when the role is unmapped or its joint is not in the rig.
+     */
+    public void maskRole(com.openmason.engine.rig.Rig rig, com.openmason.engine.rig.BoneMask mask, String role,
+                         float weight, int flags, int blendDepth) {
+        try (Arena arena = Arena.ofConfined()) {
+            check((int) CendaCharacter.MASK_ROLE.invokeExact(handle(), rig.nativeHandle(), mask.nativeHandle(),
+                arena.allocateFrom(role), weight, flags, blendDepth), "maskRole");
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new IllegalStateException(t);
+        }
+    }
+
     /** Role -> joint id, in file order. */
     public Map<String, String> roles() {
         try (Arena arena = Arena.ofConfined()) {
