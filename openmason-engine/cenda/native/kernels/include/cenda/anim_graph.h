@@ -218,6 +218,25 @@ int32_t cg_instance_montage_status(const cg_instance* inst, int32_t slot, cg_mon
 /* One frame: update by dt seconds, then compose like cr_rig_pose (extras, base matrix, outputs as there). */
 int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* extras, int32_t extra_count,
                              const float* base_matrix, float* out_skin, float* out_world, float* out_child);
+/* First-person view (OpenMason #161; see rig.h "First-person view"). The root layer node's layers marked
+ * "view": "firstPerson" (aim offsets, first-person-only clips such as inspecting an item; usually switched on by
+ * a weightParam the host sets while it is in first person) are left out of the pose cg_instance_evaluate
+ * composes (the BODY: shadows, reflections, other cameras) and take no influence from the base; the same
+ * evaluate also builds the FIRST_PERSON pose = the body pose after the modifiers + those layers. Their clips
+ * advance, fire notifies and give curves like any layer's. */
+enum {
+    CG_VIEW_BODY = 0,
+    CG_VIEW_FIRST_PERSON = 1
+};
+/* Composes a view of the last evaluate (no time passes) like cr_poses_compose: the extras, base matrix and
+ * outputs as cg_instance_evaluate (for the first-person view: base = cr_first_person_projection's pull x the
+ * character's base). FIRST_PERSON without view layers = the body pose. */
+int32_t cg_instance_compose_view(const cg_instance* inst, int32_t view, const cr_joint_extra* extras,
+                                 int32_t extra_count, const float* base_matrix, float* out_skin, float* out_world,
+                                 float* out_child);
+/* How many first-person view layers the graph's root has. */
+int32_t cg_graph_first_person_layer_count(const cg_graph* g);
+
 /* The last frame's local pose (joint_count * 9 floats, as cr_rig_local_pose). */
 int32_t cg_instance_local_pose(const cg_instance* inst, float* out_local);
 

@@ -101,6 +101,8 @@ public final class CendaAnimGraph {
     static final MethodHandle MONTAGE_STATUS;
     static final MethodHandle EVALUATE;
     static final MethodHandle LOCAL_POSE;
+    static final MethodHandle COMPOSE_VIEW;
+    static final MethodHandle FIRST_PERSON_LAYER_COUNT;
     static final MethodHandle NOTIFY_COUNT;
     static final MethodHandle NOTIFY_GET;
     static final MethodHandle CURVE_COUNT;
@@ -189,6 +191,9 @@ public final class CendaAnimGraph {
         EVALUATE = handle(lookup, "cg_instance_evaluate",
             FunctionDescriptor.of(I32, ADDR, F32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
         LOCAL_POSE = handle(lookup, "cg_instance_local_pose", FunctionDescriptor.of(I32, ADDR, ADDR));
+        COMPOSE_VIEW = handle(lookup, "cg_instance_compose_view",
+            FunctionDescriptor.of(I32, ADDR, I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
+        FIRST_PERSON_LAYER_COUNT = handle(lookup, "cg_graph_first_person_layer_count", FunctionDescriptor.of(I32, ADDR));
         NOTIFY_COUNT = handle(lookup, "cg_instance_notify_count", FunctionDescriptor.of(I32, ADDR), critical);
         NOTIFY_GET = handle(lookup, "cg_instance_notify_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR));
         CURVE_COUNT = handle(lookup, "cg_instance_curve_count", FunctionDescriptor.of(I32, ADDR), critical);

@@ -26,7 +26,10 @@
 //                     when its transition is taken). Higher priority is tested first, then list order.
 //     layer           base, layers: [ {node, mode?: override | additive, mask?, weight?: 1,
 //                                      weightParam?: float param multiplied in, passthrough?: true,
-//                                      meshSpace?: false, reference?: rest | character} ]
+//                                      meshSpace?: false, reference?: rest | character,
+//                                      view?: firstPerson} ]
+//                     (view firstPerson, #161: only on the ROOT layer node; the layer is left out of
+//                     the body pose and applied, after the modifiers, only to the first-person view)
 //                     (an additive layer whose node is not an additive clip is made a delta against
 //                     `reference`)
 //     slot            name, source, mask?   a montage slot: the host plays one-shot clips into it
@@ -152,6 +155,7 @@ struct LayerEntry {
     bool passthrough = true;
     bool mesh_space = false;
     Reference reference = Reference::Rest;
+    bool first_person = false;  // "view": "firstPerson" (#161)
 };
 
 enum class Blend2DMode : int { Cartesian = 0, Directional = 1 };

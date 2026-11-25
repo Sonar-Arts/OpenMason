@@ -104,6 +104,42 @@ public final class JointPalette {
     }
 
     /**
+     * Copies {@code other}'s joints (skin and world) into this palette (OpenMason #161: the body palette's copy the
+     * owner's body-awareness view hides joints in). Allocation-free once this palette has grown.
+     */
+    public JointPalette copyFrom(JointPalette other) {
+        ensureCapacity(other.count);
+        long bytes = 64L * other.count;
+        if (bytes > 0) {
+            MemorySegment.copy(other.skin, 0, skin, 0, bytes);
+            MemorySegment.copy(other.world, 0, world, 0, bytes);
+        }
+        count = other.count;
+        return this;
+    }
+
+    /**
+     * Hides joints by scaling them to zero in the SKIN matrices ({@code cr_palette_hide}, OpenMason #161): weight 1
+     * = untouched, 0 = gone (a hidden branch collapses to the point of its topmost hidden joint), between = shrunk
+     * part way. World matrices stay as posed, so sockets read from them keep working; read skin-based sockets
+     * ({@code CharacterDefinition.eyesPoint}) before hiding. Allocation-free.
+     */
+    public JointPalette hide(Rig rig, BoneMask visible) {
+        if (count != rig.jointCount()) {
+            throw new IllegalStateException("palette holds " + count + " joints, rig has " + rig.jointCount());
+        }
+        CendaRig.requireAvailable();
+        int rc;
+        try {
+            rc = (int) CendaRig.PALETTE_HIDE.invokeExact(rig.handle(), visible.handle(), world, skin);
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+        if (rc != CendaRig.OK) throw new IllegalArgumentException("cr_palette_hide: " + CendaRig.lastError());
+        return this;
+    }
+
+    /**
      * The skin matrices as a direct float buffer over the native memory (16 floats per joint,
      * {@link #count()} joints) — upload it as-is.
      */

@@ -114,6 +114,7 @@ add_library(cenda_kernels SHARED
         src/rig/pose.cpp
         src/rig/modifiers.cpp
         src/rig/skin.cpp
+        src/rig/first_person.cpp
         src/character/character.cpp
         src/character/profile.cpp
         src/character/characterize.cpp

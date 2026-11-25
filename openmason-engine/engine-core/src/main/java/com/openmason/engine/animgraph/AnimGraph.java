@@ -248,6 +248,15 @@ public final class AnimGraph implements AutoCloseable {
         return targets.indexOf(targetName);
     }
 
+    /** Number of first-person view layers on the graph's root (#161; {@code "view": "firstPerson"}). */
+    public int firstPersonLayerCount() {
+        try {
+            return (int) CendaAnimGraph.FIRST_PERSON_LAYER_COUNT.invokeExact(handle());
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        }
+    }
+
     /** Number of pose modifiers in the graph's stack (#158). */
     public int modifierCount() {
         return modifierCount;

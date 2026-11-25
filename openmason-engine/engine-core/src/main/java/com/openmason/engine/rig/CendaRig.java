@@ -111,6 +111,16 @@ public final class CendaRig {
     static final MethodHandle SKIN_MIRROR;
     static final MethodHandle SKIN_TRANSFER;
     static final MethodHandle SKIN_DEFORM;
+    // First-person view (#161).
+    static final MethodHandle PALETTE_HIDE;
+    static final MethodHandle FIRST_PERSON_PROJECTION;
+    static final MethodHandle STABILIZER_CREATE;
+    static final MethodHandle STABILIZER_DESTROY;
+    static final MethodHandle STABILIZER_RESET;
+    static final MethodHandle STABILIZER_UPDATE;
+    /** {@code cr_first_person_desc} / {@code cr_stabilizer_desc} sizes. */
+    static final long FIRST_PERSON_DESC_BYTES = 32;
+    static final long STABILIZER_DESC_BYTES = 16;
 
     static {
         String failure = null;
@@ -212,6 +222,14 @@ public final class CendaRig {
         SKIN_TRANSFER = handle(lookup, "cr_skin_transfer", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR, I32));
         SKIN_DEFORM = handle(lookup, "cr_skin_deform",
             FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, ADDR, I32, ADDR));
+        PALETTE_HIDE = handle(lookup, "cr_palette_hide", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR), critical);
+        FIRST_PERSON_PROJECTION = handle(lookup, "cr_first_person_projection",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, ADDR), critical);
+        STABILIZER_CREATE = handle(lookup, "cr_stabilizer_create", FunctionDescriptor.of(ADDR, ADDR));
+        STABILIZER_DESTROY = handle(lookup, "cr_stabilizer_destroy", FunctionDescriptor.ofVoid(ADDR));
+        STABILIZER_RESET = handle(lookup, "cr_stabilizer_reset", FunctionDescriptor.of(I32, ADDR), critical);
+        STABILIZER_UPDATE = handle(lookup, "cr_stabilizer_update",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, F32, ADDR), critical);
     }
 
     private CendaRig() {

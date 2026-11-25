@@ -194,6 +194,36 @@ int32_t cc_char_metrics_set(cc_char* c, const cc_metrics* metrics);
 int32_t cc_char_compute_metrics(const cc_char* c, const cr_rig* rig, const float* bounds_min,
                                 const float* bounds_max, cc_metrics* out);
 
+/* --- First-person views (OpenMason #161; see rig.h "First-person view") ------------------------- */
+
+/* Visibility masks for cr_palette_hide, by role. */
+enum {
+    CC_VIEW_FIRST_PERSON = 0,  /* the arms only: each side's "shoulder" branch ("upper_arm" where no shoulder
+                                  is mapped) 1, everything else 0 (hands, fingers and anything parented under
+                                  them, such as held props, are in the branch) */
+    CC_VIEW_HEADLESS = 1,      /* everything but the head: the "neck" branch ("head" where no neck is mapped) 0 */
+    CC_VIEW_BODY_AWARENESS = 2 /* everything but the head and the arms (the owner looking down at its body) */
+};
+/* Fills `mask` (a mask over `rig`) for a view. *out_missing (may be NULL) counts the parts of the view
+ * whose roles are not mapped (a side without arm roles, no head role); they are left out. CC_ERR_RANGE when
+ * nothing of the view is mapped (the mask is then unspecified). */
+int32_t cc_char_view_mask(const cc_char* c, const cr_rig* rig, int32_t view, cr_mask* mask, int32_t* out_missing);
+
+/* Sources of cc_char_eyes_point. */
+enum {
+    CC_EYES_SOCKET = 1,  /* the "eyes" socket */
+    CC_EYES_ROLES = 2,   /* the mean of the "eye_l" / "eye_r" role joints */
+    CC_EYES_HEAD = 3     /* the "head" role joint */
+};
+/* The point a first-person camera sits on, from a posed palette (cr_rig_pose / cg_instance_evaluate outputs
+ * of the BODY, before any cr_palette_hide): the "eyes" socket (its joint's skin matrix x the socket's rest
+ * model-space position), else the mean of the "eye_l"/"eye_r" role joints, else the "head" role joint (a
+ * joint's point: a bone's head, a part's pivot, from `world`) - the eye_height rule of
+ * cc_char_compute_metrics. skin, world: joint_count*16 each (world may be NULL when the socket exists).
+ * Returns the source (CC_EYES_*) or CC_ERR_RANGE when none exists. */
+int32_t cc_char_eyes_point(const cc_char* c, const cr_rig* rig, const float* skin, const float* world,
+                           float* out_point);
+
 /* --- Checks -------------------------------------------------------------------------------------- */
 
 /* Severities. */

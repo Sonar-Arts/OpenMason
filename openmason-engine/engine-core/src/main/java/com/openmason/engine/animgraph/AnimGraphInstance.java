@@ -66,6 +66,10 @@ public final class AnimGraphInstance implements AutoCloseable {
         Throwable failure;
     }
 
+    /** {@link #composeView} views (= {@code CG_VIEW_*}, OpenMason #161). */
+    public static final int VIEW_BODY = 0;
+    public static final int VIEW_FIRST_PERSON = 1;
+
     /** {@link #setTarget} kinds (= {@code CR_TARGET_*}). */
     public static final int TARGET_NONE = 0;
     public static final int TARGET_MODEL = 1;
@@ -517,6 +521,34 @@ public final class AnimGraphInstance implements AutoCloseable {
             throw CendaAnimGraph.rethrow(t);
         }
         CendaAnimGraph.check(rc, "evaluate");
+        out.nativeWritten(n);
+        return out;
+    }
+
+    /**
+     * Composes a view of the last {@link #evaluate} (no time passes; OpenMason #161) with the current extras under
+     * {@code baseMatrix} (null = identity) into {@code out}: {@link #VIEW_BODY} = what {@link #evaluate} wrote,
+     * {@link #VIEW_FIRST_PERSON} = it plus the root's {@code "view": "firstPerson"} layers (for the first-person
+     * palette pass {@code FirstPersonProjection}'s pull x the character's base). Allocation-free once {@code out}
+     * has grown.
+     */
+    public JointPalette composeView(int view, Matrix4f baseMatrix, JointPalette out) {
+        int n = rig.jointCount();
+        out.ensureCapacity(n);
+        MemorySegment baseSeg = MemorySegment.NULL;
+        if (baseMatrix != null) {
+            writeMatrix(base, baseMatrix);
+            baseSeg = base;
+        }
+        MemorySegment extraSeg = extraCount == 0 ? MemorySegment.NULL : extras;
+        int rc;
+        try {
+            rc = (int) CendaAnimGraph.COMPOSE_VIEW.invokeExact(handle(), view, extraSeg, extraCount, baseSeg,
+                out.nativeSkin(), out.nativeWorld(), MemorySegment.NULL);
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        }
+        CendaAnimGraph.check(rc, "composeView");
         out.nativeWritten(n);
         return out;
     }

@@ -398,6 +398,72 @@ public final class CharacterDefinition implements AutoCloseable {
         }
     }
 
+    /** Per-thread output of {@link #eyesPoint} (it runs every frame: no allocation after a thread's first call). */
+    private static final ThreadLocal<MemorySegment> EYES_SCRATCH =
+        ThreadLocal.withInitial(() -> Arena.ofAuto().allocate(12, 4));
+
+    /** {@link #viewMask} views (= {@code CC_VIEW_*}, OpenMason #161). */
+    public static final int VIEW_FIRST_PERSON = 0;
+    public static final int VIEW_HEADLESS = 1;
+    public static final int VIEW_BODY_AWARENESS = 2;
+    /** {@link #eyesPoint} sources (= {@code CC_EYES_*}). */
+    public static final int EYES_SOCKET = 1;
+    public static final int EYES_ROLES = 2;
+    public static final int EYES_HEAD = 3;
+
+    /**
+     * Fills {@code mask} with a first-person visibility view by role ({@code cc_char_view_mask}, OpenMason #161):
+     * {@link #VIEW_FIRST_PERSON} = the arm branches only (shoulders, else upper arms); {@link #VIEW_HEADLESS} =
+     * everything but the neck branch (else the head's); {@link #VIEW_BODY_AWARENESS} = everything but head and
+     * arms. Feed it to {@code JointPalette.hide}. Returns how many parts of the view had no mapped role.
+     *
+     * @throws IllegalArgumentException when nothing of the view is mapped
+     */
+    public int viewMask(com.openmason.engine.rig.Rig rig, int view, com.openmason.engine.rig.BoneMask mask) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment missing = arena.allocate(4, 4);
+            int rc = (int) CendaCharacter.VIEW_MASK.invokeExact(handle(), rig.nativeHandle(), view, mask.nativeHandle(),
+                missing);
+            if (rc == -2) throw new IllegalArgumentException("viewMask: " + CendaCharacter.lastError());
+            check(rc, "viewMask");
+            return missing.get(ValueLayout.JAVA_INT, 0);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new IllegalStateException(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+            Reference.reachabilityFence(mask);
+        }
+    }
+
+    /**
+     * Where a first-person camera sits, from the BODY palette before any hiding ({@code cc_char_eyes_point},
+     * OpenMason #161): the {@code eyes} socket, else the mean of the eye roles, else the head role. Writes the
+     * world point into {@code out}; returns the source ({@link #EYES_SOCKET}, {@link #EYES_ROLES},
+     * {@link #EYES_HEAD}). Allocation-free.
+     *
+     * @throws IllegalArgumentException when the character has none of them
+     */
+    public int eyesPoint(com.openmason.engine.rig.Rig rig, com.openmason.engine.rig.JointPalette body,
+                         org.joml.Vector3f out) {
+        try {
+            MemorySegment p = EYES_SCRATCH.get();
+            int rc = (int) CendaCharacter.EYES_POINT.invokeExact(handle(), rig.nativeHandle(), body.nativeSkin(),
+                body.nativeWorld(), p);
+            if (rc == -2) throw new IllegalArgumentException("eyesPoint: " + CendaCharacter.lastError());
+            if (rc < 0) check(rc, "eyesPoint");
+            out.set(p.get(ValueLayout.JAVA_FLOAT, 0), p.get(ValueLayout.JAVA_FLOAT, 4), p.get(ValueLayout.JAVA_FLOAT, 8));
+            return rc;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new IllegalStateException(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+        }
+    }
+
     /** Role -> joint id, in file order. */
     public Map<String, String> roles() {
         try (Arena arena = Arena.ofConfined()) {

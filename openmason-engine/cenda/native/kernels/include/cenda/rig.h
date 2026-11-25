@@ -704,6 +704,89 @@ int32_t cr_skin_deform(const cr_skin* skin, const int32_t* part_joint_of_vertex,
                        const float* positions, int32_t vertex_count,
                        const float* skin_matrices, int32_t joint_count, float* out_positions);
 
+/* ---------------------------------------------------------------------------------------------- */
+/* First-person view (OpenMason #161; still CR ABI 2).                                             */
+/*                                                                                                 */
+/* One character, three views (Unreal 5.5 first-person rendering): the owner's camera sees the     */
+/* character's first-person joints (arms, hands, held items) with their own field of view, squeezed */
+/* into a thin depth slab just past the world's near plane so they never clip into walls; the full  */
+/* world-space body casts shadows and is what every other camera sees; the owner may also see the  */
+/* body minus head and arms (body awareness). The pieces here are rig-generic: character.h names    */
+/* the role masks and the eyes point, anim_graph.h the first-person layers. A frame:               */
+/*   1. cg_instance_evaluate -> the body palette (shadow passes, other cameras);                    */
+/*   2. camera = cr_stabilizer_update(cc_char_eyes_point(body palette)) + the host's look rotation; */
+/*   3. cr_first_person_projection(camera view, world projection) -> FP projection + pull matrix;  */
+/*   4. cg_instance_compose_view(FIRST_PERSON, base = pull x base) + cr_palette_hide(FP mask) ->    */
+/*      the FP palette, drawn with the camera view and the FP projection (sockets of this palette   */
+/*      mount held items in first-person space);                                                   */
+/*   5. optional: a copy of the body palette + cr_palette_hide(body-awareness mask), world projection. */
+
+/* Hides joints by SCALING THEM TO ZERO in the skin matrices (in place); world matrices are not
+ * touched, so sockets and attachments read from them (or read before hiding) stay valid. visible =
+ * a weight per joint (1 = untouched, 0 = gone, between = shrunk part way). A hidden joint shrinks
+ * toward the point of its HIDE ROOT (the joint itself when its parent is visible or it has none,
+ * else its parent's hide root): a hidden branch collapses to one point like an inherited zero
+ * scale, so its triangles have no area; vertices weighted between a visible and a hidden joint are
+ * pulled toward that point. The point is a part's pivot / a bone's head (world matrices, so the
+ * host's base matrix is included): K'(j) = T(p)·S(v_j)·T(-p)·K(j). world, skin: joint_count*16. */
+int32_t cr_palette_hide(const cr_rig* rig, const cr_mask* visible, const float* world, float* skin);
+
+/* First-person projection parameters (32 bytes). A field <= 0 takes its default. */
+typedef struct cr_first_person_desc {
+    float fov_y_deg;    /* vertical field of view of the first-person view, independent of the world's
+                           (default: the world projection's own) */
+    float near;         /* first-person near plane: true view depth (default 0.01) */
+    float far;          /* far end of the first-person depth range: true view depth (default 2) */
+    float depth_scale;  /* thickness of the depth slab the range [near, far] is squeezed into, as a
+                           fraction of the world's near plane n: the slab is [n, n·(1 + depth_scale)]
+                           (default 0.5) */
+    float pull;         /* uniform scale about the eye (0 < pull <= 1) applied to first-person geometry in
+                           WORLD space: the screen image is unchanged (a ray through the eye) but
+                           lighting, fog and shadow lookups happen at the pulled point, near the camera,
+                           never inside the wall the real arm would poke into (default 0.2; 1 = true
+                           positions) */
+    uint32_t flags;     /* 0 */
+    float reserved[2];  /* 0 */
+} cr_first_person_desc;
+
+/* The first-person projection for a camera. view: world -> view (rigid, column-major); world_projection:
+ * the world's OpenGL perspective (clip z in [-w, w], w = view depth; off-centre and jitter terms are
+ * kept). out_projection: same aspect, the first-person FOV (x and y scaled by tan(world/2)/tan(fp/2)),
+ * w = view depth (perspective-correct), and a depth row that maps (pulled) view depth d into the
+ * world's depth range so that 1/d' is affine in 1/d: the first-person near plane lands exactly on the
+ * world near plane, the far end on n·(1 + depth_scale). Depths stay ordered (the arm keeps its own
+ * occlusion) and every first-person fragment is in front of world geometry farther than the slab.
+ * out_pull: T(eye)·S(pull)·T(-eye) in world space; compose the first-person palette with
+ * base = out_pull x the character's base matrix and draw it with `view` and out_projection.
+ * Either output may be null. CR_ERR_ARG on a non-perspective world projection or bad desc. */
+int32_t cr_first_person_projection(const float* view, const float* world_projection, const cr_first_person_desc* desc,
+                                   float* out_projection, float* out_pull);
+
+/* Head-bob stabilizer for a camera on a posed point (the eyes). It separates bob from intended motion by
+ * AMPLITUDE: the point is followed in the character's MODEL space (through the inverse of the base matrix,
+ * so walking and turning never lag) by a slow critically damped filter; the camera = filtered + the raw
+ * point's deviation from it clamped to `threshold` (length). Bob up to the threshold passes through exactly,
+ * larger bob is removed; a deviation beyond `max_offset` counts as intended motion (crouch, mantle, a
+ * stagger): the filter is dragged along so it never trails the point by more than max_offset (the camera by
+ * max_offset - threshold), then settles within about the time constant. */
+typedef struct cr_stabilizer cr_stabilizer;
+typedef struct cr_stabilizer_desc {  /* 16 bytes; a field <= 0 takes its default */
+    float threshold;      /* largest deviation that passes through (default 0.02) */
+    float max_offset;     /* deviations beyond this are intended motion, not bob (default 0.1; >= threshold) */
+    float time_constant;  /* seconds the filter takes to catch up, about (default 0.3) */
+    float snap_distance;  /* a raw point this far from the filter resets it (teleport; default 1) */
+} cr_stabilizer_desc;
+
+/* desc NULL = defaults. */
+cr_stabilizer* cr_stabilizer_create(const cr_stabilizer_desc* desc);
+void cr_stabilizer_destroy(cr_stabilizer* s);
+/* The next update starts the filter at its raw point. */
+int32_t cr_stabilizer_reset(cr_stabilizer* s);
+/* point: the raw world point (3 floats, e.g. cc_char_eyes_point); base: the character's base matrix of
+ * the frame (16 floats, NULL = identity); dt seconds (<= 0 = no time passes); out: the stabilized world
+ * point (3 floats; may alias point). */
+int32_t cr_stabilizer_update(cr_stabilizer* s, const float* point, const float* base, float dt, float* out);
+
 #ifdef __cplusplus
 }
 #endif

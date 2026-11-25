@@ -533,6 +533,103 @@ int32_t cc_char_compute_metrics(const cc_char* c, const cr_rig* rig, const float
     CC_GUARD_END(CC_ERR_ARG)
 }
 
+// --- First-person views (#161) ------------------------------------------------------------------------
+
+int32_t cc_char_view_mask(const cc_char* c, const cr_rig* rig, int32_t view, cr_mask* mask, int32_t* out_missing) {
+    if (c == nullptr || rig == nullptr || mask == nullptr || view < CC_VIEW_FIRST_PERSON ||
+        view > CC_VIEW_BODY_AWARENESS) {
+        return error(CC_ERR_ARG, "cc_char_view_mask: bad arguments");
+    }
+    if (cr_mask_joint_count(mask) != cr_rig_joint_count(rig)) {
+        return error(CC_ERR_ARG, "cc_char_view_mask: the mask belongs to another rig");
+    }
+    CC_GUARD_BEGIN
+    clear_error();
+    const oc::Character& d = c->def;
+    // The first mapped role of a list whose joint is in the rig, or -1.
+    auto joint_of = [&](std::initializer_list<const char*> roles) {
+        for (const char* r : roles) {
+            const std::string id = role_joint(d, r);
+            const int32_t j = id.empty() ? -1 : rig_index(rig, id);
+            if (j >= 0) return j;
+        }
+        return -1;
+    };
+    int32_t missing = 0;
+    int32_t found = 0;
+    auto set_branch = [&](int32_t joint, float weight) {
+        if (joint < 0) {
+            ++missing;
+            return;
+        }
+        ++found;
+        cr_mask_set(mask, joint, weight, CR_MASK_BRANCH, 0);
+    };
+    const int32_t arm_l = joint_of({"shoulder_l", "upper_arm_l"});
+    const int32_t arm_r = joint_of({"shoulder_r", "upper_arm_r"});
+    const int32_t head = joint_of({"neck", "head"});
+    if (view == CC_VIEW_FIRST_PERSON) {
+        cr_mask_fill(mask, 0.f);
+        set_branch(arm_l, 1.f);
+        set_branch(arm_r, 1.f);
+    } else {
+        cr_mask_fill(mask, 1.f);
+        set_branch(head, 0.f);
+        if (view == CC_VIEW_BODY_AWARENESS) {
+            set_branch(arm_l, 0.f);
+            set_branch(arm_r, 0.f);
+        }
+    }
+    set_out(out_missing, missing);
+    if (found == 0) return error(CC_ERR_RANGE, "cc_char_view_mask: none of the view's roles is mapped");
+    return CC_OK;
+    CC_GUARD_END(CC_ERR_ARG)
+}
+
+int32_t cc_char_eyes_point(const cc_char* c, const cr_rig* rig, const float* skin, const float* world,
+                           float* out_point) {
+    if (c == nullptr || rig == nullptr || skin == nullptr || out_point == nullptr) {
+        return error(CC_ERR_ARG, "cc_char_eyes_point: bad arguments");
+    }
+    CC_GUARD_BEGIN
+    clear_error();
+    const oc::Character& d = c->def;
+    for (const oc::Socket& s : d.sockets) {
+        if (s.name != "eyes") continue;
+        const int32_t j = rig_index(rig, s.joint);
+        if (j < 0) break;
+        const float* k = skin + static_cast<std::size_t>(j) * 16;
+        for (int r = 0; r < 3; ++r) {
+            out_point[r] = static_cast<float>(static_cast<double>(k[r]) * s.pos.x + static_cast<double>(k[4 + r]) * s.pos.y +
+                                              static_cast<double>(k[8 + r]) * s.pos.z + static_cast<double>(k[12 + r]));
+        }
+        return CC_EYES_SOCKET;
+    }
+    if (world == nullptr) return error(CC_ERR_RANGE, "cc_char_eyes_point: no eyes socket (and no world matrices)");
+    auto point_of = [&](const char* role, double p[3]) {
+        const std::string id = role_joint(d, role);
+        const int32_t j = id.empty() ? -1 : rig_index(rig, id);
+        if (j < 0) return false;
+        joint_point(rig, j, world, p);
+        return true;
+    };
+    double l[3], r[3];
+    const bool has_l = point_of("eye_l", l);
+    const bool has_r = point_of("eye_r", r);
+    if (has_l || has_r) {
+        for (int i = 0; i < 3; ++i) {
+            out_point[i] = static_cast<float>(has_l && has_r ? (l[i] + r[i]) * 0.5 : (has_l ? l[i] : r[i]));
+        }
+        return CC_EYES_ROLES;
+    }
+    if (point_of("head", l)) {
+        for (int i = 0; i < 3; ++i) out_point[i] = static_cast<float>(l[i]);
+        return CC_EYES_HEAD;
+    }
+    return error(CC_ERR_RANGE, "cc_char_eyes_point: no eyes socket, eye roles or head role");
+    CC_GUARD_END(CC_ERR_ARG)
+}
+
 // --- Checks -------------------------------------------------------------------------------------------
 
 cc_report* cc_char_check(const cc_char* c, const cr_rig* rig) {

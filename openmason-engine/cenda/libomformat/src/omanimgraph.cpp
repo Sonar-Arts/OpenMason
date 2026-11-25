@@ -366,6 +366,12 @@ Node parse_node(yyjson_val* v, std::size_t i) {
                 } else {
                     fail(lw + ": reference must be rest or character");
                 }
+                const std::string view = str_field(l, "view", lw, false);
+                if (view == "firstPerson") {
+                    le.first_person = true;
+                } else if (!view.empty()) {
+                    fail(lw + ": view must be firstPerson");
+                }
                 n.layers.push_back(std::move(le));
             }
             break;
@@ -804,6 +810,9 @@ void validate(const Graph& g) {
                     mask_of(l.mask, at);
                     if (!l.weight_param.empty()) param_of(l.weight_param, at, {ParamType::Float});
                     if (!std::isfinite(l.weight)) fail(at + ": bad layer weight");
+                    if (l.first_person && n.id != g.root) {
+                        fail(at + ": a firstPerson view layer must be on the root layer node");
+                    }
                 }
                 break;
             case NodeType::Slot:
@@ -1101,6 +1110,7 @@ std::string write(const Graph& g) {
                     if (!l.passthrough) put(d, lo, "passthrough", yyjson_mut_bool(d, false));
                     if (l.mesh_space) put(d, lo, "meshSpace", yyjson_mut_bool(d, true));
                     if (l.reference == Reference::Character) put(d, lo, "reference", yyjson_mut_str(d, "character"));
+                    if (l.first_person) put(d, lo, "view", yyjson_mut_str(d, "firstPerson"));
                     yyjson_mut_arr_append(ls, lo);
                 }
                 put(d, o, "layers", ls);

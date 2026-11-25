@@ -67,6 +67,7 @@ struct CLayer {
     bool passthrough = true;
     bool mesh_space = false;
     og::Reference reference = og::Reference::Rest;
+    bool first_person = false;  // a "view": "firstPerson" layer (#161): only the first-person pose
 };
 
 struct CNode {
@@ -110,6 +111,7 @@ struct cg_graph {
     int slot_count = 0;
     int rest_slot = 0;
     int ref_slot = 0;
+    int fp_slot = -1;  // the first-person pose (#161), when the root layer node has view layers
     int weight_floats = 0;
     int max_ops = 0;
     int sync_groups = 0;
@@ -360,6 +362,7 @@ void compile(cg_graph& cg) {
                     cl.passthrough = l.passthrough;
                     cl.mesh_space = l.mesh_space;
                     cl.reference = l.reference;
+                    cl.first_person = l.first_person;
                     c.layers.push_back(cl);
                 }
                 break;
@@ -436,6 +439,16 @@ void compile(cg_graph& cg) {
                 cg.montage_slots.push_back(i);
                 ops += 5;
                 break;
+        }
+    }
+    {
+        const CNode& r = cg.nodes[static_cast<size_t>(cg.root)];
+        for (const CLayer& l : r.layers) {
+            if (l.first_person) {
+                cg.fp_slot = next_slot++;
+                ops += 1;  // the copy of the body pose it starts from
+                break;
+            }
         }
     }
     cg.rest_slot = next_slot++;
@@ -819,6 +832,51 @@ bool emit_clip(cg_instance& inst, const CNode& c, int node) {
     return false;
 }
 
+// Layer k of a layer node onto dst (its children emitted first). An inactive layer emits nothing.
+void emit_layer(cg_instance& inst, const CNode& c, size_t k, int32_t dst) {
+    const int ch = c.children[k + 1];
+    if (!inst.rt[static_cast<size_t>(ch)].active) return;
+    const CLayer& l = c.layers[k];
+    const bool child_delta = emit(inst, ch);
+    int src = inst.g->nodes[static_cast<size_t>(ch)].out_slot;
+    const float w = inst.weights[static_cast<size_t>(c.weights_at) + k];
+    cr_mask* mask = l.mask >= 0 ? inst.masks[static_cast<size_t>(l.mask)] : nullptr;
+    if (l.mode == og::LayerMode::Additive) {
+        if (!child_delta) {
+            cr_pose_op& mk = push(inst, CR_OP_MAKE_ADDITIVE, c.scratch);
+            mk.a = src;
+            mk.b = l.reference == og::Reference::Character ? inst.g->ref_slot : inst.g->rest_slot;
+            mk.flags = l.mesh_space ? static_cast<uint32_t>(CR_POSE_MESH_SPACE) : 0u;
+            src = c.scratch;
+        }
+        cr_pose_op& ly = push(inst, CR_OP_LAYER, dst);
+        ly.a = src;
+        ly.object = mask;
+        ly.weight = w;
+        ly.mode = CR_BLEND_ADDITIVE;
+        ly.flags = l.mesh_space ? static_cast<uint32_t>(CR_POSE_MESH_SPACE) : 0u;
+    } else {
+        cr_pose_op& ly = push(inst, CR_OP_LAYER, dst);
+        ly.a = src;
+        ly.object = mask;
+        ly.weight = w;
+        ly.mode = CR_BLEND_OVERRIDE;
+        ly.flags = l.passthrough ? 0u : static_cast<uint32_t>(CR_POSE_NO_PASSTHROUGH);
+    }
+}
+
+// The first-person pose (#161): the body pose (after the modifiers) + the root layer node's view layers.
+void emit_first_person(cg_instance& inst) {
+    const cg_graph& g = *inst.g;
+    if (g.fp_slot < 0) return;
+    const CNode& c = g.nodes[static_cast<size_t>(g.root)];
+    cr_pose_op& cp = push(inst, CR_OP_COPY, g.fp_slot);
+    cp.a = c.out_slot;
+    for (size_t k = 0; k < c.layers.size(); ++k) {
+        if (c.layers[k].first_person) emit_layer(inst, c, k, g.fp_slot);
+    }
+}
+
 bool emit(cg_instance& inst, int node) {
     const CNode& c = inst.g->nodes[static_cast<size_t>(node)];
     switch (c.type) {
@@ -848,35 +906,7 @@ bool emit(cg_instance& inst, int node) {
             cr_pose_op& cp = push(inst, CR_OP_COPY, c.out_slot);
             cp.a = inst.g->nodes[static_cast<size_t>(base)].out_slot;
             for (size_t k = 0; k < c.layers.size(); ++k) {
-                const int ch = c.children[k + 1];
-                if (!inst.rt[static_cast<size_t>(ch)].active) continue;
-                const CLayer& l = c.layers[k];
-                const bool child_delta = emit(inst, ch);
-                int src = inst.g->nodes[static_cast<size_t>(ch)].out_slot;
-                const float w = inst.weights[static_cast<size_t>(c.weights_at) + k];
-                cr_mask* mask = l.mask >= 0 ? inst.masks[static_cast<size_t>(l.mask)] : nullptr;
-                if (l.mode == og::LayerMode::Additive) {
-                    if (!child_delta) {
-                        cr_pose_op& mk = push(inst, CR_OP_MAKE_ADDITIVE, c.scratch);
-                        mk.a = src;
-                        mk.b = l.reference == og::Reference::Character ? inst.g->ref_slot : inst.g->rest_slot;
-                        mk.flags = l.mesh_space ? static_cast<uint32_t>(CR_POSE_MESH_SPACE) : 0u;
-                        src = c.scratch;
-                    }
-                    cr_pose_op& ly = push(inst, CR_OP_LAYER, c.out_slot);
-                    ly.a = src;
-                    ly.object = mask;
-                    ly.weight = w;
-                    ly.mode = CR_BLEND_ADDITIVE;
-                    ly.flags = l.mesh_space ? static_cast<uint32_t>(CR_POSE_MESH_SPACE) : 0u;
-                } else {
-                    cr_pose_op& ly = push(inst, CR_OP_LAYER, c.out_slot);
-                    ly.a = src;
-                    ly.object = mask;
-                    ly.weight = w;
-                    ly.mode = CR_BLEND_OVERRIDE;
-                    ly.flags = l.passthrough ? 0u : static_cast<uint32_t>(CR_POSE_NO_PASSTHROUGH);
-                }
+                if (!c.layers[k].first_person) emit_layer(inst, c, k, c.out_slot);
             }
             return delta;
         }
@@ -2126,7 +2156,8 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
                     if (l.weight_param >= 0) lw *= static_cast<float>(param_value(*inst, l.weight_param));
                     lw = std::clamp(lw, 0.f, 1.f);
                     w[k] = lw;
-                    if (l.mode == og::LayerMode::Override && l.mask < 0) base *= 1.f - lw;
+                    // A first-person view layer is not in the body pose: it takes no influence from the base.
+                    if (l.mode == og::LayerMode::Override && l.mask < 0 && !l.first_person) base *= 1.f - lw;
                     give(c.children[k + 1], lw > 0.f, r.influence * lw, false);
                 }
                 give(c.children[0], true, base, r.root_path);
@@ -2301,6 +2332,7 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         op.object = inst->mods;
         op.param = dt;
     }
+    emit_first_person(*inst);
     const int32_t rc = cr_poses_evaluate(inst->poses, inst->ops.data(), static_cast<int32_t>(inst->ops.size()),
                                          g.nodes[static_cast<size_t>(g.root)].out_slot, extras, extra_count,
                                          base_matrix, out_skin, out_world, out_child);
@@ -2350,6 +2382,28 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         }
     }
     return CG_OK;
+}
+
+int32_t cg_instance_compose_view(const cg_instance* inst, int32_t view, const cr_joint_extra* extras,
+                                 int32_t extra_count, const float* base_matrix, float* out_skin, float* out_world,
+                                 float* out_child) {
+    if (inst == nullptr || (view != CG_VIEW_BODY && view != CG_VIEW_FIRST_PERSON)) {
+        return fail(CG_ERR_ARG, "cg_instance_compose_view: bad arguments");
+    }
+    const cg_graph& g = *inst->g;
+    const int32_t slot = view == CG_VIEW_FIRST_PERSON && g.fp_slot >= 0 ? g.fp_slot
+                                                                         : g.nodes[static_cast<size_t>(g.root)].out_slot;
+    if (cr_poses_compose(inst->poses, slot, extras, extra_count, base_matrix, out_skin, out_world, out_child) != CR_OK) {
+        return fail(CG_ERR_ARG, std::string("cg_instance_compose_view: ") + cr_last_error());
+    }
+    return CG_OK;
+}
+
+int32_t cg_graph_first_person_layer_count(const cg_graph* g) {
+    if (g == nullptr) return 0;
+    int32_t n = 0;
+    for (const CLayer& l : g->nodes[static_cast<size_t>(g->root)].layers) n += l.first_person ? 1 : 0;
+    return n;
 }
 
 int32_t cg_instance_local_pose(const cg_instance* inst, float* out_local) {
