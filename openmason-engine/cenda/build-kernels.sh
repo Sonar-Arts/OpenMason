@@ -201,5 +201,7 @@ check_abi "character" "$HERE/native/kernels/include/cenda/character.h" CC_ABI_VE
 # Animation clip documents (cm_*, .omanim 1.2, #155) have no Java fallback either.
 check_abi "animation clips" "$HERE/native/kernels/include/cenda/anim_clip.h" CM_ABI_VERSION \
   "$HERE/../engine-core/src/main/java/com/openmason/engine/anim/CendaAnimClip.java"
+check_abi "animation graph" "$HERE/native/kernels/include/cenda/anim_graph.h" CG_ABI_VERSION \
+  "$HERE/../engine-core/src/main/java/com/openmason/engine/animgraph/CendaAnimGraph.java"
 
 echo "[cenda] kernels ready: $LIB"

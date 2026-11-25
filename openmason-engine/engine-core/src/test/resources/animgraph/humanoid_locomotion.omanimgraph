@@ -1,0 +1,39 @@
+{
+  "format": "omanimgraph",
+  "version": "1.0",
+  "name": "Humanoid locomotion",
+  "description": "Idle, walk/run blend space, jump, fall, land; a full-body montage slot on top.",
+  "profile": "humanoid",
+  "parameters": [
+    {"name": "speed", "type": "float"},
+    {"name": "grounded", "type": "bool", "default": true},
+    {"name": "jump", "type": "trigger"}
+  ],
+  "slots": ["idle", "walk", "run", "jump", "fall", "land"],
+  "root": "full",
+  "nodes": [
+    {"id": "idle", "type": "clip", "slot": "idle"},
+    {"id": "walk", "type": "clip", "slot": "walk", "sync": "feet"},
+    {"id": "run", "type": "clip", "slot": "run", "sync": "feet"},
+    {"id": "locomotion", "type": "blend1d", "param": "speed",
+     "samples": [{"node": "idle", "value": 0}, {"node": "walk", "value": 1.5}, {"node": "run", "value": 5}]},
+    {"id": "jumpClip", "type": "clip", "slot": "jump"},
+    {"id": "fallClip", "type": "clip", "slot": "fall"},
+    {"id": "landClip", "type": "clip", "slot": "land"},
+    {"id": "movement", "type": "stateMachine", "entry": "ground",
+     "states": [
+       {"name": "ground", "node": "locomotion"},
+       {"name": "jump", "node": "jumpClip"},
+       {"name": "fall", "node": "fallClip"},
+       {"name": "land", "node": "landClip"}
+     ],
+     "transitions": [
+       {"from": "ground", "to": "jump", "conditions": [{"param": "jump"}], "priority": 2, "blend": 0.1},
+       {"from": "ground", "to": "fall", "conditions": [{"param": "grounded", "op": "==", "value": false}], "priority": 1, "blend": 0.2},
+       {"from": "jump", "to": "fall", "exitTime": 0.9, "blend": 0.15},
+       {"from": "fall", "to": "land", "conditions": [{"param": "grounded"}], "blend": 0.05},
+       {"from": "land", "to": "ground", "exitTime": 1, "blend": 0.2, "mode": "crossfade"}
+     ]},
+    {"id": "full", "type": "slot", "name": "fullBody", "source": "movement"}
+  ]
+}

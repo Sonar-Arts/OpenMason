@@ -215,6 +215,14 @@ public final class AnimClipDocument implements AutoCloseable {
         return h;
     }
 
+    /**
+     * The native {@code cm_clip*}, for other Cenda bindings that take a clip (the animation graph copies what it
+     * needs during the call). Keep this document reachable for the call; never free the handle.
+     */
+    public MemorySegment nativeHandle() {
+        return handle();
+    }
+
     // --- Header ----------------------------------------------------------------------------------
 
     public String name() {

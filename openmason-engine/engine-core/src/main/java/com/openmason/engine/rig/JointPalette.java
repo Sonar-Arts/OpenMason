@@ -63,6 +63,26 @@ public final class JointPalette {
         return world;
     }
 
+    /**
+     * For other Cenda bindings that write palettes natively (for example the animation graph): the skin and
+     * world segments (64 bytes per joint, {@link #ensureCapacity} first) and the count they wrote. Never keep
+     * the segments past a growth.
+     */
+    public MemorySegment nativeSkin() {
+        return skin;
+    }
+
+    /** See {@link #nativeSkin()}. */
+    public MemorySegment nativeWorld() {
+        return world;
+    }
+
+    /** See {@link #nativeSkin()}: marks {@code joints} joints valid after a native write. */
+    public void nativeWritten(int joints) {
+        if (joints < 0 || joints > capacity) throw new IndexOutOfBoundsException(joints);
+        this.count = joints;
+    }
+
     /** The skin matrix of {@code joint} into {@code dest}. */
     public Matrix4f skinMatrix(int joint, Matrix4f dest) {
         checkIndex(joint);

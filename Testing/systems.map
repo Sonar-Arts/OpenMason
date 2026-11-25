@@ -21,6 +21,7 @@ model-draw	openmason-engine/engine-core	com/openmason/engine/rendering/model/dra
 rig	openmason-engine/engine-core	com/openmason/engine/rig/**/*Test
 character	openmason-engine/engine-core	com/openmason/engine/character/**/*Test
 anim-clips	openmason-engine/engine-core	com/openmason/engine/anim/**/*Test
+anim-graph	openmason-engine/engine-core	com/openmason/engine/animgraph/**/*Test
 viewer	openmason-engine/engine-modeling	com/openmason/engine/rendering/viewer/**/*Test
 cco	openmason-engine/engine-voxel	com/openmason/engine/voxel/cco/**/*Test
 mms	openmason-engine/engine-voxel	com/openmason/engine/voxel/mms/**/*Test

@@ -116,7 +116,8 @@ add_library(cenda_kernels SHARED
         src/character/character.cpp
         src/character/profile.cpp
         src/character/characterize.cpp
-        src/anim/anim_clip.cpp)
+        src/anim/anim_clip.cpp
+        src/graph/anim_graph.cpp)
 
 target_include_directories(cenda_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cenda_kernels
