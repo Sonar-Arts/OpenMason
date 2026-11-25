@@ -82,6 +82,7 @@ public final class CendaAnimGraph {
     static final MethodHandle INSTANCE_DESTROY;
     static final MethodHandle INSTANCE_RESET;
     static final MethodHandle BIND_SLOT;
+    static final MethodHandle BIND_SLOT_RETARGET;
     static final MethodHandle ADD_MONTAGE;
     static final MethodHandle SET_FLOAT;
     static final MethodHandle SET_INT;
@@ -166,6 +167,8 @@ public final class CendaAnimGraph {
         INSTANCE_DESTROY = handle(lookup, "cg_instance_destroy", FunctionDescriptor.ofVoid(ADDR));
         INSTANCE_RESET = handle(lookup, "cg_instance_reset", FunctionDescriptor.of(I32, ADDR));
         BIND_SLOT = handle(lookup, "cg_instance_bind_slot", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
+        BIND_SLOT_RETARGET = handle(lookup, "cg_instance_bind_slot_retarget",
+            FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR));
         ADD_MONTAGE = handle(lookup, "cg_instance_add_montage", FunctionDescriptor.of(I32, ADDR, ADDR));
         SET_FLOAT = handle(lookup, "cg_instance_set_float", FunctionDescriptor.of(I32, ADDR, I32, F32), critical);
         SET_INT = handle(lookup, "cg_instance_set_int", FunctionDescriptor.of(I32, ADDR, I32, I32), critical);

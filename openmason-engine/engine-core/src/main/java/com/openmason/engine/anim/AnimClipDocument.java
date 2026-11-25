@@ -142,6 +142,14 @@ public final class AnimClipDocument implements AutoCloseable {
 
     // --- Lifetime and I/O ------------------------------------------------------------------------
 
+    /**
+     * Takes ownership of a native {@code cm_clip} another binding produced (a retargeted bake, #160): the document
+     * destroys it when closed.
+     */
+    public static AnimClipDocument adopt(MemorySegment handle) {
+        return wrap(handle, "adopt");
+    }
+
     public static AnimClipDocument create() {
         CendaAnimClip.requireAvailable();
         try {

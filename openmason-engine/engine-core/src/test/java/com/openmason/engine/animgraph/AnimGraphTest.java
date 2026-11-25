@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * OpenMason #157 through the Java binding: the shipped-style humanoid locomotion graph
  * ({@code animgraph/humanoid_locomotion.omanimgraph}: idle, walk/run blend space, jump, fall, land, a montage slot)
- * runs on two differently built characterized rigs (the Stonebreak player: 33 bones; the goblin: 12) with ONE set
+ * runs on two differently built characterized rigs (the Stonebreak player: 33 bones; the goblin: 16) with ONE set
  * of role-addressed clips; the binding round-trips the asset, drives montages, and a frame evaluates without
  * allocating. Includes the 100-character bench. The graph semantics are pinned in depth by the native
  * {@code anim_graph} ctest.

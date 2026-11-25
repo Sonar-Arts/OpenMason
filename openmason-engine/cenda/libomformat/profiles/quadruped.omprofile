@@ -803,5 +803,127 @@
         ]
       ]
     }
+  ],
+  "chains": [
+    {
+      "name": "spine",
+      "roles": [
+        "spine",
+        "chest"
+      ]
+    },
+    {
+      "name": "neck",
+      "roles": [
+        "neck"
+      ]
+    },
+    {
+      "name": "head",
+      "roles": [
+        "head"
+      ]
+    },
+    {
+      "name": "jaw",
+      "roles": [
+        "jaw"
+      ]
+    },
+    {
+      "name": "ear_l",
+      "roles": [
+        "ear_l"
+      ]
+    },
+    {
+      "name": "ear_r",
+      "roles": [
+        "ear_r"
+      ]
+    },
+    {
+      "name": "tail",
+      "roles": [
+        "tail_1",
+        "tail_2",
+        "tail_3",
+        "tail_4"
+      ]
+    },
+    {
+      "name": "front_leg_l",
+      "roles": [
+        "front_upper_leg_l",
+        "front_lower_leg_l",
+        "front_foot_l"
+      ],
+      "goal": "front_foot_l",
+      "bend": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "name": "back_leg_l",
+      "roles": [
+        "back_upper_leg_l",
+        "back_lower_leg_l",
+        "back_foot_l"
+      ],
+      "goal": "back_foot_l",
+      "bend": [
+        0,
+        0,
+        -1
+      ]
+    },
+    {
+      "name": "front_leg_r",
+      "roles": [
+        "front_upper_leg_r",
+        "front_lower_leg_r",
+        "front_foot_r"
+      ],
+      "goal": "front_foot_r",
+      "bend": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "name": "back_leg_r",
+      "roles": [
+        "back_upper_leg_r",
+        "back_lower_leg_r",
+        "back_foot_r"
+      ],
+      "goal": "back_foot_r",
+      "bend": [
+        0,
+        0,
+        -1
+      ]
+    }
+  ],
+  "ikGoals": [
+    {
+      "name": "front_foot_l",
+      "role": "front_foot_l"
+    },
+    {
+      "name": "back_foot_l",
+      "role": "back_foot_l"
+    },
+    {
+      "name": "front_foot_r",
+      "role": "front_foot_r"
+    },
+    {
+      "name": "back_foot_r",
+      "role": "back_foot_r"
+    }
   ]
 }

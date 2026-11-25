@@ -539,6 +539,27 @@ void auto_map(oc::Character& def, const cr_rig* rig, const op::Profile& p, cc_au
         result.matches.push_back({p.roles[ri].name, id, confidence[ri]});
     }
     def.profile = p.id;
+
+    // Retarget chains and IK goals from the profile (#160): a chain runs from its first mapped role to its last.
+    def.ik_goals.clear();
+    for (const op::IkGoal& g : p.ik_goals) {
+        const std::string joint = role_joint(def, g.role);
+        if (!joint.empty()) def.ik_goals.push_back({g.name, joint});
+    }
+    def.chains.clear();
+    for (const op::RetargetChain& c : p.chains) {
+        std::string first, last;
+        for (const std::string& r : c.roles) {
+            const std::string joint = role_joint(def, r);
+            if (joint.empty()) continue;
+            if (first.empty()) first = joint;
+            last = joint;
+        }
+        if (first.empty()) continue;
+        const bool goal = !c.goal.empty() && std::any_of(def.ik_goals.begin(), def.ik_goals.end(),
+                                                         [&](const oc::IkGoal& g) { return g.name == c.goal; });
+        def.chains.push_back({c.name, first, last, goal ? c.goal : std::string()});
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------

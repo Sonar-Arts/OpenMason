@@ -47,6 +47,12 @@ class RigAbiParityTest {
 
     private static final Path SBE_ROOT = Path.of("../../test-fixtures/stonebreak/resources/sbe");
     private static final Path GOLDEN = Path.of("src/test/resources/rig/abi1-parity.txt");
+    /**
+     * Fixtures whose shipped asset changed on purpose after the golden was frozen keep their frozen copy here (same
+     * relative path; it replaces the fixture): the goblin, re-rigged for #160 (GoblinRerigParityTest proves the
+     * re-rigged asset poses its clips like this copy).
+     */
+    static final Path FROZEN_ROOT = Path.of("src/test/resources/rig/frozen-fixtures");
 
     /** Elapsed times as fractions of the clip duration, plus absolute offsets (seconds). */
     private static final float[] FRACTIONS = {0f, 0.25f, 0.5f, 0.77f, 1f, 1.37f, 2.5f};
@@ -67,28 +73,35 @@ class RigAbiParityTest {
             files = walk.filter(p -> p.toString().endsWith(".sbe")).sorted().toList();
         }
         List<Fixture> out = new ArrayList<>();
-        for (Path file : files) {
-            byte[] omo = null;
-            Map<String, ParsedAnimClip> clips = new TreeMap<>();
-            try (ZipInputStream in = new ZipInputStream(Files.newInputStream(file))) {
-                ZipEntry e;
-                while ((e = in.getNextEntry()) != null) {
-                    if (e.getName().equals("model.omo")) omo = in.readAllBytes();
-                    else if (e.getName().endsWith(".omanim")) clips.put(e.getName(), new OMAReader().read(in.readAllBytes()));
-                }
-            }
-            if (omo == null) continue;
-            OMOReader.ReadResult read = new OMOReader().read(new ByteArrayInputStream(omo));
-            List<RigModel.PartSpec> parts = new ArrayList<>();
-            for (OMOFormat.PartEntry p : read.parts()) {
-                parts.add(new RigModel.PartSpec(p.id(), p.name(), p.parentId(), p.vertexCount() > 0,
-                    new Vector3f(p.originX(), p.originY(), p.originZ()), new Vector3f(p.posX(), p.posY(), p.posZ()),
-                    new Vector3f(p.rotX(), p.rotY(), p.rotZ()), new Vector3f(p.scaleX(), p.scaleY(), p.scaleZ())));
-            }
-            String name = SBE_ROOT.relativize(file).toString().replace('\\', '/');
-            out.add(new Fixture(name, RigModel.build(parts, read.bones(), null, null, null), clips));
+        for (Path fixture : files) {
+            Path frozen = FROZEN_ROOT.resolve(SBE_ROOT.relativize(fixture));
+            Fixture f = load(Files.isRegularFile(frozen) ? frozen : fixture,
+                SBE_ROOT.relativize(fixture).toString().replace('\\', '/'));
+            if (f != null) out.add(f);
         }
         return out;
+    }
+
+    /** One SBE's rig and clips (null when it has no model). */
+    static Fixture load(Path file, String name) throws IOException {
+        byte[] omo = null;
+        Map<String, ParsedAnimClip> clips = new TreeMap<>();
+        try (ZipInputStream in = new ZipInputStream(Files.newInputStream(file))) {
+            ZipEntry e;
+            while ((e = in.getNextEntry()) != null) {
+                if (e.getName().equals("model.omo")) omo = in.readAllBytes();
+                else if (e.getName().endsWith(".omanim")) clips.put(e.getName(), new OMAReader().read(in.readAllBytes()));
+            }
+        }
+        if (omo == null) return null;
+        OMOReader.ReadResult read = new OMOReader().read(new ByteArrayInputStream(omo));
+        List<RigModel.PartSpec> parts = new ArrayList<>();
+        for (OMOFormat.PartEntry p : read.parts()) {
+            parts.add(new RigModel.PartSpec(p.id(), p.name(), p.parentId(), p.vertexCount() > 0,
+                new Vector3f(p.originX(), p.originY(), p.originZ()), new Vector3f(p.posX(), p.posY(), p.posZ()),
+                new Vector3f(p.rotX(), p.rotY(), p.rotZ()), new Vector3f(p.scaleX(), p.scaleY(), p.scaleZ())));
+        }
+        return new Fixture(name, RigModel.build(parts, read.bones(), null, null, null), clips);
     }
 
     /** A copy of {@code clip} as an OVERLAY layer. */

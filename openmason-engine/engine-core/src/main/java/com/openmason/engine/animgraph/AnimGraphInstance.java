@@ -92,6 +92,7 @@ public final class AnimGraphInstance implements AutoCloseable {
     private final MemorySegment targetPos;
     private final MemorySegment targetRot;
     private final GroundFrame groundFrame = new GroundFrame();
+    private final List<Object> retained = new ArrayList<>();  // retargeters bound to slots
     private MemorySegment extras = MemorySegment.NULL;
     private int extraCapacity;
     private int extraCount;
@@ -205,6 +206,31 @@ public final class AnimGraphInstance implements AutoCloseable {
         int index = graph.slot(slot);
         if (index < 0) throw new IllegalArgumentException("no slot " + slot);
         return bindSlot(index, clip);
+    }
+
+    /**
+     * Binds a clip made for {@code retargeter}'s SOURCE character to a slot (OpenMason #160): its clip node samples
+     * it on the source rig and retargets each frame (this instance's rig must be the retargeter's target). The
+     * instance keeps the retargeter reachable while bound. Returns the role tracks the source character lacks.
+     */
+    public int bindSlotRetargeted(int slot, AnimClipDocument clip, com.openmason.engine.character.Retargeter retargeter) {
+        try {
+            CendaAnimGraph.check((int) CendaAnimGraph.BIND_SLOT_RETARGET.invokeExact(handle(), slot, clip.nativeHandle(),
+                retargeter.nativeHandle(), scratch), "bindSlotRetargeted");
+            java.lang.ref.Reference.reachabilityFence(clip);
+            if (!retained.contains(retargeter)) retained.add(retargeter);
+            return scratch.get(CendaAnimGraph.I32, 0);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        }
+    }
+
+    public int bindSlotRetargeted(String slot, AnimClipDocument clip, com.openmason.engine.character.Retargeter retargeter) {
+        int index = graph.slot(slot);
+        if (index < 0) throw new IllegalArgumentException("no slot " + slot);
+        return bindSlotRetargeted(index, clip, retargeter);
     }
 
     /** Registers a montage clip (its sections are point notifies named {@code section:<name>}); returns its id. */

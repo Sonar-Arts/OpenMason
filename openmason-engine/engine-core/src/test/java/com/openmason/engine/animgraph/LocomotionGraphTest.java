@@ -31,8 +31,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * sides from the viewer, characterization fixes that): the host answers foot placement's batched ground query from
  * Java (one upcall per evaluate), a role-addressed flat-ground walk climbs Stonebreak stairs (0.5 up, 0.5 deep) with
  * every locked contact foot within 0.01 of its tread (its height above the tread = the same clip's foot height above
- * flat ground, frame for frame) and pinned in place; host exceptions come back out of evaluate; the goblin (no foot
- * roles) degrades to its shin tails; a frame with the full locomotion stack + the upcall allocates nothing (bench).
+ * flat ground, frame for frame) and pinned in place; host exceptions come back out of evaluate; the re-rigged goblin
+ * gets heel + toe probes; a frame with the full locomotion stack + the upcall allocates nothing (bench).
  * The solvers themselves are pinned by the native {@code locomotion} ctest.
  */
 class LocomotionGraphTest {
@@ -49,7 +49,7 @@ class LocomotionGraphTest {
     // A role-addressed flat-ground walk (1 s loop, keys at 30/s): thighs swing +-25 degrees, the swing knee bends up
     // to 50, the feet stay level; foot_lock_l / foot_lock_r = the straight-knee keys (left 8/30..22/30, right
     // 23/30..7/30).
-    private static AnimClipDocument walk() {
+    static AnimClipDocument walk() {
         AnimClipDocument c = AnimClipDocument.create();
         c.setName("walk");
         c.setHeader(new Header(30f, 1f, true, false, 0f, 0f, 0));
@@ -231,17 +231,17 @@ class LocomotionGraphTest {
     }
 
     @Test
-    void theGoblinHasNoFeetSoItsShinTailsAreTheAnkles() throws IOException {
+    void theReRiggedGoblinGetsFullFootPlacement() throws IOException {
         try (AnimGraph graph = AnimGraph.read(GRAPH); AnimGraphTest.Character ch = AnimGraphTest.Character.of("SB_Goblin.sbe");
              AnimClipDocument clip = walk();
              AnimGraphInstance inst = AnimGraphInstance.create(graph, ch.rig(), ch.definition())) {
-            // foot_l / foot_r unmapped in both leg modifiers (4) + no chest (1); nothing is left out.
-            assertEquals(5, inst.unresolvedMaskEntries());
+            // Since the #160 re-rig it maps feet (ankle bones with toe tails): only `chest` is missing.
+            assertEquals(1, inst.unresolvedMaskEntries());
             inst.bindSlot("walk", clip);
             Stairs stairs = new Stairs();
             inst.setGround(stairs);
             inst.evaluate(DT, at(0, 0), new JointPalette());
-            assertEquals(2, stairs.lastCount, "one probe per leg: the ankle");
+            assertEquals(4, stairs.lastCount, "heel and toe per leg");
         }
     }
 

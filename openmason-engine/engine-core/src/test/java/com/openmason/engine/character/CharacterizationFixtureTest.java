@@ -33,8 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * OpenMason #154 acceptance: the Stonebreak fixture copies of SB_Player (33 bones), the goblin (12) and the Ice
- * Archon (18) auto-map onto the built-in humanoid profile with only the expected gaps.
+ * OpenMason #154 acceptance: the Stonebreak fixture copies of SB_Player (33 bones), the goblin (16, re-rigged for
+ * #160) and the Ice Archon (18) auto-map onto the built-in humanoid profile with only the expected gaps.
  *
  * <p>SB_Player and the Archon name their sides from the viewer ({@code arm_left} sits at +X while the model
  * faces -Z: the character's right), the goblin anatomically; characterization maps by position, so all three
@@ -148,7 +148,7 @@ class CharacterizationFixtureTest {
     }
 
     @Test
-    void goblinMapsItsPivotsAndReportsTheMissingHandsAndFeet() throws IOException {
+    void goblinMapsEveryRequiredRole() throws IOException {
         try (Rig rig = rigOf("SB_Goblin.sbe");
              CharacterProfile humanoid = CharacterProfile.builtin("humanoid");
              CharacterDefinition c = CharacterDefinition.create()) {
@@ -160,18 +160,20 @@ class CharacterizationFixtureTest {
                 Map.entry("upper_arm_l", "shoulder_l"), Map.entry("lower_arm_l", "elbow_l"),
                 Map.entry("upper_arm_r", "shoulder_r"), Map.entry("lower_arm_r", "elbow_r"),
                 Map.entry("upper_leg_l", "hip_l"), Map.entry("lower_leg_l", "knee_l"),
-                Map.entry("upper_leg_r", "hip_r"), Map.entry("lower_leg_r", "knee_r")), roles);
-            // The expected gaps: the goblin has no hand, foot or separate head bones.
-            assertEquals(Set.of("hand_l", "hand_r", "foot_l", "foot_r"), codes(result.notes(), IssueCode.REQUIRED_MISSING));
+                Map.entry("upper_leg_r", "hip_r"), Map.entry("lower_leg_r", "knee_r"),
+                Map.entry("hand_l", "wrist_l"), Map.entry("hand_r", "wrist_r"),
+                Map.entry("foot_l", "ankle_l"), Map.entry("foot_r", "ankle_r")), roles);
+            // No gaps since the #160 re-rig (wrists and ankles; the old placeholder bones had none). Its shoulder
+            // and neck bones are promoted to the required arm / head roles.
+            assertTrue(codes(result.notes(), IssueCode.REQUIRED_MISSING).isEmpty());
             assertEquals(Set.of("head", "upper_arm_l", "upper_arm_r"), codes(result.notes(), IssueCode.PROMOTED));
             assertTrue(codes(result.notes(), IssueCode.SIDE_FROM_GEOMETRY).isEmpty(), "the goblin names its sides anatomically");
 
-            // Gaps keep it from locking; its own exported profile fits it completely.
-            assertEquals(Set.of("hand_l", "hand_r", "foot_l", "foot_r"),
-                codes(errors(c.validate(rig, humanoid)), IssueCode.REQUIRED_MISSING));
+            // It validates against the humanoid profile; its own exported profile fits it completely.
+            assertEquals(List.of(), errors(c.validate(rig, humanoid)));
             try (CharacterProfile own = CharacterProfile.fromRig(rig, c, "goblin");
                  CharacterDefinition mapped = CharacterDefinition.create()) {
-                assertEquals(12, mapped.autoMap(rig, own).matches().size());
+                assertEquals(16, mapped.autoMap(rig, own).matches().size());
                 assertEquals(List.of(), errors(mapped.validate(rig, own)));
             }
         }

@@ -185,6 +185,20 @@ void validate(const Profile& p) {
             if (!opposite) fail("mirror roles " + r.name + " and " + r.mirror + " need opposite sides");
         }
     }
+    std::unordered_map<std::string, std::string> goals;
+    for (const IkGoal& g : p.ik_goals) {
+        if (g.name.empty()) fail("an ik goal needs a name");
+        known(g.role, "ik goal " + g.name);
+        if (!goals.emplace(g.name, g.role).second) fail("duplicate ik goal " + g.name);
+    }
+    std::unordered_map<std::string, int> chains;
+    for (const RetargetChain& c : p.chains) {
+        if (c.name.empty()) fail("a chain needs a name");
+        if (!chains.emplace(c.name, 0).second) fail("duplicate chain " + c.name);
+        if (c.roles.empty()) fail("chain " + c.name + " has no roles");
+        for (const std::string& r : c.roles) known(r, "chain " + c.name);
+        if (!c.goal.empty() && !goals.contains(c.goal)) fail("chain " + c.name + " names unknown ik goal " + c.goal);
+    }
     for (const std::string& f : p.facing.roles) known(f, "facing.roles");
     if (!p.facing.from.empty()) known(p.facing.from, "facing.from");
     if (!p.facing.to.empty()) known(p.facing.to, "facing.to");
@@ -243,6 +257,42 @@ Profile read(std::string_view text) {
     yyjson_val* roles = yyjson_obj_get(root, "roles");
     if (roles == nullptr || !yyjson_is_arr(roles)) fail("\"roles\" must be an array");
     for (std::size_t i = 0, n = yyjson_arr_size(roles); i < n; ++i) p.roles.push_back(parse_role(yyjson_arr_get(roles, i), i));
+    if (yyjson_val* cs = yyjson_obj_get(root, "chains"); cs != nullptr && !yyjson_is_null(cs)) {
+        if (!yyjson_is_arr(cs)) fail("\"chains\" must be an array");
+        for (std::size_t i = 0, n = yyjson_arr_size(cs); i < n; ++i) {
+            yyjson_val* c = yyjson_arr_get(cs, i);
+            const std::string at = "chains[" + std::to_string(i) + "]";
+            if (!yyjson_is_obj(c)) fail(at + " must be an object");
+            RetargetChain chain;
+            chain.name = str_field(c, "name", at, true);
+            chain.roles = str_list(c, "roles", at);
+            chain.goal = str_field(c, "goal", at, false);
+            if (yyjson_val* b = yyjson_obj_get(c, "bend"); b != nullptr && !yyjson_is_null(b)) {
+                if (!yyjson_is_arr(b) || yyjson_arr_size(b) != 3) fail(at + ": \"bend\" must be [x, y, z]");
+                double v[3], l = 0.0;
+                for (std::size_t k = 0; k < 3; ++k) {
+                    yyjson_val* e = yyjson_arr_get(b, k);
+                    if (!yyjson_is_num(e)) fail(at + ": \"bend\" must be numbers");
+                    v[k] = yyjson_get_num(e);
+                    l += v[k] * v[k];
+                }
+                l = std::sqrt(l);
+                if (!(l > 1e-9) || !std::isfinite(l)) fail(at + ": \"bend\" must be a non-zero vector");
+                chain.has_bend = true;
+                for (int k = 0; k < 3; ++k) chain.bend[k] = static_cast<float>(v[k] / l);
+            }
+            p.chains.push_back(std::move(chain));
+        }
+    }
+    if (yyjson_val* gs = yyjson_obj_get(root, "ikGoals"); gs != nullptr && !yyjson_is_null(gs)) {
+        if (!yyjson_is_arr(gs)) fail("\"ikGoals\" must be an array");
+        for (std::size_t i = 0, n = yyjson_arr_size(gs); i < n; ++i) {
+            yyjson_val* g = yyjson_arr_get(gs, i);
+            const std::string at = "ikGoals[" + std::to_string(i) + "]";
+            if (!yyjson_is_obj(g)) fail(at + " must be an object");
+            p.ik_goals.push_back({str_field(g, "name", at, true), str_field(g, "role", at, true)});
+        }
+    }
     validate(p);
     return p;
 }
@@ -301,6 +351,32 @@ std::string write(const Profile& p) {
         yyjson_mut_arr_append(roles, o);
     }
     put(d, root, "roles", roles);
+    if (!p.chains.empty()) {
+        yyjson_mut_val* cs = yyjson_mut_arr(d);
+        for (const RetargetChain& c : p.chains) {
+            yyjson_mut_val* o = yyjson_mut_obj(d);
+            put(d, o, "name", mstr(d, c.name));
+            put(d, o, "roles", mlist(d, c.roles));
+            if (!c.goal.empty()) put(d, o, "goal", mstr(d, c.goal));
+            if (c.has_bend) {
+                yyjson_mut_val* b = yyjson_mut_arr(d);
+                for (float v : c.bend) yyjson_mut_arr_append(b, yyjson_mut_float(d, v));
+                put(d, o, "bend", b);
+            }
+            yyjson_mut_arr_append(cs, o);
+        }
+        put(d, root, "chains", cs);
+    }
+    if (!p.ik_goals.empty()) {
+        yyjson_mut_val* gs = yyjson_mut_arr(d);
+        for (const IkGoal& g : p.ik_goals) {
+            yyjson_mut_val* o = yyjson_mut_obj(d);
+            put(d, o, "name", mstr(d, g.name));
+            put(d, o, "role", mstr(d, g.role));
+            yyjson_mut_arr_append(gs, o);
+        }
+        put(d, root, "ikGoals", gs);
+    }
 
     std::size_t len = 0;
     yyjson_write_err err{};

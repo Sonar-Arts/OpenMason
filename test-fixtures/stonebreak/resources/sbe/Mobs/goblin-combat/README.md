@@ -23,6 +23,14 @@ starts from), because the mob renderer does not blend between states.
   Open Mason and `SbePoseSolver` read them. They were once authored as absolute points,
   which tore limbs off the moment anything rotated.
 - Legs chain `thigh -> shin -> foot`, so bending a thigh carries the lower leg.
+- **Skeleton (re-rigged 2026-11-25, OpenMason #160)**: 16 bones on the part pivots with tails
+  along the limbs (`root -> hips -> spine`, `neck`, `shoulder/elbow/wrist_l|r`, `hip/knee/ankle_l|r`), each inserted
+  between a part and its old parent part (`spine -> body`, `hip_l -> thigh_l -> knee_l -> shin_l -> ankle_l -> foot_l`,
+  ...), so every part keeps its ancestors and `body` still carries everything. A re-parented part's rest `pos` and
+  its clips' `pos` keys moved by the new parent frame's offset, so the six clips pose exactly as before (OpenMason
+  `GoblinRerigParityTest`). The humanoid auto-map now maps all 15 required roles (hands = wrists, feet = ankles),
+  so retargeted clips and IK drive the goblin through its bones. The old 12 bones were unbound placeholders (1 unit
+  long, pointing up, knees on the hips).
 - Weapons are voxelized item sprites mounted on `weapon_r` / `bow_l`. In a socket's frame
   an item is centred, one unit across, long axis along +Y (`DropRenderer.SOCKET_SPRITE_TRANSFORM`);
   the socket's rotation/scale does the fitting. Clips counter-rotate `hand_r` / `hand_l`
@@ -32,6 +40,6 @@ starts from), because the mob renderer does not blend between states.
 
 ## Sources
 
-Model and clips live in `Dev Working/Goblin/` (`Goblin.omo`, `Animations/*.omanim`,
-`Cosmetics/*.omo`). `author_goblin_clips.py` regenerates the clips through Open Mason's
-`om.anim` API on `Goblin.omo`; adjust its absolute output path when relocating.
+`SB_Goblin.sbe` itself is the source of the model, its skeleton and its clips (the earlier
+`Dev Working/Goblin/` sources and the clip-authoring script predate the #160 re-rig and were
+retired). Edit it in Open Mason; keep `clips.json` and `MobWeapon` in step with any timing change.

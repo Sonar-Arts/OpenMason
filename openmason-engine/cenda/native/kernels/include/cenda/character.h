@@ -283,7 +283,9 @@ int32_t cc_profile_role_find(const cc_profile* p, const char* name);
 /* --- Characterization ---------------------------------------------------------------------------- */
 
 /* Replaces the role map from the rig (see the header comment), sets the profile id and, when the facing is
- * not set, the detected facing. NULL on failure (locked: CC_ERR_LOCKED in cc_last_error). */
+ * not set, the detected facing. Also replaces the retarget chains and IK goals with the profile's (#160): a chain
+ * runs from its first mapped role to its last, chains with no mapped role are left out, a goal whose role is
+ * unmapped too. NULL on failure (locked: CC_ERR_LOCKED in cc_last_error). */
 cc_automap* cc_char_auto_map(cc_char* c, const cr_rig* rig, const cc_profile* profile);
 int32_t cc_automap_count(const cc_automap* m);
 /* confidence in (0, 1]: the alias score (structural chain matches 0.9, promotions x0.8). */

@@ -133,10 +133,18 @@ struct BoundClip {
     bool additive_mesh = false;
     int additive_slot = -1;
     std::vector<int> curve_ids;
+    // Runtime retargeting (#160): the clip is the SOURCE character's, sampled on the source rig.
+    cc_retargeter* retarget = nullptr;
+    cr_poses* src_poses = nullptr;
+    std::vector<float> src_local, dst_local;
+    std::vector<uint8_t> driven;
+    float pin[3]{};            // the target hips' local position at the clip's first frame
+    bool has_pin = false;
     // Foot-lock marker channels (#159): per channel, the clip's (time, 1 = down / 0 = up) marker events by time.
     std::vector<std::vector<std::pair<float, uint8_t>>> lock_events;
 
     void release() {
+        if (src_poses != nullptr) cr_poses_destroy(src_poses);
         if (rig_clip != nullptr) cr_clip_destroy(rig_clip);
         if (doc != nullptr) cm_clip_destroy(doc);
         *this = BoundClip{};
@@ -764,6 +772,8 @@ cr_pose_op& push(cg_instance& inst, int32_t op, int32_t dst) {
 
 bool emit(cg_instance& inst, int node);
 
+int32_t retarget_into(cg_instance& inst, BoundClip& b, float time, int32_t slot);
+
 bool emit_clip(cg_instance& inst, const CNode& c, int node) {
     const BoundClip& b = inst.slots[static_cast<size_t>(c.clip_slot)];
     if (b.rig_clip == nullptr) {
@@ -771,6 +781,12 @@ bool emit_clip(cg_instance& inst, const CNode& c, int node) {
         return false;
     }
     const PlayerRt& p = inst.players[static_cast<size_t>(node)];
+    if (b.retarget != nullptr) {
+        if (retarget_into(inst, inst.slots[static_cast<size_t>(c.clip_slot)], p.time, c.out_slot) != CG_OK) {
+            push(inst, CR_OP_REST, c.out_slot);
+        }
+        return false;
+    }
     cr_pose_op& s = push(inst, CR_OP_SAMPLE, c.out_slot);
     s.object = b.rig_clip;
     s.time = p.time;
@@ -976,11 +992,24 @@ void feed_locomotion(cg_instance& inst) {
 
 // ---- binding ------------------------------------------------------------------------------------------
 
+int32_t bind_clip_to(cg_instance& inst, const cm_clip* clip, const cc_char* character, const cr_rig* rig, BoundClip& b,
+                     int32_t* out_dropped);
+
 int32_t bind_clip(cg_instance& inst, const cm_clip* clip, BoundClip& out, int32_t* out_dropped) {
-    set_out(out_dropped, int32_t{0});
     BoundClip b;
-    if (inst.character != nullptr) {
-        b.doc = cm_clip_bind_roles(clip, inst.character, out_dropped);
+    const int32_t rc = bind_clip_to(inst, clip, inst.character, inst.rig, b, out_dropped);
+    if (rc != CG_OK) return rc;
+    out.release();
+    out = std::move(b);
+    return CG_OK;
+}
+
+// Binds `clip` for `character` / `rig` into b (b is released on failure).
+int32_t bind_clip_to(cg_instance& inst, const cm_clip* clip, const cc_char* character, const cr_rig* rig, BoundClip& b,
+                     int32_t* out_dropped) {
+    set_out(out_dropped, int32_t{0});
+    if (character != nullptr) {
+        b.doc = cm_clip_bind_roles(clip, character, out_dropped);
     } else {
         b.doc = cm_clip_clone(clip);
     }
@@ -1025,7 +1054,7 @@ int32_t bind_clip(cg_instance& inst, const cm_clip* clip, BoundClip& out, int32_
     uint32_t axes = 0;
     cm_clip_root_motion_get(b.doc, &root, &axes);
     if (root != nullptr && root[0] != '\0') {
-        b.root_joint = cr_rig_find(inst.rig, root);
+        b.root_joint = cr_rig_find(rig, root);
         b.root_axes = axes;
     }
     int32_t reference = CM_ADDITIVE_NONE, mesh = 0;
@@ -1066,8 +1095,33 @@ int32_t bind_clip(cg_instance& inst, const cm_clip* clip, BoundClip& out, int32_
     for (auto& ev : b.lock_events) {
         std::stable_sort(ev.begin(), ev.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
     }
-    out.release();
-    out = std::move(b);
+    return CG_OK;
+}
+
+// A retargeted clip's pose at `time` into the target slot (#160).
+int32_t retarget_into(cg_instance& inst, BoundClip& b, float time, int32_t slot) {
+    cr_pose_op op{};
+    op.op = CR_OP_SAMPLE;
+    op.dst = 0;
+    op.object = b.rig_clip;
+    op.time = time;
+    if (cr_poses_run(b.src_poses, &op, 1) != CR_OK || cr_poses_get(b.src_poses, 0, b.src_local.data(), nullptr) != CR_OK) {
+        return fail(CG_ERR_ARG, std::string("retargeting: ") + cr_last_error());
+    }
+    if (cc_retarget_pose(b.retarget, b.src_local.data(), b.dst_local.data(), b.driven.data()) != CC_OK) {
+        return fail(CG_ERR_ARG, std::string("retargeting: ") + cc_last_error());
+    }
+    if (b.has_pin && inst.root_motion_mode == CG_ROOT_MOTION_EXTRACT && inst.character != nullptr) {
+        const char* hid = cc_char_role_joint(inst.character, "hips");
+        const int h = hid == nullptr ? -1 : cr_rig_find(inst.rig, hid);
+        if (h >= 0) {
+            const uint32_t axes[3] = {CM_ROOT_X, CM_ROOT_Y, CM_ROOT_Z};
+            for (int c = 0; c < 3; ++c) {
+                if ((b.root_axes & axes[c]) != 0) b.dst_local[static_cast<size_t>(h) * 9 + static_cast<size_t>(c)] = b.pin[c];
+            }
+        }
+    }
+    cr_poses_set(inst.poses, slot, b.dst_local.data(), b.driven.data());
     return CG_OK;
 }
 
@@ -1708,6 +1762,55 @@ int32_t cg_instance_bind_slot(cg_instance* inst, int32_t slot, const cm_clip* cl
     return bind_clip(*inst, clip, inst->slots[static_cast<size_t>(slot)], out_dropped);
 }
 
+int32_t cg_instance_bind_slot_retarget(cg_instance* inst, int32_t slot, const cm_clip* clip, cc_retargeter* retargeter,
+                                       int32_t* out_dropped) {
+    set_out(out_dropped, int32_t{0});
+    if (inst == nullptr || slot < 0 || static_cast<size_t>(slot) >= inst->slots.size()) {
+        return fail(CG_ERR_RANGE, "cg_instance_bind_slot_retarget: bad slot");
+    }
+    if (clip == nullptr || retargeter == nullptr) return fail(CG_ERR_ARG, "cg_instance_bind_slot_retarget: null clip or retargeter");
+    if (cc_retarget_target_rig(retargeter) != inst->rig) {
+        return fail(CG_ERR_ARG, "cg_instance_bind_slot_retarget: the retargeter's target is another rig");
+    }
+    const cr_rig* src = cc_retarget_source_rig(retargeter);
+    BoundClip b;
+    const int32_t rc = bind_clip_to(*inst, clip, cc_retarget_source_char(retargeter), src, b, out_dropped);
+    if (rc != CG_OK) return rc;
+    if (b.additive != CM_ADDITIVE_NONE) {
+        b.release();
+        return fail(CG_ERR_ARG, "cg_instance_bind_slot_retarget: additive clips are not retargeted");
+    }
+    b.retarget = retargeter;
+    b.src_poses = cr_poses_create(src, 1);
+    b.src_local.assign(static_cast<size_t>(cr_rig_joint_count(src)) * 9, 0.f);
+    b.dst_local.assign(static_cast<size_t>(cr_rig_joint_count(inst->rig)) * 9, 0.f);
+    b.driven.assign(static_cast<size_t>(cr_rig_joint_count(inst->rig)), 0);
+    if (b.src_poses == nullptr) {
+        b.release();
+        return fail(CG_ERR_ARG, std::string("cg_instance_bind_slot_retarget: ") + cr_last_error());
+    }
+    // The hips' first-frame position (pinned while root motion is extracted).
+    if (b.root_joint >= 0 && b.root_axes != 0 && inst->character != nullptr) {
+        const char* hid = cc_char_role_joint(inst->character, "hips");
+        const int h = hid == nullptr ? -1 : cr_rig_find(inst->rig, hid);
+        if (h >= 0) {
+            cr_pose_op op{};
+            op.op = CR_OP_SAMPLE;
+            op.object = b.rig_clip;
+            cr_poses_run(b.src_poses, &op, 1);
+            cr_poses_get(b.src_poses, 0, b.src_local.data(), nullptr);
+            if (cc_retarget_pose(retargeter, b.src_local.data(), b.dst_local.data(), nullptr) == CC_OK) {
+                std::memcpy(b.pin, b.dst_local.data() + static_cast<size_t>(h) * 9, sizeof b.pin);
+                b.has_pin = true;
+            }
+        }
+    }
+    BoundClip& out = inst->slots[static_cast<size_t>(slot)];
+    out.release();
+    out = std::move(b);
+    return CG_OK;
+}
+
 int32_t cg_instance_add_montage(cg_instance* inst, const cm_clip* clip) {
     if (inst == nullptr || clip == nullptr) return fail(CG_ERR_ARG, "cg_instance_add_montage: null argument");
     MontageClip mc;
@@ -2218,7 +2321,13 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         if (r.influence >= threshold && r.influence > 0.f) fire(*inst, b, c.clip_slot, -1, p.prev, p.advanced, r.influence);
         if (r.root_path && r.influence > 0.f && b.root_joint >= 0 && b.root_axes != 0 && p.advanced != 0.f) {
             cr_root_motion m{};
-            cr_clip_root_motion(b.rig_clip, inst->rig, b.root_joint, b.root_axes, p.prev, p.advanced, &m);
+            if (b.retarget != nullptr) {
+                cr_clip_root_motion(b.rig_clip, cc_retarget_source_rig(b.retarget), b.root_joint, b.root_axes, p.prev,
+                                    p.advanced, &m);
+                cc_retarget_map_motion(b.retarget, &m);
+            } else {
+                cr_clip_root_motion(b.rig_clip, inst->rig, b.root_joint, b.root_axes, p.prev, p.advanced, &m);
+            }
             add_motion(inst->root_motion, m, r.influence);
         }
     }

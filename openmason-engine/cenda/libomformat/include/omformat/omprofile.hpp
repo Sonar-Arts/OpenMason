@@ -11,6 +11,10 @@
 //                   {"from": r, "to": r}   the horizontal vector between two roles' joints (hips -> head)
 //   roles         [ { name, parent|null, required, side: center|left|right, mirror?, toward?: [roles],
 //                     direction?: [x,y,z], match?: [[alias, weight]], chain?: {under, keywords, position} } ]
+//   chains        (1.x, optional; #160) [ {name, roles: [role, ...] parents first, goal?, bend?: [x,y,z]} ] retarget
+//                 chains; `bend` = the way the limb's middle joint bends in the profile frame (knees -Z, elbows +Z),
+//                 used by IK retargeting when the source limb is straight
+//   ikGoals       (1.x, optional; #160) [ {name, role} ] the IK goals chains end in
 //
 // Frame of every profile: +Y up, the character faces -Z, its own left is -X (a model that faces another way
 // is mapped through its .omchar `facing`). `direction` is the role's direction in the reference pose: from
@@ -69,12 +73,30 @@ struct Facing {
     std::string to;
 };
 
+// A retarget chain (OpenMason #160): the roles it runs through, parents first. A character's chain runs from its
+// first mapped role to its last (auto-map writes it into the .omchar `chains`); retargeting pairs chains by name.
+struct RetargetChain {
+    std::string name;
+    std::vector<std::string> roles;
+    std::string goal;  // an ikGoals name, "" = none
+    bool has_bend = false;
+    float bend[3]{0.f, 0.f, 0.f};  // which way the limb's middle joint bends, profile frame (unit length)
+};
+
+// An IK goal: the role whose joint it moves (auto-map writes it into the .omchar `ikGoals`).
+struct IkGoal {
+    std::string name;
+    std::string role;
+};
+
 struct Profile {
     std::string id;
     std::string name;
     std::string description;
     Facing facing;
     std::vector<Role> roles;
+    std::vector<RetargetChain> chains;
+    std::vector<IkGoal> ik_goals;
 
     // Index of the role with this name, -1 when none.
     [[nodiscard]] int find(std::string_view role) const;

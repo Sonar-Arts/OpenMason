@@ -58,6 +58,21 @@ public final class CendaCharacter {
 
     private static final String FAILURE;
     static final MethodHandle LAST_ERROR;
+    // Retargeting (#160, cenda/retarget.h; still CC ABI 1).
+    static final MethodHandle RT_CREATE;
+    static final MethodHandle RT_DESTROY;
+    static final MethodHandle RT_SET_OPS;
+    static final MethodHandle RT_OP_COUNT;
+    static final MethodHandle RT_OP_GET;
+    static final MethodHandle RT_CHAIN_COUNT;
+    static final MethodHandle RT_CHAIN_GET;
+    static final MethodHandle RT_SET_CHAIN;
+    static final MethodHandle RT_GET_CHAIN;
+    static final MethodHandle RT_SET_BEND;
+    static final MethodHandle RT_SCALE;
+    static final MethodHandle RT_MAP_MOTION;
+    static final MethodHandle RT_POSE;
+    static final MethodHandle RT_BAKE;
     static final MethodHandle CREATE;
     static final MethodHandle READ;
     static final MethodHandle DESTROY;
@@ -151,6 +166,20 @@ public final class CendaCharacter {
         }
         FAILURE = failure;
         LAST_ERROR = handle(lookup, "cc_last_error", FunctionDescriptor.of(ADDR));
+        RT_CREATE = handle(lookup, "cc_retarget_create", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR, ADDR));
+        RT_DESTROY = handle(lookup, "cc_retarget_destroy", FunctionDescriptor.ofVoid(ADDR));
+        RT_SET_OPS = handle(lookup, "cc_retarget_set_ops", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
+        RT_OP_COUNT = handle(lookup, "cc_retarget_op_count", FunctionDescriptor.of(I32, ADDR));
+        RT_OP_GET = handle(lookup, "cc_retarget_op_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR));
+        RT_CHAIN_COUNT = handle(lookup, "cc_retarget_chain_count", FunctionDescriptor.of(I32, ADDR));
+        RT_CHAIN_GET = handle(lookup, "cc_retarget_chain_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
+        RT_SET_CHAIN = handle(lookup, "cc_retarget_set_chain", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        RT_GET_CHAIN = handle(lookup, "cc_retarget_get_chain", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        RT_SET_BEND = handle(lookup, "cc_retarget_set_bend", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        RT_SCALE = handle(lookup, "cc_retarget_scale", FunctionDescriptor.of(F32, ADDR));
+        RT_MAP_MOTION = handle(lookup, "cc_retarget_map_motion", FunctionDescriptor.of(I32, ADDR, ADDR));
+        RT_POSE = handle(lookup, "cc_retarget_pose", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR));
+        RT_BAKE = handle(lookup, "cc_retarget_bake", FunctionDescriptor.of(ADDR, ADDR, ADDR, F32, ADDR));
         CREATE = handle(lookup, "cc_char_create", FunctionDescriptor.of(ADDR));
         READ = handle(lookup, "cc_char_read", FunctionDescriptor.of(ADDR, ADDR, I64, ADDR));
         DESTROY = handle(lookup, "cc_char_destroy", FunctionDescriptor.ofVoid(ADDR));

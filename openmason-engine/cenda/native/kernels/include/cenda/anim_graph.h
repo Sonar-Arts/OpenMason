@@ -42,6 +42,7 @@
 
 #include "cenda/anim_clip.h"
 #include "cenda/character.h"
+#include "cenda/retarget.h"
 #include "cenda/rig.h"
 
 #ifdef __cplusplus
@@ -134,6 +135,15 @@ int32_t cg_instance_reset(cg_instance* inst);
 /* Binds a clip to a slot (copied; role tracks bound to the character; NULL unbinds: the slot plays the rest
  * pose). *out_dropped (may be NULL) counts role tracks the character does not map. */
 int32_t cg_instance_bind_slot(cg_instance* inst, int32_t slot, const cm_clip* clip, int32_t* out_dropped);
+/* Runtime retargeting (#160): binds a clip made for the retargeter's SOURCE character (joint- or role-addressed
+ * for it) to a slot of this instance, whose rig must be the retargeter's target. Its clip node samples the clip on
+ * the source rig and retargets the pose into its own pose slot each frame (cc_retarget_pose: the target hips and
+ * chain joints are driven); rate, sync, notifies, curves and markers work as for any clip; root motion is the
+ * source's as the target's (cc_retarget_map_motion; extracted: the target hips' translation stays at the clip's first
+ * frame).
+ * The retargeter must outlive the binding and is used on the evaluating thread. Additive clips are refused. */
+int32_t cg_instance_bind_slot_retarget(cg_instance* inst, int32_t slot, const cm_clip* clip, cc_retargeter* retargeter,
+                                       int32_t* out_dropped);
 /* Registers a montage clip (copied and bound like a slot clip; its sections are the point notifies named
  * "section:<name>", else one section "default"). Returns the montage id (>= 0) or CG_ERR_*. */
 int32_t cg_instance_add_montage(cg_instance* inst, const cm_clip* clip);

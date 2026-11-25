@@ -117,6 +117,7 @@ add_library(cenda_kernels SHARED
         src/character/character.cpp
         src/character/profile.cpp
         src/character/characterize.cpp
+        src/character/retarget.cpp
         src/anim/anim_clip.cpp
         src/graph/anim_graph.cpp)
 

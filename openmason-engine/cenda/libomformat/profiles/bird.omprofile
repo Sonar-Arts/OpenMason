@@ -609,5 +609,93 @@
         ]
       ]
     }
+  ],
+  "chains": [
+    {
+      "name": "spine",
+      "roles": [
+        "spine"
+      ]
+    },
+    {
+      "name": "neck",
+      "roles": [
+        "neck"
+      ]
+    },
+    {
+      "name": "head",
+      "roles": [
+        "head"
+      ]
+    },
+    {
+      "name": "beak",
+      "roles": [
+        "beak"
+      ]
+    },
+    {
+      "name": "tail",
+      "roles": [
+        "tail_1",
+        "tail_2",
+        "tail_3"
+      ]
+    },
+    {
+      "name": "wing_l",
+      "roles": [
+        "upper_wing_l",
+        "lower_wing_l",
+        "wing_tip_l"
+      ]
+    },
+    {
+      "name": "leg_l",
+      "roles": [
+        "upper_leg_l",
+        "lower_leg_l",
+        "foot_l"
+      ],
+      "goal": "foot_l",
+      "bend": [
+        0,
+        0,
+        -1
+      ]
+    },
+    {
+      "name": "wing_r",
+      "roles": [
+        "upper_wing_r",
+        "lower_wing_r",
+        "wing_tip_r"
+      ]
+    },
+    {
+      "name": "leg_r",
+      "roles": [
+        "upper_leg_r",
+        "lower_leg_r",
+        "foot_r"
+      ],
+      "goal": "foot_r",
+      "bend": [
+        0,
+        0,
+        -1
+      ]
+    }
+  ],
+  "ikGoals": [
+    {
+      "name": "foot_l",
+      "role": "foot_l"
+    },
+    {
+      "name": "foot_r",
+      "role": "foot_r"
+    }
   ]
 }
