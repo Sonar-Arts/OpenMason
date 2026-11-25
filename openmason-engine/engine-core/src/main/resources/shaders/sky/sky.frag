@@ -39,6 +39,23 @@ const vec3 SUN_DISC = vec3(1.0, 0.95, 0.7);
 // How far (sun y) below the sea's edge the sun takes to fade out once it reaches it.
 const float SUN_SINK = 0.12;
 
+// Dave Hoskins' sine-free hash: uniform on [0, 1), no visible pattern.
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Triangular-PDF dither, one 8-bit step either way. The twilight and night sky
+// are gradients so dark and shallow that one 8-bit step spans many pixels, and
+// rounding draws them as rings. Noise added before the rounding turns the rings
+// into grain too fine to see. Two uniform hashes summed (minus 1) make a
+// triangular distribution on [-1, 1], whose error variance does not depend on
+// the signal, so the grain is equally fine in every tone.
+float ditherTpdf(vec2 fragCoord) {
+    return (hash12(fragCoord) + hash12(fragCoord + vec2(57.31, 113.97)) - 1.0) / 255.0;
+}
+
 vec3 getTimedSkyColor(vec3 direction) {
     float elevation = direction.y;
     vec3 groundColor = horizonColor * 0.8;
@@ -194,5 +211,5 @@ void main() {
     // The sun goes over the haze: the horizon haze would wash it out before it set.
     finalColor += getSunContribution(direction);
 
-    FragColor = vec4(finalColor, 1.0);
+    FragColor = vec4(finalColor + ditherTpdf(gl_FragCoord.xy), 1.0);
 }
