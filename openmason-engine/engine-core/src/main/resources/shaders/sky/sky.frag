@@ -21,6 +21,7 @@ uniform float seaHorizon;     // the sea's edge seen from the eye (sine of eleva
 uniform vec3 celestialPole;   // the point the sky turns about (unit)
 uniform float skyAngle;       // how far the sky has turned about it (radians; 0 with the sun on the meridian)
 uniform float time;           // seconds, for the stars' twinkle
+uniform float aerosol;        // haze relative to a clear day's: more at dusk, less at dawn
 uniform sampler2D moonTexture; // 64x64 pixel art, alpha = disc
 
 out vec4 FragColor;
@@ -48,6 +49,10 @@ const float SUNSET_BELOW = 0.67;
 const vec3 BELT_PINK = vec3(1.0, 0.58, 0.56);
 // The sun disc's own tint over sunlight's hue: a touch yellow at noon.
 const vec3 SUN_DISC = vec3(1.0, 0.95, 0.7);
+// The width of the sun's aureole (1 - cos of the angle from it) with a clear day's
+// aerosol; SunsetFog.AUREOLE_WIDTH. Haze scatters forward in a lobe that widens
+// with how much of it there is, so it scales with `aerosol`.
+const float AUREOLE_WIDTH = 0.25;
 // How far (sun y) below the sea's edge the sun takes to fade out once it reaches it.
 const float SUN_SINK = 0.12;
 
@@ -122,14 +127,15 @@ vec3 applySunset(vec3 direction, vec3 sky) {
 }
 
 // The afterglow over `sky`: low on the horizon where the sun went down (or will
-// come up), deeper and redder than the gold, which it lies over.
+// come up), deeper and redder than the gold, which it lies over. Hazier air
+// spreads it higher (its strength, from SkyLight, already follows the aerosol).
 vec3 applyAfterglow(vec3 direction, vec3 sky) {
     float strength = max(sunGlow.r, max(sunGlow.g, sunGlow.b));
     if (strength <= 0.0) return sky;
     vec2 flatDir = direction.xz / max(length(direction.xz), 1e-4);
     vec2 flatSun = sunDirection.xz / max(length(sunDirection.xz), 1e-4);
     float towardSun = pow(max(dot(flatDir, flatSun), 0.0), 4.0);
-    float band = 1.0 - smoothstep(0.0, 0.3, abs(direction.y));
+    float band = 1.0 - smoothstep(0.0, 0.3 * aerosol, abs(direction.y));
     return mix(sky, sunGlow / strength, strength * towardSun * band);
 }
 
@@ -159,7 +165,7 @@ vec3 getSunContribution(vec3 direction) {
     float sunIntensity = smoothstep(sunRadius - 0.01, sunRadius + 0.01, sunDot);
     vec3 discColor = SUN_DISC * sunColor;
 
-    float glowRadius = 0.25;
+    float glowRadius = AUREOLE_WIDTH * aerosol;
     float glowIntensity = exp(-pow((1.0 - sunDot) / glowRadius, 1.5)) * 0.4;
     vec3 glowColor = vec3(1.0, 0.8, 0.5) * sunColor;
 
@@ -393,11 +399,12 @@ void main() {
     finalColor = applyMoon(direction, finalColor);
 
     // Atmospheric perspective with horizon softening. The pale haze is sunlit air:
-    // it fades out with the daylight, or it would light the night horizon up.
+    // it fades out with the daylight, or it would light the night horizon up. The
+    // horizon is hazier in the evening's dusty air than in the morning's.
     float distance = length(worldPos - cameraPos);
     float haze = exp(-distance * 0.00001);
     float horizonSoft = 1.0 - smoothstep(-0.1, 0.1, abs(direction.y));
-    float hazeAmount = mix(0.1, 0.3, horizonSoft);
+    float hazeAmount = mix(0.1, 0.3 * aerosol, horizonSoft);
     vec3 hazeColor = mix(horizonColor, vec3(0.8, 0.85, 0.9), daylight);
     finalColor = mix(hazeColor, finalColor, haze * (1.0 - hazeAmount));
     // The sun goes over the haze: the horizon haze would wash it out before it set.

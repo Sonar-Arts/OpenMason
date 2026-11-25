@@ -28,13 +28,16 @@ import org.joml.Vector3f;
  * @param skyAngle       how far the sky has turned about the pole (radians, right-handed, 0 with
  *                       the sun on the meridian): the stars turn with it
  * @param time           seconds, any origin: the stars' twinkle
+ * @param aerosol        the air's haze relative to a clear day's (1): above 1 (dusk) the sun's
+ *                       aureole and the afterglow broaden and the horizon hazes; below (dawn) the
+ *                       air is clean
  */
 public record SkyParams(Vector3f sunDirection, Vector3f moonDirection, float moonLight,
                         Vector3f zenithColor, Vector3f horizonColor,
                         Vector3f sunsetColor, float sunsetCoverage, Vector3f sunGlow,
                         Vector3f sunColor, Vector3f earthShadowColor, float earthShadowHeight,
                         float twilightBand, float daylight, float seaHorizon, Vector3f celestialPole,
-                        float skyAngle, float time) {
+                        float skyAngle, float time, float aerosol) {
 
     /** The pole of a sky seen from the equator, turning about the horizon's +Z point. */
     public static final Vector3f EQUATOR_POLE = new Vector3f(0f, 0f, 1f);
@@ -50,6 +53,6 @@ public record SkyParams(Vector3f sunDirection, Vector3f moonDirection, float moo
                      float twilightBand, float daylight) {
         this(sunDirection, moonDirection, moonLight, zenithColor, horizonColor, sunsetColor, sunsetCoverage,
                 sunGlow, sunColor, earthShadowColor, earthShadowHeight, twilightBand, daylight, 0f, EQUATOR_POLE,
-                0f, 0f);
+                0f, 0f, 1f);
     }
 }
