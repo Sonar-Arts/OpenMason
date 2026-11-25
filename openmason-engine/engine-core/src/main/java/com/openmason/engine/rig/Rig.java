@@ -81,7 +81,7 @@ public final class Rig implements AutoCloseable {
                 long o = CendaRig.JOINT_BYTES * i;
                 descs.set(CendaRig.I32, o, j.parent());
                 descs.set(CendaRig.I32, o + 4, j.kind() == RigJoint.Kind.BONE ? 1 : 0);
-                descs.set(CendaRig.I32, o + 8, j.hasGeometry() ? 1 : 0);
+                descs.set(CendaRig.I32, o + 8, (j.hasGeometry() ? 1 : 0) | (j.hidden() ? 2 : 0));  // CR_JOINT_*
                 descs.set(CendaRig.I32, o + 12, 0);
                 putVec(descs, o + 16, j.origin());
                 putVec(descs, o + 28, j.pos());

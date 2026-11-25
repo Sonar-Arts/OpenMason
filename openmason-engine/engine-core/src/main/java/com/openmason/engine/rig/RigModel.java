@@ -18,7 +18,13 @@ public final class RigModel {
 
     /** One part as the rig sees it (rest transform in its parent's frame). */
     public record PartSpec(String id, String name, String parentId, boolean hasGeometry,
-                           Vector3f origin, Vector3f pos, Vector3f rotDeg, Vector3f scale) {}
+                           Vector3f origin, Vector3f pos, Vector3f rotDeg, Vector3f scale, boolean hidden) {
+        /** A part its author did not hide. */
+        public PartSpec(String id, String name, String parentId, boolean hasGeometry,
+                        Vector3f origin, Vector3f pos, Vector3f rotDeg, Vector3f scale) {
+            this(id, name, parentId, hasGeometry, origin, pos, rotDeg, scale, false);
+        }
+    }
 
     private final List<RigJoint> joints;
     private final int partCount;
@@ -105,7 +111,7 @@ public final class RigModel {
         for (int i = 0; i < parts.size(); i++) {
             PartSpec p = parts.get(i);
             joints.add(RigJoint.part(p.id(), p.name(), parentOf(p.parentId(), i, partIndex, boneIndex),
-                p.hasGeometry() || skinned[i], p.origin(), p.pos(), p.rotDeg(), p.scale()));
+                p.hasGeometry() || skinned[i], p.origin(), p.pos(), p.rotDeg(), p.scale()).withHidden(p.hidden()));
         }
         for (int b = 0; b < boneList.size(); b++) {
             OMOFormat.BoneEntry e = boneList.get(b);

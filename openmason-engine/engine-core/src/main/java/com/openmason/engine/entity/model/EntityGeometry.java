@@ -70,7 +70,7 @@ public record EntityGeometry(
                 }
             }
             specs.add(new RigModel.PartSpec(p.id(), p.name(), p.parentId(), geometry,
-                    p.restOrigin(), p.restPos(), p.restRot(), p.restScale()));
+                    p.restOrigin(), p.restPos(), p.restRot(), p.restScale(), !p.visible()));
         }
         return specs;
     }

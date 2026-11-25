@@ -245,6 +245,60 @@ int32_t cc_char_model_set(cc_char* c, const uint8_t* data, int64_t size, const c
     CC_GUARD_END(CC_ERR_ARG)
 }
 
+// --- Other archive entries (#162) ---------------------------------------------------------------------
+
+int32_t cc_char_entry_count(const cc_char* c) {
+    return c == nullptr ? 0 : static_cast<int32_t>(c->def.unknown_entries.size());
+}
+
+int32_t cc_char_entry_get(const cc_char* c, int32_t index, const char** out_name, const uint8_t** out_data,
+                          int64_t* out_size) {
+    if (c == nullptr) return error(CC_ERR_ARG, "cc_char_entry_get: null definition");
+    if (!in_range(c->def.unknown_entries, index)) return error(CC_ERR_RANGE, "cc_char_entry_get: index out of range");
+    const auto& e = c->def.unknown_entries[static_cast<std::size_t>(index)];
+    set_out(out_name, e.name.c_str());
+    set_out(out_data, e.data.empty() ? static_cast<const uint8_t*>(nullptr) : reinterpret_cast<const uint8_t*>(e.data.data()));
+    set_out(out_size, static_cast<int64_t>(e.data.size()));
+    return CC_OK;
+}
+
+int32_t cc_char_entry_find(const cc_char* c, const char* name) {
+    if (c == nullptr || name == nullptr) return -1;
+    const auto& entries = c->def.unknown_entries;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].name == name) return static_cast<int32_t>(i);
+    }
+    return -1;
+}
+
+int32_t cc_char_entry_set(cc_char* c, const char* name, const uint8_t* data, int64_t size) {
+    if (c == nullptr || !valid_key(name) || size < 0) return error(CC_ERR_ARG, "cc_char_entry_set: bad argument");
+    CC_GUARD_BEGIN
+    clear_error();
+    oc::Character& d = c->def;
+    const std::string key(name);
+    if (key == oc::kManifestEntry || (!d.model_entry.empty() && key == d.model_entry)) {
+        return error(CC_ERR_ARG, "cc_char_entry_set: reserved entry name " + key);
+    }
+    auto& entries = d.unknown_entries;
+    auto it = std::find_if(entries.begin(), entries.end(), [&](const cenda::omformat::ZipEntry& e) { return e.name == key; });
+    if (data == nullptr) {
+        if (it != entries.end()) entries.erase(it);
+        return CC_OK;
+    }
+    const auto* bytes = reinterpret_cast<const std::byte*>(data);
+    if (it == entries.end()) {
+        cenda::omformat::ZipEntry e;
+        e.name = key;
+        e.data.assign(bytes, bytes + size);
+        entries.push_back(std::move(e));
+    } else {
+        it->data.assign(bytes, bytes + size);
+    }
+    return CC_OK;
+    CC_GUARD_END(CC_ERR_ARG)
+}
+
 // --- Roles --------------------------------------------------------------------------------------------
 
 int32_t cc_char_role_count(const cc_char* c) { return c == nullptr ? 0 : static_cast<int32_t>(c->def.roles.size()); }

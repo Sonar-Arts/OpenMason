@@ -61,6 +61,8 @@ add_library(omformat STATIC
         src/omprofile.cpp
         src/omanim.cpp
         src/omanimgraph.cpp
+        src/omlook.cpp
+        src/omappearance.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/builtin_profiles.cpp)
 target_include_directories(omformat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(cenda::omformat ALIAS omformat)

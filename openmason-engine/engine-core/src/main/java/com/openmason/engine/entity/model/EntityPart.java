@@ -20,6 +20,8 @@ import java.util.List;
  * @param restRot     rest-pose local Euler rotation (degrees)
  * @param restScale   rest-pose local scale
  * @param faces       the faces this part renders
+ * @param visible     false when the author hid the part (OMO part {@code visible}; reaches the rig as
+ *                    {@code CR_JOINT_HIDDEN}, which appearance resolution starts from, OpenMason #162)
  */
 public record EntityPart(
         String id,
@@ -29,9 +31,16 @@ public record EntityPart(
         Vector3f restPos,
         Vector3f restRot,
         Vector3f restScale,
-        List<EntityFace> faces
+        List<EntityFace> faces,
+        boolean visible
 ) {
     public EntityPart {
         faces = faces == null ? List.of() : List.copyOf(faces);
+    }
+
+    /** A visible part (the OMO default). */
+    public EntityPart(String id, String name, String parentId, Vector3f restOrigin, Vector3f restPos, Vector3f restRot,
+                      Vector3f restScale, List<EntityFace> faces) {
+        this(id, name, parentId, restOrigin, restPos, restRot, restScale, faces, true);
     }
 }

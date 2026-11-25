@@ -274,7 +274,7 @@ public final class CharacterDefinition implements AutoCloseable {
         setString(CendaCharacter.FIELD_MODEL_REF, modelRef);
     }
 
-    /** The appearance section as minified JSON ("" = none); opaque until OpenMason #162. */
+    /** The appearance section as minified JSON ("" = none): its slots, resolved by {@link Appearance} (#162). */
     public String appearanceJson() {
         return getString(CendaCharacter.FIELD_APPEARANCE);
     }
@@ -374,6 +374,61 @@ public final class CharacterDefinition implements AutoCloseable {
                 MemorySegment.copy(omo, 0, data, ValueLayout.JAVA_BYTE, 0, omo.length);
             }
             check((int) CendaCharacter.MODEL_SET.invokeExact(handle(), data, n, cstr(arena, entryName)), "setModel");
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        }
+    }
+
+    /**
+     * Names of the archive's other entries (kept verbatim; appearance body variants and dye masks live here,
+     * OpenMason #162), in archive order.
+     */
+    public List<String> entryNames() {
+        try (Arena arena = Arena.ofConfined()) {
+            int n = (int) CendaAppearance.ENTRY_COUNT.invokeExact(handle());
+            List<String> out = new ArrayList<>(n);
+            MemorySegment name = slot(arena);
+            for (int i = 0; i < n; i++) {
+                check((int) CendaAppearance.ENTRY_GET.invokeExact(handle(), i, name, MemorySegment.NULL, MemorySegment.NULL),
+                    "entry");
+                out.add(read(name));
+            }
+            return out;
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        }
+    }
+
+    /** An archive entry's bytes, if present. */
+    public Optional<byte[]> entry(String name) {
+        try (Arena arena = Arena.ofConfined()) {
+            int i = (int) CendaAppearance.ENTRY_FIND.invokeExact(handle(), arena.allocateFrom(name));
+            if (i < 0) return Optional.empty();
+            MemorySegment data = slot(arena);
+            MemorySegment size = arena.allocate(CendaCharacter.I64);
+            check((int) CendaAppearance.ENTRY_GET.invokeExact(handle(), i, MemorySegment.NULL, data, size), "entry");
+            long n = size.get(CendaCharacter.I64, 0);
+            if (n == 0) return Optional.of(new byte[0]);
+            return Optional.of(data.get(CendaCharacter.ADDR, 0).reinterpret(n).toArray(ValueLayout.JAVA_BYTE));
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        }
+    }
+
+    /** Adds or replaces an archive entry; null removes it. {@code manifest.json} and the model's entry are refused. */
+    public void setEntry(String name, byte[] bytes) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment data = MemorySegment.NULL;
+            long n = bytes == null ? 0 : bytes.length;
+            if (bytes != null) {
+                data = arena.allocate(Math.max(1, n));
+                MemorySegment.copy(bytes, 0, data, ValueLayout.JAVA_BYTE, 0, bytes.length);
+            }
+            int rc = (int) CendaAppearance.ENTRY_SET.invokeExact(handle(), arena.allocateFrom(name), data, n);
+            if (rc == -1) throw new IllegalArgumentException("setEntry: " + CendaCharacter.lastError());
+            check(rc, "setEntry");
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Throwable t) {
             throw CendaCharacter.rethrow(t);
         }

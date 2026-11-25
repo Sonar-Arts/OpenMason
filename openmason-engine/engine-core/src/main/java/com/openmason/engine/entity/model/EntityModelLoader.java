@@ -274,7 +274,7 @@ public final class EntityModelLoader {
                     new Vector3f(pe.posX(), pe.posY(), pe.posZ()),
                     new Vector3f(pe.rotX(), pe.rotY(), pe.rotZ()),
                     new Vector3f(pe.scaleX(), pe.scaleY(), pe.scaleZ()),
-                    faces);
+                    faces, pe.visible());
             parts.add(part);
         }
 

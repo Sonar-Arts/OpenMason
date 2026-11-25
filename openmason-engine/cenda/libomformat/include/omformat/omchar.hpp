@@ -24,7 +24,7 @@
 //                                                    matrix (the OMO attachment-point convention)
 //   metrics        {height, eyeHeight, width, hipHeight, overridden:[names]}   blocks
 //   animGraph      string (OpenMason #157)
-//   appearance     object, opaque until OpenMason #162
+//   appearance     object: appearance slots (OpenMason #162; omformat/omappearance.hpp documents it), kept as JSON
 //   <other keys>   unknown sections, kept verbatim on a round trip
 //
 // Every reference into the skeleton is a joint id; role names appear only in `roles`.

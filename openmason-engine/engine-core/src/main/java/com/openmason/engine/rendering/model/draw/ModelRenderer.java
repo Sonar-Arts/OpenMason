@@ -76,6 +76,8 @@ public final class ModelRenderer {
             litShader.setBool("u_useTexture", true);
             litShader.setUniform("u_jointPalette", JointPaletteTexture.DEFAULT_UNIT);
             litShader.setUniform("u_skinned", false);
+            litShader.setInt("u_dyeMode", 0);
+            litShader.setInt("u_dyeMask", ModelAppearance.MASK_UNIT);
             currentUseTexture = true;
             ShadowUniforms.applyDisabled(litShader, extension.shadowTextureUnit());
             litShader.unbind();
@@ -131,7 +133,7 @@ public final class ModelRenderer {
     public void drawLit(ModelGpuMesh mesh, ModelDrawPlan plan, MaterialTextures textures,
                         PartMatrices parts, Matrix4f view, Matrix4f projection,
                         ModelLighting lighting, Consumer<ShaderProgram> stateHook) {
-        drawLit(mesh, plan, textures, parts, null, view, projection, lighting, stateHook);
+        drawLit(mesh, plan, textures, parts, null, view, projection, lighting, stateHook, null);
     }
 
     /**
@@ -141,16 +143,27 @@ public final class ModelRenderer {
     public void drawLit(ModelGpuMesh mesh, ModelDrawPlan plan, MaterialTextures textures,
                         JointPalette palette, Matrix4f view, Matrix4f projection,
                         ModelLighting lighting, Consumer<ShaderProgram> stateHook) {
+        drawLit(mesh, plan, textures, palette, view, projection, lighting, stateHook, null);
+    }
+
+    /**
+     * Lit pass posed by a palette with an appearance (OpenMason #162): hidden parts issue no draw call, dyed
+     * materials are tinted (see {@link ModelAppearance}). {@code appearance} null = the plain pass.
+     */
+    public void drawLit(ModelGpuMesh mesh, ModelDrawPlan plan, MaterialTextures textures,
+                        JointPalette palette, Matrix4f view, Matrix4f projection,
+                        ModelLighting lighting, Consumer<ShaderProgram> stateHook, ModelAppearance appearance) {
         if (mesh != null && mesh.hasSkin()) {
-            drawLit(mesh, plan, textures, everyPart(plan), palette, view, projection, lighting, stateHook);
+            drawLit(mesh, plan, textures, everyPart(plan), palette, view, projection, lighting, stateHook, appearance);
         } else {
-            drawLit(mesh, plan, textures, rigidParts(plan, palette), null, view, projection, lighting, stateHook);
+            drawLit(mesh, plan, textures, rigidParts(plan, palette), null, view, projection, lighting, stateHook,
+                appearance);
         }
     }
 
     private void drawLit(ModelGpuMesh mesh, ModelDrawPlan plan, MaterialTextures textures,
                          PartMatrices parts, JointPalette skinPalette, Matrix4f view, Matrix4f projection,
-                         ModelLighting lighting, Consumer<ShaderProgram> stateHook) {
+                         ModelLighting lighting, Consumer<ShaderProgram> stateHook, ModelAppearance appearance) {
         if (!initialized || litShader == null || !drawable(mesh, plan)) return;
 
         int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -185,12 +198,16 @@ public final class ModelRenderer {
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL30.glBindVertexArray(mesh.vao());
 
+        boolean dyed = appearance != null && appearance.hasDyes();
+        currentDye = null;
         parts.forEachPart((partIndex, partMatrix) -> {
+            if (appearance != null && !appearance.partVisible(partIndex)) return;
             shader.setUniform("model", partMatrix);
             for (IndexedDrawBatch batch : plan.forPart(partIndex).textured()) {
                 int texture = textures.textureFor(batch.materialId());
                 if (texture < 0) continue;
                 setUseTexture(shader, texture > 0);
+                if (dyed) applyDye(shader, appearance.dye(batch.materialId()));
                 if (texture > 0) {
                     GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
                 }
@@ -198,6 +215,12 @@ public final class ModelRenderer {
                         GL11.GL_UNSIGNED_INT, batch.byteOffset());
             }
         });
+        if (dyed) {
+            applyDye(shader, null);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + ModelAppearance.MASK_UNIT);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        }
         setUseTexture(shader, true);
         endSkin(shader, skinPalette);
 
@@ -211,6 +234,30 @@ public final class ModelRenderer {
         GL20.glUseProgram(previousProgram);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
         GL30.glBindVertexArray(previousVertexArray);
+    }
+
+    private ModelAppearance.Dye currentDye;
+    private final Vector3f dyeScratch = new Vector3f();
+    private static final String[] DYE_TINTS = {"u_dyeTints[0]", "u_dyeTints[1]", "u_dyeTints[2]", "u_dyeTints[3]"};
+
+    /** Sets the dye uniforms for the next batch (null = undyed); skips a repeat of the current dye. */
+    private void applyDye(ShaderProgram shader, ModelAppearance.Dye dye) {
+        if (dye == currentDye) return;
+        currentDye = dye;
+        if (dye == null) {
+            shader.setInt("u_dyeMode", 0);
+            return;
+        }
+        float[] t = dye.tints();
+        for (int k = 0; k < 4; k++) shader.setVec3(DYE_TINTS[k], dyeScratch.set(t[k * 3], t[k * 3 + 1], t[k * 3 + 2]));
+        if (dye.maskTexture() > 0) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + ModelAppearance.MASK_UNIT);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, dye.maskTexture());
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            shader.setInt("u_dyeMode", 2);
+        } else {
+            shader.setInt("u_dyeMode", 1);
+        }
     }
 
     private void setUseTexture(ShaderProgram shader, boolean use) {
@@ -232,11 +279,21 @@ public final class ModelRenderer {
     /** Flat-colour pass posed by a native rig's palette (see the lit overload). */
     public void drawFlat(ModelGpuMesh mesh, ModelDrawPlan plan, JointPalette palette,
                          Matrix4f view, Matrix4f projection, Vector4f color) {
-        if (mesh != null && mesh.hasSkin()) {
-            drawFlat(mesh, plan, everyPart(plan), palette, view, projection, color);
-        } else {
-            drawFlat(mesh, plan, rigidParts(plan, palette), null, view, projection, color);
-        }
+        drawFlat(mesh, plan, palette, view, projection, color, null);
+    }
+
+    /** Flat-colour pass posed by a palette; parts {@code appearance} hides issue no draw call (null = all draw). */
+    public void drawFlat(ModelGpuMesh mesh, ModelDrawPlan plan, JointPalette palette,
+                         Matrix4f view, Matrix4f projection, Vector4f color, ModelAppearance appearance) {
+        PartMatrices parts = mesh != null && mesh.hasSkin() ? everyPart(plan) : rigidParts(plan, palette);
+        if (appearance != null) parts = visibleOnly(parts, appearance);
+        drawFlat(mesh, plan, parts, mesh != null && mesh.hasSkin() ? palette : null, view, projection, color);
+    }
+
+    private static PartMatrices visibleOnly(PartMatrices parts, ModelAppearance appearance) {
+        return consumer -> parts.forEachPart((i, m) -> {
+            if (appearance.partVisible(i)) consumer.accept(i, m);
+        });
     }
 
     private void drawFlat(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts, JointPalette skinPalette,

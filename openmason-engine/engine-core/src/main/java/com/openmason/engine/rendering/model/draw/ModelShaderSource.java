@@ -53,6 +53,10 @@ public final class ModelShaderSource {
             uniform vec3 u_keyDirection;
             uniform float u_skyLight;
             uniform float u_selfGlow;
+            // Appearance dyes (OpenMason #162): 0 none, 1 the whole material by tint 0, 2 by the RGBA dye mask.
+            uniform int u_dyeMode;
+            uniform sampler2D u_dyeMask;
+            uniform vec3 u_dyeTints[4];
             """;
 
     private static final String DEFAULT_EXTENSION = """
@@ -67,6 +71,11 @@ public final class ModelShaderSource {
     private static final String LIT_FRAGMENT_MAIN = """
             void main() {
                 vec4 texColor = u_useTexture ? texture(textureSampler, TexCoord) : vec4(u_baseColor, 1.0);
+                if (u_dyeMode != 0) {
+                    vec4 m = u_dyeMode == 2 ? texture(u_dyeMask, TexCoord) : vec4(1.0, 0.0, 0.0, 0.0);
+                    texColor.rgb *= vec3(1.0) + m.r * (u_dyeTints[0] - 1.0) + m.g * (u_dyeTints[1] - 1.0)
+                            + m.b * (u_dyeTints[2] - 1.0) + m.a * (u_dyeTints[3] - 1.0);
+                }
                 if (texColor.a < 0.01) discard;
 
                 // Model meshes carry no normals: derive the flat face normal from

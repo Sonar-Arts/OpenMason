@@ -87,7 +87,10 @@ enum {
 enum {
     /* The joint moves rendered geometry: a part with faces, or a joint skin weights reference.
      * Used by cr_rig_find_head. */
-    CR_JOINT_HAS_GEOMETRY = 1u << 0
+    CR_JOINT_HAS_GEOMETRY = 1u << 0,
+    /* The author hid the part (the OMO part `visible` flag is false). Posing ignores it; appearance resolution
+     * (cenda/appearance.h, OpenMason #162) starts a part's visibility from it. */
+    CR_JOINT_HIDDEN = 1u << 1
 };
 
 /* One joint (80 bytes). parent = index into the joint list, -1 = root. Parents may come after their

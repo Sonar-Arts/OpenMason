@@ -64,7 +64,7 @@ enum {
     CC_FIELD_PROFILE = 2,
     CC_FIELD_ANIM_GRAPH = 3,
     CC_FIELD_MODEL_REF = 4,       /* the skeleton model by object id or path, when not embedded */
-    CC_FIELD_APPEARANCE = 5,      /* a JSON object (opaque until OpenMason #162); "" = none */
+    CC_FIELD_APPEARANCE = 5,      /* a JSON object: appearance slots (cenda/appearance.h, #162); "" = none */
     CC_FIELD_JOINT_HASH = 6,      /* read-only: the stored skeleton structure hash */
     CC_FIELD_FACING = 7           /* "-z" | "+z" | "-x" | "+x"; "" = "-z" */
 };
@@ -127,6 +127,15 @@ int32_t cc_char_set_skeleton(cc_char* c, const cr_rig* rig);
 int32_t cc_char_model_get(const cc_char* c, const uint8_t** out_data, int64_t* out_size);
 /* Embeds a model (an .omo) under entry_name (NULL = "model.omo"); data NULL or size 0 removes it. */
 int32_t cc_char_model_set(cc_char* c, const uint8_t* data, int64_t size, const char* entry_name);
+/* Other archive entries (kept verbatim; appearance body variants and dye masks live here, OpenMason #162). */
+int32_t cc_char_entry_count(const cc_char* c);
+/* out_name / out_data owned by the definition until it changes. */
+int32_t cc_char_entry_get(const cc_char* c, int32_t index, const char** out_name, const uint8_t** out_data,
+                          int64_t* out_size);
+/* -1 when absent. */
+int32_t cc_char_entry_find(const cc_char* c, const char* name);
+/* Adds or replaces an entry; data NULL removes it. CC_ERR_ARG for manifest.json or the model's entry name. */
+int32_t cc_char_entry_set(cc_char* c, const char* name, const uint8_t* data, int64_t size);
 
 /* --- Roles --------------------------------------------------------------------------------------- */
 

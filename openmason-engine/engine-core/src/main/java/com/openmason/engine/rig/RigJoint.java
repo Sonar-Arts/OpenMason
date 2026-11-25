@@ -19,7 +19,14 @@ import org.joml.Vector3fc;
  * @param endpoint    bone tail in the bone's local frame (zero for parts)
  */
 public record RigJoint(String id, String name, Kind kind, int parent, boolean hasGeometry,
-                       Vector3fc origin, Vector3fc pos, Vector3fc rotDeg, Vector3fc scale, Vector3fc endpoint) {
+                       Vector3fc origin, Vector3fc pos, Vector3fc rotDeg, Vector3fc scale, Vector3fc endpoint,
+                       boolean hidden) {
+
+    /** A joint its author did not hide. */
+    public RigJoint(String id, String name, Kind kind, int parent, boolean hasGeometry,
+                    Vector3fc origin, Vector3fc pos, Vector3fc rotDeg, Vector3fc scale, Vector3fc endpoint) {
+        this(id, name, kind, parent, hasGeometry, origin, pos, rotDeg, scale, endpoint, false);
+    }
 
     /** Joint kinds (values = {@code CR_JOINT_*}). */
     public enum Kind { PART, BONE }
@@ -51,6 +58,14 @@ public record RigJoint(String id, String name, Kind kind, int parent, boolean ha
 
     /** A copy with another geometry flag. */
     public RigJoint withGeometry(boolean geometry) {
-        return new RigJoint(id, name, kind, parent, geometry, origin, pos, rotDeg, scale, endpoint);
+        return new RigJoint(id, name, kind, parent, geometry, origin, pos, rotDeg, scale, endpoint, hidden);
+    }
+
+    /**
+     * A copy with another hidden flag ({@code CR_JOINT_HIDDEN}: the author hid the part; appearance resolution
+     * starts its visibility from it, OpenMason #162; posing ignores it).
+     */
+    public RigJoint withHidden(boolean hide) {
+        return new RigJoint(id, name, kind, parent, hasGeometry, origin, pos, rotDeg, scale, endpoint, hide);
     }
 }

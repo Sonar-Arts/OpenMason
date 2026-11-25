@@ -89,6 +89,11 @@ public final class Skin implements AutoCloseable {
         return h;
     }
 
+    /** The native {@code cr_skin*} for other Cenda bindings (garments, OpenMason #162); never free it. */
+    public MemorySegment nativeHandle() {
+        return handle();
+    }
+
     /** An independent copy (undo snapshots). */
     public Skin copy() {
         try {
