@@ -170,7 +170,7 @@ public final class EntityModelLoader {
         }
 
         return new EntityAsset(source.objectId(), variants, clips,
-                source.sounds(), source.soundBytes(), source.fx());
+                source.sounds(), source.soundBytes(), source.fx(), source.character());
     }
 
     private static EntityAsset loadResource(String resourcePath, ResourceOpener opener) {

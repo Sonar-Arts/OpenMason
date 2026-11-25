@@ -21,6 +21,9 @@ import java.util.Objects;
  * @param sounds        sound bindings, or null
  * @param soundBytes    embedded sound samples keyed by entry filename
  * @param fx            FX bindings, or null
+ * @param character     the container's character definition ({@code .omchar} bytes, #153; Stonebreak SBE 1.7), or
+ *                      null - kept as bytes: the engine reads it with {@code character.CharacterDefinition.read} when a
+ *                      system (graph, IK, first person) needs it
  */
 public record EntityModelSource(String objectId,
                                 String displayName,
@@ -29,7 +32,14 @@ public record EntityModelSource(String objectId,
                                 Map<String, byte[]> stateClips,
                                 SoundData sounds,
                                 Map<String, byte[]> soundBytes,
-                                FxData fx) {
+                                FxData fx,
+                                byte[] character) {
+
+    /** A source without a character definition. */
+    public EntityModelSource(String objectId, String displayName, byte[] baseModel, Map<String, byte[]> variantModels,
+                             Map<String, byte[]> stateClips, SoundData sounds, Map<String, byte[]> soundBytes, FxData fx) {
+        this(objectId, displayName, baseModel, variantModels, stateClips, sounds, soundBytes, fx, null);
+    }
 
     public EntityModelSource {
         Objects.requireNonNull(objectId, "objectId");

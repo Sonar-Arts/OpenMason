@@ -772,7 +772,10 @@ cc_report* cc_char_check(const cc_char* c, const cr_rig* rig) {
         goals.insert(g.name);
     }
     for (const oc::Chain& ch : d.chains) {
-        const bool known = ref(ch.start, "chain " + ch.name) & ref(ch.end, "chain " + ch.name);
+        // Both ends are checked (each reports its own issue), then combined.
+        const bool start_known = ref(ch.start, "chain " + ch.name);
+        const bool end_known = ref(ch.end, "chain " + ch.name);
+        const bool known = start_known && end_known;
         if (known && can_resolve) {
             // Walk up from the end; stop at the start, a root, or after as many steps as there are joints.
             std::string at = ch.end;

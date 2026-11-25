@@ -24,6 +24,7 @@ import java.util.Map;
  * @param soundBytes embedded sound sample bytes keyed by archive entry
  *                   filename ; empty when no def embeds audio
  * @param fx         the asset's FX bindings, or null when it declares none
+ * @param character  the container's character definition ({@code .omchar} bytes, #153), or null
  */
 public record EntityAsset(
         String objectId,
@@ -31,8 +32,20 @@ public record EntityAsset(
         Map<String, ParsedAnimClip> clips,
         SoundData sounds,
         Map<String, byte[]> soundBytes,
-        FxData fx
+        FxData fx,
+        byte[] character
 ) {
+    /** An asset without a character definition. */
+    public EntityAsset(String objectId, Map<String, EntityGeometry> variants, Map<String, ParsedAnimClip> clips,
+                       SoundData sounds, Map<String, byte[]> soundBytes, FxData fx) {
+        this(objectId, variants, clips, sounds, soundBytes, fx, null);
+    }
+
+    /** True when the container embedded a character definition ({@code .omchar}, #153). */
+    public boolean hasCharacter() {
+        return character != null && character.length > 0;
+    }
+
     /** The variant used when a requested name is unknown. */
     public static final String DEFAULT_VARIANT = "Default";
 
@@ -48,14 +61,14 @@ public record EntityAsset(
                           Map<String, ParsedAnimClip> clips,
                           SoundData sounds,
                           Map<String, byte[]> soundBytes) {
-        this(objectId, variants, clips, sounds, soundBytes, null);
+        this(objectId, variants, clips, sounds, soundBytes, null, null);
     }
 
     /** Soundless convenience constructor (bare OMO/SBO attachables, tests). */
     public EntityAsset(String objectId,
                           Map<String, EntityGeometry> variants,
                           Map<String, ParsedAnimClip> clips) {
-        this(objectId, variants, clips, null, Map.of(), null);
+        this(objectId, variants, clips, null, Map.of(), null, null);
     }
 
     /**
