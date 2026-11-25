@@ -42,7 +42,7 @@ public final class ScriptingToolDefinitions {
                         + "Animation: c = om.anim.clip(name, duration, fps, loop); c.key(part, t, "
                         + "position/rotation/scale/easing — omitted = part's current transform); "
                         + "c.layer(type='overlay', mask=[...]); c.save('x.omanim') (absolute path in "
-                        + "live runs; written only on success — load it with anim_load). "
+                        + "live runs; written only on success — open it with anim_open). "
                         + "Textures: t = om.tex.create(p.faces(facing='+z'), size=(16,16), "
                         + "color=(r,g,b)); t.fill/rect/line/flood/set_pixels/noise/resize; "
                         + "om.tex.of(part, face) — live viewport only. Canvas (texture editor must "

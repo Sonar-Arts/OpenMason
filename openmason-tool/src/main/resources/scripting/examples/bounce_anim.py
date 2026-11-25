@@ -1,7 +1,7 @@
 # Example: author a simple bounce clip for a part named "body".
 # Requires a loaded model with a part called "body" (rename to match yours).
 # The clip is DETACHED: it is written to the absolute path below only if the
-# script succeeds — load it afterwards with anim_load.
+# script succeeds — open it afterwards with anim_open.
 import om
 
 part = om.part("body")           # teaching error if the part does not exist
@@ -15,4 +15,4 @@ c.key(part, 1.00, position=(0, 0, 0))
 
 # EDIT ME: absolute output path for the .omanim file.
 c.save("/tmp/bounce.omanim")
-print("saved bounce clip — load it with anim_load")
+print("saved bounce clip — open it with anim_open")

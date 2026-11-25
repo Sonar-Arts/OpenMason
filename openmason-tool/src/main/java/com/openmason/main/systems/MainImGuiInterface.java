@@ -96,8 +96,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
     // Editor-detach rules for deleted backing files (stateless; headless-testable)
     private final AssetEditorDetacher assetEditorDetacher = new AssetEditorDetacher();
 
-    // Animation editor (set after construction via setAnimationEditorInterface)
-    private com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui animationEditorImGui;
 
     // Window Configurations
     private final WindowConfig propertiesConfig = WindowConfig.forProperties();
@@ -321,6 +319,8 @@ public class MainImGuiInterface implements ProjectBrowserListener {
 
             // Mark model as having unsaved changes whenever the command history changes
             viewport3D.getCommandHistory().setOnHistoryChange(() -> modelState.setUnsavedChanges(true));
+            // Skin weights live in the .omo too: a stroke, a weight op, undo and redo dirty the model (OM #165).
+            viewport3D.getSkinHistory().setOnChange(() -> modelState.setUnsavedChanges(true));
 
         } catch (Exception e) {
             logger.error("Failed to setup 3D viewport", e);
@@ -754,23 +754,6 @@ public class MainImGuiInterface implements ProjectBrowserListener {
     /** @return the texture editor window control, or null before the shell wires it */
     public com.openmason.main.systems.services.TextureEditorPresenter getTextureEditorPresenter() {
         return textureEditorPresenter;
-    }
-
-    /**
-     * Get the animation editor interface, or null if not yet wired.
-     */
-    public com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui getAnimationEditor() {
-        return animationEditorImGui;
-    }
-
-    /**
-     * Sets the AnimationEditorImGui instance so external systems (e.g. the MCP
-     * server) can query and drive the animation editor.
-     */
-    public void setAnimationEditorInterface(
-            com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui animationEditorImGui) {
-        this.animationEditorImGui = animationEditorImGui;
-        services.put(com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui.class, animationEditorImGui);
     }
 
     /**

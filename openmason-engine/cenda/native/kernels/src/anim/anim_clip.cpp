@@ -28,6 +28,15 @@ int32_t fail(int32_t code, const std::string& message) {
     return code;
 }
 
+}  // namespace
+
+namespace cenda::anim {
+// cm_last_error for the authoring ABI (anim_author.cpp).
+void set_error(const std::string& message) { g_error = message; }
+}  // namespace cenda::anim
+
+namespace {
+
 template <typename T>
 void set_out(T* out, T value) {
     if (out != nullptr) *out = value;

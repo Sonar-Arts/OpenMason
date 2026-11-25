@@ -3,7 +3,6 @@ package com.openmason.main.bootstrap;
 import com.openmason.main.omConfig;
 import com.openmason.main.systems.MainImGuiInterface;
 import com.openmason.main.systems.layout.CenterTabTracker;
-import com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui;
 import com.openmason.main.systems.menus.mainHub.ProjectHubScreen;
 import com.openmason.main.systems.menus.mainHub.model.ProjectTemplate;
 import com.openmason.main.systems.menus.mainHub.model.RecentProject;
@@ -69,7 +68,6 @@ public final class UiComposition {
     private TextureCreatorImGui textureCreatorInterface;
     private TextureEditorWorkspace textureEditorWorkspace;
     private ScriptingWindow scriptingWindow;
-    private AnimationEditorImGui animationEditor;
     private TexturePreviewPipeline texturePreviewPipeline;
     private final com.openmason.main.systems.layout.WorkspaceState workspaceState;
     private com.openmason.main.systems.layout.WorkspaceLayouts workspaceLayouts;
@@ -93,7 +91,6 @@ public final class UiComposition {
     public TextureCreatorImGui textureCreatorInterface() { return textureCreatorInterface; }
     public TextureEditorWorkspace textureEditorWorkspace() { return textureEditorWorkspace; }
     public ScriptingWindow scriptingWindow() { return scriptingWindow; }
-    public AnimationEditorImGui animationEditor() { return animationEditor; }
     public TexturePreviewPipeline texturePreviewPipeline() { return texturePreviewPipeline; }
     public com.openmason.main.systems.layout.WorkspaceState workspaceState() { return workspaceState; }
     public com.openmason.main.systems.layout.WorkspaceLayouts workspaceLayouts() { return workspaceLayouts; }
@@ -261,10 +258,6 @@ public final class UiComposition {
             // folder (same source the model-save dialogs use).
             textureCreatorInterface.getFileDialogService()
                     .setProjectDirectorySupplier(mainInterface.getProjectDirectorySupplier());
-            animationEditor = new AnimationEditorImGui();
-            animationEditor.setFileDialogService(mainInterface.getFileDialogService());
-            mainInterface.setAnimationEditorInterface(animationEditor);
-            wireAnimationEditor();
 
             wireUiEditor(sceneRoot);
             wireScenePanels();
@@ -494,58 +487,15 @@ public final class UiComposition {
         mainInterface.setTextureCreatorInterface(textureCreatorInterface);
 
         // A new/different model: the face documents point at the old model's textures, so they
-        // close (no flush, no save); standalone textures stay open. Single callback slot — the
-        // animation editor rebind must chain here, not replace the texture editor's.
+        // close (no flush, no save); standalone textures stay open. Single callback slot: other
+        // listeners must chain here, not replace the texture editor's.
         mainInterface.getModelOperations().setOnModelChangedCallback(() -> {
             textureCreatorInterface.getController().closeFaceDocuments(
                     com.openmason.main.systems.menus.textureCreator.TextureCreatorController.CloseReason.MODEL_CHANGED);
-            if (animationEditor != null && animationEditor.isVisible()
-                    && mainInterface.getViewport3D() != null) {
-                animationEditor.getController()
-                        .onModelChanged(mainInterface.getViewport3D().getPartManager());
-            }
         });
 
         textureCreatorInterface.setBackToHomeCallback(host::transitionToHomeScreen);
         textureCreatorInterface.setPreferencesCallback(mainInterface.getShowPreferencesCallback());
-    }
-
-    /** Tools → Animation Editor (and the clip bridge): bound to the model the viewport holds. */
-    private void openAnimationEditor() {
-        if (animationEditor == null) return;
-        animationEditor.openFor(mainInterface.getViewport3D() != null
-                ? mainInterface.getViewport3D().getPartManager() : null);
-    }
-
-    /**
-     * Cross-wiring the animation editor needs beyond its own window: the
-     * model save puts the viewport at rest for the write (no preview pose in
-     * the .omo), the clip records which model it targets, and the SBE/SBO
-     * state editors can hand clips to/from the editor without a file.
-     */
-    private void wireAnimationEditor() {
-        var controller = animationEditor.getController();
-        // Bones are joints: the editor keys and previews the viewport's skeleton too.
-        controller.setBoneStoreSupplier(() -> mainInterface.getViewport3D() != null
-                ? mainInterface.getViewport3D().getBoneStore() : null);
-        mainInterface.getModelOperations().setAroundSaveHooks(
-                () -> { if (animationEditor.isVisible()) controller.suspendPreview(); },
-                () -> { if (animationEditor.isVisible()) controller.resumePreview(); });
-        controller.setModelRefSupplier(() -> {
-            var ms = mainInterface.getModelState();
-            if (ms == null) return null;
-            String omo = ms.getCurrentOMOFilePath();
-            return omo != null ? omo : ms.getCurrentModelPath();
-        });
-        var bridge = new com.openmason.main.systems.menus.dialogs.AnimationClipBridge(
-                controller::exportClipBytes,
-                (bytes, label) -> {
-                    openAnimationEditor();
-                    animationEditor.confirmDiscardThen(() -> controller.importClipBytes(bytes, label));
-                },
-                () -> controller.state().clip().name());
-        // Asset kinds whose states carry clips (a game plugin's editors, #88) read it from here.
-        mainInterface.getServices().put(com.openmason.main.systems.menus.dialogs.AnimationClipBridge.class, bridge);
     }
 
     private void setWindowHandles() {

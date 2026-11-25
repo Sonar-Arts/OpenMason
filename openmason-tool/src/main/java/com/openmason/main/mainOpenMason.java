@@ -14,7 +14,6 @@ import com.openmason.main.systems.menus.mainHub.model.ProjectTemplate;
 import com.openmason.main.systems.menus.mainHub.model.RecentProject;
 import com.openmason.main.systems.project.TemplateScaffolder;
 import com.openmason.main.systems.themes.core.ThemeManager;
-import com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui;
 import com.openmason.main.systems.menus.textureCreator.TextureCreatorImGui;
 import com.openmason.main.systems.menus.textureCreator.TexturePreviewPipeline;
 import com.openmason.main.systems.menus.textureCreator.TextureEditorWorkspace;
@@ -60,7 +59,6 @@ public class mainOpenMason {
     private TextureEditorWorkspace textureEditorWorkspace;
     private com.openmason.main.systems.menus.scriptingWindow.ScriptingWindow scriptingWindow;
     private com.openmason.main.systems.assistant.AssistantController assistantController;
-    private AnimationEditorImGui animationEditor;
     private TexturePreviewPipeline texturePreviewPipeline;
     private final McpServerBootstrap mcpServer = new McpServerBootstrap();
     /** Every contribution list + the shared services; filled by the plugins (#379). */
@@ -244,7 +242,6 @@ public class mainOpenMason {
             textureCreatorInterface = composition.textureCreatorInterface();
             textureEditorWorkspace = composition.textureEditorWorkspace();
             scriptingWindow = composition.scriptingWindow();
-            animationEditor = composition.animationEditor();
             texturePreviewPipeline = composition.texturePreviewPipeline();
             uiEditor = composition.uiEditor();
             workspaceState = composition.workspaceState();
@@ -401,10 +398,6 @@ public class mainOpenMason {
             if (showTextureEditor && !workspaceState.isOpen(com.openmason.main.systems.layout.BuiltinWorkspaces.TEXTURE)) {
                 onTextureEditorClosed();
             }
-        }
-
-        if (animationEditor != null && animationEditor.isVisible()) {
-            safeRender(() -> animationEditor.render(deltaTime), "Animation Editor");
         }
 
         if (mainInterface != null && mainInterface.getUnifiedPreferencesWindow() != null) {
@@ -807,9 +800,6 @@ public class mainOpenMason {
         if (workspaceState != null) {
             workspaceState.close(com.openmason.main.systems.layout.BuiltinWorkspaces.TEXTURE);
         }
-        if (animationEditor != null) {
-            animationEditor.hide();
-        }
         if (projectHubScreen != null) {
             projectHubScreen.onShown();
         }
@@ -928,14 +918,6 @@ public class mainOpenMason {
                 mainInterface.dispose();
             } catch (Exception e) {
                 logger.error("Error disposing main interface resources", e);
-            }
-        }
-        // Animation editor Mortar regions (FBOs) — must close before SkijaContext.
-        if (animationEditor != null) {
-            try {
-                animationEditor.dispose();
-            } catch (Exception e) {
-                logger.error("Error disposing Animation Editor", e);
             }
         }
         if (skijaContext != null) {

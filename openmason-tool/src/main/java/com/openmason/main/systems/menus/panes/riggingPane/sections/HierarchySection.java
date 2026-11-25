@@ -92,6 +92,21 @@ public class HierarchySection {
 
     public void setOnPartCreated(Consumer<ModelPartDescriptor> cb) { this.onPartCreated = cb; }
     public void setOnViewportInvalidationNeeded(Runnable cb) { this.onViewportInvalidationNeeded = cb; }
+
+    /** The model history rig-hierarchy edits record on (undoable, and they mark the model dirty; OM #165). */
+    public void setCommandHistory(java.util.function.Supplier<com.openmason.main.systems.services.commands.ModelCommandHistory> history) {
+        this.commandHistory = history;
+    }
+
+    private java.util.function.Supplier<com.openmason.main.systems.services.commands.ModelCommandHistory> commandHistory = () -> null;
+
+    /** Runs a rig-hierarchy edit as one undo step on the model history (see {@link com.openmason.main.systems.skeleton.RigHierarchyCommand}). */
+    private boolean recorded(String description, java.util.function.BooleanSupplier edit) {
+        boolean changed = com.openmason.main.systems.skeleton.RigHierarchyCommand.record(description, partManager, boneStore,
+                commandHistory.get(), this::invalidateViewport, edit::getAsBoolean);
+        invalidateViewport();
+        return changed;
+    }
     public void setOnOpenAddPartSlideout(Runnable cb) { this.onOpenAddPartSlideout = cb; }
     public void setOnOpenAddBoneSlideout(Runnable cb) { this.onOpenAddBoneSlideout = cb; }
     public void setOnOpenPartTransformSlideout(Runnable cb) { this.onOpenPartTransformSlideout = cb; }
@@ -236,7 +251,7 @@ public class HierarchySection {
         if (ImGui.beginDragDropTarget()) {
             Object partPayload = ImGui.acceptDragDropPayload(PART_PAYLOAD);
             if (partPayload instanceof String draggedPartId && !draggedPartId.equals(part.id())) {
-                if (partManager.setPartParent(draggedPartId, part.id())) invalidateViewport();
+                recorded("Reparent Part", () -> partManager.setPartParent(draggedPartId, part.id()));
             }
             Object bonePayload = ImGui.acceptDragDropPayload(BONE_PAYLOAD);
             if (bonePayload instanceof String draggedBoneId) {
@@ -252,8 +267,7 @@ public class HierarchySection {
             }
             if (!part.isRoot()) {
                 if (ImGui.menuItem("Detach to root")) {
-                    partManager.setPartParent(part.id(), null);
-                    invalidateViewport();
+                    recorded("Detach Part", () -> partManager.setPartParent(part.id(), null));
                 }
             }
             if (allParts.size() > 1) {
@@ -457,8 +471,10 @@ public class HierarchySection {
             }
             Object partPayload = ImGui.acceptDragDropPayload(PART_PAYLOAD);
             if (partPayload instanceof String draggedPartId) {
-                snapBoneEndpointToPart(bone, draggedPartId);
-                if (partManager.setPartParent(draggedPartId, bone.id())) invalidateViewport();
+                recorded("Bind Part to Bone", () -> {
+                    snapBoneEndpointToPart(bone, draggedPartId);
+                    return partManager.setPartParent(draggedPartId, bone.id());
+                });
             }
             ImGui.endDragDropTarget();
         }
@@ -509,7 +525,7 @@ public class HierarchySection {
         if (ImGui.beginDragDropTarget()) {
             Object partPayload = ImGui.acceptDragDropPayload(PART_PAYLOAD);
             if (partPayload instanceof String draggedPartId) {
-                if (partManager.setPartParent(draggedPartId, null)) invalidateViewport();
+                recorded("Detach Part", () -> partManager.setPartParent(draggedPartId, null));
             }
             Object bonePayload = ImGui.acceptDragDropPayload(BONE_PAYLOAD);
             if (bonePayload instanceof String draggedBoneId) {
@@ -582,14 +598,16 @@ public class HierarchySection {
             logger.warn("Refusing bone reparent: would create cycle ({} -> {})", boneId, newParentId);
             return;
         }
-        boneStore.put(new OMOFormat.BoneEntry(
-                bone.id(), bone.name(), newParentId,
-                bone.originX(), bone.originY(), bone.originZ(),
-                bone.posX(), bone.posY(), bone.posZ(),
-                bone.rotX(), bone.rotY(), bone.rotZ(),
-                bone.endpointX(), bone.endpointY(), bone.endpointZ()
-        ));
-        invalidateViewport();
+        recorded("Reparent Bone", () -> {
+            boneStore.put(new OMOFormat.BoneEntry(
+                    bone.id(), bone.name(), newParentId,
+                    bone.originX(), bone.originY(), bone.originZ(),
+                    bone.posX(), bone.posY(), bone.posZ(),
+                    bone.rotX(), bone.rotY(), bone.rotZ(),
+                    bone.endpointX(), bone.endpointY(), bone.endpointZ()
+            ));
+            return true;
+        });
     }
 
     /** True when {@code candidate} is in the (bone-only) parent chain of {@code ancestorId}. */

@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.openmason.engine.format.omui.OmuiArchive;
 import com.openmason.engine.format.omui.OmuiFormat;
 import com.openmason.engine.format.omui.UiBytes;
-import com.openmason.main.systems.menus.animationEditor.panels.TimelineLayout;
 
 import java.util.Map;
 import java.util.TreeMap;

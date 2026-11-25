@@ -25,6 +25,9 @@ public final class BuiltinWorkspaces {
     /** The Animation Graph workspace (.omanimgraph, OM #164): closable, present while it is open. */
     public static final String ANIMGRAPH = "ANIMGRAPH";
 
+    /** The Animation workspace (.omanim authoring, OM #165): closable, present while it is open. */
+    public static final String ANIMATION = "ANIMATION";
+
     private BuiltinWorkspaces() {
     }
 }

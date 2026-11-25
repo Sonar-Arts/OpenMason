@@ -209,7 +209,7 @@ public final class BoneEditingService {
     /**
      * Parent a part to a bone (OMO 1.8 joint hierarchy): the part's {@code parentId} becomes the
      * bone, so it inherits the bone's TAIL frame and follows it when posed. Like the hierarchy pane,
-     * this is a part-hierarchy edit (not on the bone undo history).
+     * a rig-hierarchy edit on the MODEL history (undo with domain "model"; marks the model dirty).
      */
     public PartBinding bindPart(String partIdOrName, String boneIdOrName) {
         return await(MainThreadExecutor.submit(() -> {
@@ -223,7 +223,12 @@ public final class BoneEditingService {
                 throw new IllegalArgumentException("Refusing to bind part '" + part.name()
                         + "' to a bone that hangs under it (cycle)");
             }
-            boolean changed = pm.setPartParent(part.id(), boneId);
+            ViewportController vp = editorServices.getViewport3D();
+            boolean changed = com.openmason.main.systems.skeleton.RigHierarchyCommand.record("Bind Part to Bone", pm, store,
+                    vp != null ? vp.getCommandHistory() : null, () -> {
+                        store.invalidate();
+                        if (vp != null) vp.invalidateSubRenderers();
+                    }, () -> pm.setPartParent(part.id(), boneId));
             if (!changed && !boneId.equals(pm.getPartById(part.id()).map(ModelPartDescriptor::parentId).orElse(null))) {
                 throw new IllegalArgumentException("Could not bind part '" + part.name() + "' to the bone");
             }

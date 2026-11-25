@@ -1,52 +1,76 @@
 # Animation (.omanim clips)
 
-The animation editor edits one clip at a time: per-joint tracks of keyframes
-(position/rotation/scale + easing), clip metadata (name/fps/duration/loop), and
-layer metadata for mixing (BASE/OVERLAY + joint mask + fades + priority).
-A track keys a joint: a part OR a bone (the runtime binds by id, then name), so
-a skinned mesh animates by keying its bones (topics `bones`, `skinning`).
+The Animation tab authors one clip for one model at a time, over a native
+session the `anim_*` tools share (one undo history: `undo`/`redo` with
+domain:"anim"). A clip has:
+- **Authoring layers** (Maya-style): layer 0 = base; more layers on top, each
+  `override` (replace, weighted; `passthrough` off = the rest pose where it has
+  no keys) or `additive` (its difference from the rest pose is added; `meshSpace`
+  for aim offsets), with weight, keyable weight (`layer_weight`), mute, solo and
+  a weighted mask (`[{joint | role, weight, branch}]`).
+- **A control rig**: effectors - `twoBone` IK (upper, mid, end; keys = target
+  position, optional rotation pin and pole, weight 0..1 = FK..IK reach) and
+  `aim` look-ats (joints, axis). Switch-and-match (`match` to ik / fk) changes
+  control at a time without moving the limb.
+- **Tracks**: notifies (point or range, JSON payload), float curves (LINEAR /
+  STEP / CUBIC with tangents), sync markers, root motion (joint + x/y/z/yaw),
+  additive reference (none / frame / character), and the runtime layer
+  (`clip_layer`: BASE or OVERLAY + mask/fades/priority - how a game plays it).
+Joint tracks are ALWAYS the bake of all that (every frame); the authoring data
+is stored in the .omanim beside them (the runtime ignores it) and comes back
+editable on open. A clip with nothing but base keys stays a plain clip.
 
-Easing per keyframe: LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT, STEP (hold the
-pose, snap at the next key — blinks, gear ticks).
+Joints: a part OR a bone, by id or name, or `role:<role>` when the model is an
+.omchar (topic `character`). Easing per key: LINEAR, EASE_IN, EASE_OUT,
+EASE_IN_OUT, STEP.
 
 ## Opening
-`anim_open_editor` opens the editor on the viewport's model (like Tools >
-Animation Editor). Keyframe tools resolve parts/bones only while it is open;
-otherwise they fail with "call anim_open_editor first".
+`anim_new {model, name?, fps?, duration?}` - model = .omo, a plugin's model
+container, or an .omchar (roles, retargeting). `anim_open {path, model?}` opens
+an .omanim on its modelRef (set on save) or on `model`. Both refuse to drop
+unsaved changes without `discard:true`.
 
 ## Reading
-`anim_get_info`, `anim_list_tracks`, `anim_list_keyframes {part_id_or_name}`.
+- `anim_get_info`: header, clipLayer, layers (settings, tracks with key times,
+  weightKeys), effectors (keys), notifies, curves, markers, rootMotion,
+  additive; playhead, dirty.
+- `anim_get_pose {time?, joints?, layer?, fk_only?}`: per joint the local
+  pos/rot/scale and world point; the rig handles (target, weight, pole, where
+  FK puts the chain end); root motion travel. `layer` adds that layer's OWN
+  values (what keying it stores).
 
-## Editing
-- `anim_insert_keyframe {part_id_or_name, time, position?, rotation?, scale?,
-  easing?}` — creates the track on demand.
-- `anim_edit_keyframe` / `anim_delete_keyframe` / `anim_delete_track`.
-- Clip meta: `anim_set_clip {name?, fps?, duration?, loop?}`.
-- Layers: `anim_set_layer {type?, mask_parts?, fade_in_seconds?,
-  fade_out_seconds?, priority?}` — BASE drives all joints, OVERLAY only its mask
-  (part or bone names).
+## Editing - `anim_edit {ops, label?}`: one undo step, all or nothing
+- `header` {name?, fps?, duration?, loop?, modelRef?}; `clip_layer` {type?,
+  mask?, fadeIn?, fadeOut?, priority?}
+- `key` {layer?, joint, time, pos?, rot?, scale?, easing?} (omitted = the
+  layer's current value there); `remove_keys` {layer?, joint?, times? | from?,
+  to?}; `move_keys` {layer?, joint?, times, offset}; `easing` {..., times,
+  easing}; `track` {layer?, joint, remove:true}
+- `layer` {name, mode?, weight?, mute?, solo?, passthrough?, meshSpace?, mask?,
+  index?, rename?, remove?}; `layer_weight` {layer, time, value | remove}
+- `notify` {name, time, duration?, payload?} | {index, remove | members};
+  `curve` {name, keys | null}; `marker` {name, time} | {index, remove};
+  `root_motion` {joint, axes} | {} (off); `additive` {reference, time?, space?}
+- `effector` {name, kind, upper/mid/end | joints, axis?, rename?, remove?};
+  `effector_key` {effector, time, pos?, rot?, weight?, pole? | remove}
+- `match` {effector, time, to: ik | fk, layer?}: to ik keys the target where FK
+  has the limb (weight 1); to fk keys the limb's joints to the solved pose and
+  the weight to 0, on `layer` or (none given) the topmost layer that holds the
+  pose - an override at full weight with nothing above moving the limb; a
+  layer that cannot hold it is refused.
 
-## Transport & files
-`anim_transport {action: play|pause|stop|seek, time?}`, `anim_apply_pose` (pose the
-viewport at the playhead), `anim_new_clip`, `anim_load`, `anim_save {file_path?}`.
-Undo: `undo` / `redo` with domain:"anim" (own history).
+## Transport, retarget, files
+`anim_transport {action: play|pause|seek|fk_only|in_place, time?, value?}`.
+`anim_retarget {source_character, source_clip, layer?}` bakes another
+characterized model's clip onto this .omchar as a layer (one undo step).
+`anim_save {path?}` (a bare name lands in the project's animation folder),
+`anim_close`.
 
-Workflow: pose at t=0 (insert keyframes for every animated part), advance the
-playhead, pose again — keep the last keyframe time equal to the clip duration
-for clean loops. Verify with `anim_apply_pose` + `viewport_capture`.
-
-Preview safety: the viewport shows the clip's pose while the editor is open,
-but the model's own rest transforms are what get saved (the .omo save puts the
-model at rest for the write) and modelling edits made meanwhile are kept.
-In the UI, **Auto-key** turns gizmo/property edits into keyframes at the
-playhead (one drag = one undo step); an unkeyed edit of an animated part is
-flagged in the timeline header. Tracks whose part is missing from the model
-show as "? name" rows and can be rebound or deleted from the row's context
-menu. An OVERLAY can be previewed on top of a loaded BASE clip (Layer
-section → Preview base). SBE/SBO state editors round-trip clips with the
-editor ("From editor" / "Edit in editor") without touching disk.
+Workflow: key the base layer at t=0 and the extremes, layer corrections on
+top, IK for planted feet/hands (match to IK, move the target, match back),
+then events. Check with `anim_get_pose` (world points) at a few times.
 
 ## Scripted authoring (bulk keyframing)
-For gait cycles, sine bobs, or many keys at once, prefer `run_python_script`
-with `om.anim` (see topic `scripting`): build a detached clip with loops+math,
-`save()` it as .omanim, then `anim_load` it here to inspect and play.
+For gait cycles, sine bobs or many keys, `run_python_script` with `om.anim`
+(topic `scripting`) builds a detached clip (parts and bones) and saves it as
+.omanim; `anim_open` it here. Or send many `key` ops in one `anim_edit`.

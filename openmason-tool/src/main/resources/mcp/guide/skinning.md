@@ -31,7 +31,8 @@ over a part name.
 3. `skin_info` / `skin_get_weights` to check; fix joints with `skin_paint`
    (smooth seams) or `skin_set_weights`.
 4. Model one side, then `skin_mirror {axis:"x", source_sign:1}`.
-5. Verify: key the bones in a clip and `anim_apply_pose` + `viewport_capture`.
+5. Verify: key the bones in a clip (`anim_new` + `anim_edit`) and open it in the Animation
+   tab, which shows the skinned mesh posed.
 
 In the editor: Rigging pane > Skin (bind, clean up, Weight Paint brush with a
 heat map; Ctrl+Shift+P toggles paint mode, Ctrl+Z steps the skin history there).

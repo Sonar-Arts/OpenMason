@@ -29,7 +29,6 @@ import com.openmason.main.systems.mcp.KnowledgeBase;
 import com.openmason.main.systems.menus.EditMenuHandler;
 import com.openmason.main.systems.menus.FileMenuHandler;
 import com.openmason.main.systems.menus.ViewMenuHandler;
-import com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui;
 import com.openmason.main.systems.particles.ParticleEditorWorkspace;
 import com.openmason.main.systems.menus.mainHub.services.TemplateService;
 import com.openmason.main.systems.menus.preferences.PreferencesPageRenderer;
@@ -85,7 +84,7 @@ public final class CoreFeatures {
         general(context);
         uiEditor(context);
         textureEditor(context);
-        animationEditor(context);
+        animation(context);
         scripting(context);
         particles(context);
         character(context);
@@ -275,19 +274,55 @@ public final class CoreFeatures {
     }
 
     /**
-     * The Animation Editor: Tools → Animation Editor (bound to the model in the viewport), the
-     * .omanim file type, the {@code anim_*} MCP tools and the {@code animation} topic.
+     * The Animation workspace (OM #165): a closable tab authoring .omanim clips (layers, control rig, events,
+     * retarget) over the native authoring session, the file type, the anim_* MCP tools (which edit the same open
+     * clip: one shared undo history), the {@code animation} topic, and the clip bridge the asset kinds of a game
+     * plugin use to hand state clips to and from the editor.
      */
-    private static void animationEditor(PluginContext context) {
+    private static void animation(PluginContext context) {
         ServiceRegistry services = context.services();
-        context.menuEntries().register(MenuItem.of("animation.tools.open", TopMenu.TOOLS, 110, "Animation Editor",
-                () -> services.find(AnimationEditorImGui.class).ifPresent(editor -> {
-                    ViewportController viewport = services.find(ViewportController.class).orElse(null);
-                    editor.openFor(viewport != null ? viewport.getPartManager() : null);
-                })));
+        WorkspaceState workspaces = services.require(WorkspaceState.class);
+        WorkspaceLayouts layouts = services.require(WorkspaceLayouts.class);
+        com.openmason.main.systems.animation.AnimationSessions sessions = new com.openmason.main.systems.animation.AnimationSessions();
+        sessions.setProjectRoot(() -> services.find(ProjectDirectory.class).map(ProjectDirectory::get)
+                .filter(d -> d != null && !d.isBlank()).map(Path::of).orElse(null));
+        services.publish(com.openmason.main.systems.animation.AnimationSessions.class, sessions);
+        com.openmason.main.systems.animation.AnimationWorkspace editor = new com.openmason.main.systems.animation.AnimationWorkspace(
+                services.require(FileDialogService.class), services.require(StatusService.class), workspaces, sessions);
+        // A clip without a model it can find opens on the model the Scene holds (when saved).
+        editor.setSceneModel(() -> services.find(com.openmason.main.systems.stateHandling.ModelState.class).map(ms -> {
+            String omo = ms.getCurrentOMOFilePath();
+            String path = omo != null ? omo : ms.getCurrentModelPath();
+            return path == null || path.isBlank() ? null : Path.of(path);
+        }).orElse(null));
+        services.publish(com.openmason.main.systems.animation.AnimationWorkspace.class, editor);
+        context.workspaces().register(WorkspaceDescriptor.builder(BuiltinWorkspaces.ANIMATION, "Animation")
+                .description("Animation: author .omanim clips - layers, IK control rig, notifies, curves, retargeting")
+                .closable(true)
+                .minSize(900f, 560f)
+                .layoutVersion(com.openmason.main.systems.animation.AnimationWorkspace.LAYOUT_VERSION)
+                .dockspaceName(MainDockLayout.ANIMATION_DOCKSPACE_ID)
+                .dock(editor)
+                .build());
+        editor.setResetLayoutAction(() -> layouts.requestReset(BuiltinWorkspaces.ANIMATION));
+        context.menuEntries().register(MenuItem.of("animation.tools.open", TopMenu.TOOLS, 110, "Animation Editor", editor::show));
         context.fileTypes().register(BuiltinFileTypes.OMANIM);
+        context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMANIM.id(), editor::openFile));
         context.mcpTools().register(BuiltinMcpTools.ANIMATION);
         context.guideTopics().register(BuiltinKnowledge.topic("animation"));
+        // Asset kinds whose states carry clips (a game plugin's editors, #88) hand them over through this.
+        services.publish(com.openmason.main.systems.menus.dialogs.AnimationClipBridge.class,
+                new com.openmason.main.systems.menus.dialogs.AnimationClipBridge(
+                        () -> sessions.current().map(s -> s.authoring().write()).orElse(null),
+                        (bytes, label) -> editor.openBytes(bytes, label),
+                        () -> sessions.current().map(com.openmason.main.systems.animation.AnimationSession::displayName).orElse(null)));
+        context.lifecycle().register(new LifecycleListener() {
+            @Override
+            public void shuttingDown() {
+                editor.cleanup();
+                sessions.close();
+            }
+        });
     }
 
     /**

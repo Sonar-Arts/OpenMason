@@ -54,6 +54,7 @@ public class RiggingPaneImGui {
         hierarchySection.setAttachmentStore(viewport.getAttachmentStore());
         hierarchySection.setOnPartCreated(viewport::assignDefaultMaterialToPartFaces);
         hierarchySection.setOnViewportInvalidationNeeded(viewport::invalidateSubRenderers);
+        hierarchySection.setCommandHistory(viewport::getCommandHistory);
         hierarchySection.setOnBoneSelectionChanged(viewport::onBoneSelectionChanged);
         hierarchySection.setOnAttachmentSelectionChanged(viewport::onAttachmentSelectionChanged);
 

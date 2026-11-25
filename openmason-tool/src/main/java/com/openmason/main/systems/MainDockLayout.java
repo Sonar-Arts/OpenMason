@@ -51,6 +51,8 @@ public final class MainDockLayout {
 
     /** Dockspace of the Animation Graph workspace tab (OM #164). */
     public static final String ANIMGRAPH_DOCKSPACE_ID = "OpenMasonAnimGraphDockSpace";
+    /** The Animation workspace (OM #165). */
+    public static final String ANIMATION_DOCKSPACE_ID = "OpenMasonAnimationDockSpace";
 
     private final WorkspaceState workspaceState;
     private final WorkspaceLayouts layouts;

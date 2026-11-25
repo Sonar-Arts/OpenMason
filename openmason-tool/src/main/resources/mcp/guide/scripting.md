@@ -52,12 +52,12 @@ print(om.summary())                      # stdout comes back in the result
   required, validated now, written only if the whole script succeeds, and
   listed in the result's files.
 - Animation: `c = om.anim.clip("idle", duration=2.0, fps=30, loop=True)`;
-  `c.key(part, t, position=…, rotation=…, scale=…, easing="ease_in_out")` —
-  omitted components come from the part's current transform, so pose the parts
-  then key them; `c.layer(type="overlay", mask=[parts])`;
-  `c.save("idle.omanim")`. Clips are DETACHED (they never touch the animation
-  editor); files are written only if the whole script succeeds. Live runs need
-  an absolute save path — load the result with `anim_load`.
+  `c.key(joint, t, position=…, rotation=…, scale=…, easing="ease_in_out")` —
+  a joint is a part OR a bone; omitted components come from the part's current
+  transform / the bone's rest values; `c.layer(type="overlay", mask=[joints])`;
+  `c.save("idle.omanim")`. Clips are DETACHED (they never touch the Animation
+  tab); files are written only if the whole script succeeds. Live runs need
+  an absolute save path — open the result with `anim_open`.
 - Query: `om.summary()`, `p.info()`, `c.info()`
 - UI documents (`om.ui`, live tool only): `p = om.ui.create("Box", name="panel",
   style={"width": 400})`, `om.ui.create("Label", parent=p, props={"text": "Hi"})`,

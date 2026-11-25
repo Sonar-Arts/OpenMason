@@ -260,8 +260,9 @@ class Part:
 
 
 class Clip:
-    """A detached .omanim animation clip built by this script. Keys default
-    omitted pose components to the part's CURRENT transform; save() queues the
+    """A detached .omanim animation clip built by this script. Any joint keys:
+    a part or a bone (by name or id). Keys default omitted pose components to
+    the part's CURRENT transform / the bone's rest values; save() queues the
     file, written only when the whole script succeeds."""
 
     def __init__(self, name):
@@ -277,15 +278,16 @@ class Clip:
             self._name, i["duration"], i["tracks"], i["keyframes"])
 
     def key(self, part, time, position=None, rotation=None, scale=None, easing=None):
-        """Upsert a keyframe: clip.key(body, 0.5, rotation=(0,10,0), easing="ease_in_out").
-        Omitted components come from the part's current transform."""
+        """Upsert a keyframe on a part or a bone: clip.key(body, 0.5, rotation=(0,10,0),
+        easing="ease_in_out"), clip.key("elbow_l", 0.2, rotation=(0,0,40)).
+        Omitted components come from the part's current transform / the bone's rest."""
         _b.animKey(self._name, part.name if isinstance(part, Part) else part,
                    float(time), _vec3(position, "position"),
                    _vec3(rotation, "rotation"), _vec3(scale, "scale"), easing)
         return self
 
     def layer(self, type=None, mask=None, fade_in=None, fade_out=None, priority=None):
-        """Mixing metadata: type="base"|"overlay", mask=[parts the overlay owns]."""
+        """Mixing metadata: type="base"|"overlay", mask=[parts / bones the overlay owns]."""
         names = None
         if mask is not None:
             names = [m.name if isinstance(m, Part) else m for m in mask]
@@ -904,6 +906,7 @@ Canvas:   om.canvas.fill(c); om.canvas.rect/ellipse/line/flood/set_pixels/noise/
 Query:    om.summary()  ->  {"totals": {...}, "bbox": [[..],[..]], "parts": [...]}
 Animate:  c = om.anim.clip("idle", duration=2.0, fps=30, loop=True)
           c.key(body, 0.0)                      # omitted pose = part's current transform
+          c.key("elbow_l", 0.5, rotation=(0, 0, 40))   # bones key too (rest values by default)
           c.key(body, 1.0, position=(0, 0.5, 0), easing="ease_in_out")
           c.layer(type="overlay", mask=[arm_l, arm_r], priority=1)
           c.save("idle.omanim")                 # written only if the script succeeds

@@ -83,8 +83,18 @@ public final class BuiltinMcpTools {
 
     // ── openmason.animation ─────────────────────────────────────────────────
 
-    public static final McpToolContribution ANIMATION = new McpToolContribution("animation",
-            c -> new AnimationToolDefinitions(McpSharedServices.of(c).animation(), McpSharedServices.of(c).writes(),
+    /** Animation authoring (OM #165): .omanim clips through the clip open in the Animation tab. */
+    public static final McpToolContribution ANIMATION = new McpToolContribution("animation", c ->
+            new com.openmason.main.systems.animation.mcp.AnimationToolDefinitions(
+                    new com.openmason.main.systems.animation.mcp.AnimationEditingService(
+                            () -> {
+                                var editor = McpSharedServices.of(c).editor();
+                                var cls = com.openmason.main.systems.animation.AnimationSessions.class;
+                                return (editor != null ? editor.registry().find(cls) : java.util.Optional.<
+                                        com.openmason.main.systems.animation.AnimationSessions>empty())
+                                        .or(() -> c.services().find(cls)).orElse(null);
+                            },
+                            McpSharedServices.of(c).writes()),
                     c.mapper()).registerAll(c.registry()));
 
     // ── openmason.ui ────────────────────────────────────────────────────────

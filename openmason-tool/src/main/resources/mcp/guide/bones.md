@@ -17,7 +17,8 @@ part named "head".
 - `bone_list` — id, name, parent, rest transform, resolved world head/tail.
 - `bone_create {name, parent_bone_id?, origin?, position?, rotation?, endpoint?}`
   — `parent_bone_id` may name a bone or a part.
-- `bone_bind_part {part, bone}` — parent a part to a bone (rigid limb).
+- `bone_bind_part {part, bone}` — parent a part to a bone (rigid limb); one step on the
+  MODEL history (`undo` domain:"model"), like reparenting in the Rigging pane.
 - `bone_set_transform`, `bone_set_parent`, `bone_rename`, `bone_delete`
   (deleting a bone drops its skin influences; vertices renormalize).
 - `bone_select` / `bone_clear` control the editor selection.

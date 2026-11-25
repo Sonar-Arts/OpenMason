@@ -122,6 +122,7 @@ add_library(cenda_kernels SHARED
         src/character/appearance.cpp
         src/character/character_edit.cpp
         src/anim/anim_clip.cpp
+        src/anim/anim_author.cpp
         src/graph/anim_graph.cpp
         src/graph/anim_graph_edit.cpp)
 

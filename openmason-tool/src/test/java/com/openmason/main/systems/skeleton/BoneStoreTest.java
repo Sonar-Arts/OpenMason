@@ -161,20 +161,14 @@ class BoneStoreTest {
     }
 
     @Test
-    void gizmoEditsGoToTheHandlerFirstElseRest() {
+    void gizmoEditsAreRestEdits() {
         BoneStore store = new BoneStore();
         store.setBones(List.of(bone("b", null, v(0, 0, 0), v(0, 0, 0), v(0, 0, 0), v(0, 1, 0))));
 
         store.editLocal("b", new Vector3f(1, 2, 3), null);
-        assertEquals(1f, store.getById("b").posX(), "no handler: a rest edit");
-
-        store.setPoseEditHandler((id, pos, rot) -> {
-            store.setBonePose(id, pos, rot);
-            return true;
-        });
+        assertEquals(1f, store.getById("b").posX(), "a rest edit");
         store.editLocal("b", null, new Vector3f(0, 45, 0));
-        assertEquals(0f, store.getById("b").rotY(), "consumed edits never touch the rest bone");
-        assertEquals(new Vector3f(0, 45, 0), store.getLocalRotation("b"));
+        assertEquals(45f, store.getById("b").rotY());
         assertEquals(new Vector3f(1, 2, 3), store.getLocalPosition("b"), "unchanged component keeps its value");
     }
 

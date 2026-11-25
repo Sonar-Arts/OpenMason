@@ -8,7 +8,7 @@ import com.openmason.engine.format.omui.UiAnimationClip.LoopMode;
 import com.openmason.engine.format.omui.UiEasing;
 import com.openmason.engine.ui.runtime.UiDocumentInstance;
 import com.openmason.engine.ui.runtime.UiElement;
-import com.openmason.main.systems.menus.animationEditor.panels.TimelineLayout;
+import com.openmason.main.systems.uiEditor.timeline.TimelineLayout;
 import com.openmason.main.systems.uiEditor.command.AnimationCommands;
 import com.openmason.main.systems.uiEditor.command.UiCommand;
 import com.openmason.main.systems.uiEditor.document.UiEditorDocument;

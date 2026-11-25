@@ -52,24 +52,13 @@ public final class BoneStore {
         }
     }
 
-    /**
-     * Intercepts a gizmo edit of a bone's local position/rotation (see {@link #editLocal}). Return
-     * true when the edit was consumed as animation (posed / auto-keyed); false lets it become a rest
-     * edit.
-     */
-    @FunctionalInterface
-    public interface PoseEditHandler {
-        boolean onBoneEdit(String boneId, Vector3f position, Vector3f rotation);
-    }
-
     private final List<OMOFormat.BoneEntry> bones = new ArrayList<>();
     private final Map<String, OMOFormat.BoneEntry> byId = new HashMap<>();
 
-    // Pose layer (animation preview).
+    // Pose layer (a posed preview of the Scene model; the Animation tab poses its own viewport).
     private final Map<String, BonePose> pose = new LinkedHashMap<>();
     private boolean poseActive;
     private Function<String, PartTransform> partRestLookup;
-    private PoseEditHandler poseEditHandler;
 
     // Native solve cache: frames relative to each chain's external root frame.
     private boolean cacheDirty = true;
@@ -300,16 +289,6 @@ public final class BoneStore {
         clearPose(true);
     }
 
-    /** Install the gizmo pose-edit interceptor (the animation editor); null removes it. */
-    public void setPoseEditHandler(PoseEditHandler handler) {
-        this.poseEditHandler = handler;
-    }
-
-    /** The installed pose-edit interceptor, or null. */
-    public PoseEditHandler getPoseEditHandler() {
-        return poseEditHandler;
-    }
-
     /** The bone's effective local position: posed while the pose layer has it, else rest. */
     public Vector3f getLocalPosition(String boneId) {
         BonePose p = getPose(boneId);
@@ -327,18 +306,14 @@ public final class BoneStore {
     }
 
     /**
-     * A viewport (gizmo) edit of a bone's local position/rotation (null = unchanged). The pose-edit
-     * handler gets it first (the animation editor poses / auto-keys it); otherwise it is a REST edit.
+     * A viewport (gizmo) edit of a bone's local position/rotation (null = unchanged): a REST edit.
+     * (Animation is authored in the Animation tab's own viewport since OM #165.)
      */
     public void editLocal(String boneId, Vector3f position, Vector3f rotation) {
         OMOFormat.BoneEntry b = byId.get(boneId);
         if (b == null) return;
         Vector3f pos = position != null ? position : getLocalPosition(boneId);
         Vector3f rot = rotation != null ? rotation : getLocalRotation(boneId);
-        PoseEditHandler handler = poseEditHandler;
-        if (handler != null && handler.onBoneEdit(boneId, new Vector3f(pos), new Vector3f(rot))) {
-            return;
-        }
         put(new OMOFormat.BoneEntry(
                 b.id(), b.name(), b.parentBoneId(),
                 b.originX(), b.originY(), b.originZ(),

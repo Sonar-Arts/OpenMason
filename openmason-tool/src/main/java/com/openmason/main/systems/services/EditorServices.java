@@ -4,7 +4,6 @@ import com.openmason.api.ServiceRegistry;
 import com.openmason.main.systems.ViewportController;
 import com.openmason.main.systems.mcp.approval.ApprovalGate;
 import com.openmason.main.systems.mcp.approval.SaveSheetGate;
-import com.openmason.main.systems.menus.animationEditor.AnimationEditorImGui;
 import com.openmason.main.systems.menus.dialogs.FileDialogService;
 import com.openmason.main.systems.menus.panes.propertyPane.PropertyPanelImGui;
 import com.openmason.main.systems.menus.textureCreator.TextureCreatorImGui;
@@ -72,9 +71,6 @@ public final class EditorServices {
         return get(PropertyPanelImGui.class);
     }
 
-    public AnimationEditorImGui getAnimationEditor() {
-        return get(AnimationEditorImGui.class);
-    }
 
     public SceneViewerImGuiInterface getSceneViewer() {
         return get(SceneViewerImGuiInterface.class);

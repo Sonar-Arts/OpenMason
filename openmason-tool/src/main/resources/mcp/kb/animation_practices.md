@@ -38,5 +38,5 @@
 - Which clip names a game plays for which state is game-specific: see the
   game target's conventions pack (Stonebreak: stonebreak_conventions).
 - om.anim clips are DETACHED: c.save("/abs/path.omanim") writes only on
-  script success; load into the editor with anim_load to preview. Verify with
-  anim transport + viewport_capture at 2–3 timestamps, not by trusting keys.
+  script success; open it with anim_open to preview. Verify with anim_get_pose
+  (world points) at 2-3 timestamps, not by trusting keys.

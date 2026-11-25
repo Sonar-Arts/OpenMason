@@ -54,10 +54,10 @@ Canvas edits land in the texture editor's own history (`undo` domain:"texture").
    bone's tail); bending meshes = `skin_auto_weights` (topic
    `skinning`), then `skin_mirror {axis:"x", source_sign:1}`.
 3. Sockets if needed: `attach_create {name:"Hatzone", parent_part:"head"}`.
-4. Clip: `anim_new_clip` → `anim_set_clip {name, duration, fps, loop}` →
-   keyframes on bones or parts at t=0 and t=duration for a breathing bob
-   (`anim_insert_keyframe {part_id_or_name:"body", time:0, position:[0,0,0]}` ...).
-5. Check: `anim_transport {action:"seek", time}` + `anim_apply_pose` + `viewport_capture`.
+4. Clip (save the model first): `anim_new {model, name, duration}` → one `anim_edit`
+   with `key` ops on bones or parts at t=0 and t=duration for a breathing bob
+   (`{op:"key", joint:"body", time:0, pos:[0,0,0]}` ...), topic `animation`.
+5. Check: `anim_get_pose {time}` (world points) at 2-3 times, then `anim_save`.
 
 ## Refine an existing model
 `model_summary` → `viewport_capture` → small script (`om.part("body").faces(

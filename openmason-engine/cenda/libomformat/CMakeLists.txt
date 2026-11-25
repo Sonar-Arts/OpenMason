@@ -60,6 +60,7 @@ add_library(omformat STATIC
         src/omchar.cpp
         src/omprofile.cpp
         src/omanim.cpp
+        src/omanim_author.cpp
         src/omanimgraph.cpp
         src/omanimgraph_edit.cpp
         src/omlook.cpp

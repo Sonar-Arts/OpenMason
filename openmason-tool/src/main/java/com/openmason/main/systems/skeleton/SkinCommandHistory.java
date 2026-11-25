@@ -16,9 +16,18 @@ public final class SkinCommandHistory {
     private final SkinStore store;
     private final Deque<Entry> undoStack = new ArrayDeque<>();
     private final Deque<Entry> redoStack = new ArrayDeque<>();
+    private Runnable onChange = () -> { };
 
     public SkinCommandHistory(SkinStore store) {
         this.store = store;
+    }
+
+    /**
+     * Called after every recorded edit, undo and redo (OM #165: weight edits mark the model dirty - the skin is
+     * saved in the .omo).
+     */
+    public void setOnChange(Runnable onChange) {
+        this.onChange = onChange == null ? () -> { } : onChange;
     }
 
     /** Runs {@code mutation} and records it as one undo step (skipped when nothing changed). */
@@ -33,6 +42,7 @@ public final class SkinCommandHistory {
         undoStack.push(new Entry(before, after, description));
         while (undoStack.size() > MAX_HISTORY_SIZE) undoStack.removeLast();
         redoStack.clear();
+        onChange.run();
     }
 
     public boolean undo() {
@@ -40,6 +50,7 @@ public final class SkinCommandHistory {
         if (e == null) return false;
         store.restore(e.before());
         redoStack.push(e);
+        onChange.run();
         return true;
     }
 
@@ -48,6 +59,7 @@ public final class SkinCommandHistory {
         if (e == null) return false;
         store.restore(e.after());
         undoStack.push(e);
+        onChange.run();
         return true;
     }
 

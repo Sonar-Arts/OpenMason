@@ -94,6 +94,26 @@ class AnimCommandsTest {
     }
 
     @Test
+    void bonesKeyLikeParts() {
+        // OM #165: om.anim keyed parts only; a bone is a joint too (track flagged bone, rest values by default).
+        doc.bones().put(new com.openmason.engine.format.omo.OMOFormat.BoneEntry("b_arm", "arm", null,
+                0, 0, 0, 0.5f, 1.5f, 0, 0, 0, 20, 0, 1, 0));
+        cmds.anim().createClip("wave", 1f, 30f, true);
+        cmds.anim().key(null, "arm", 0f, null, null, null, null);
+        cmds.anim().key(null, "b_arm", 0.5f, null, new Vector3f(0, 0, 90), null, "ease_in_out");
+        cmds.anim().setLayer(null, "overlay", List.of("arm"), null, null, null);
+        cmds.anim().save(null, "wave.omanim");
+        ParsedAnimClip parsed = readClip(cmds.anim().flushSaves().get(0));
+        ParsedAnimTrack track = parsed.tracks().get(0);
+        assertEquals("arm", track.partName());
+        assertEquals(2, track.keyframes().size());
+        assertEquals(1.5f, track.keyframes().get(0).position().y, 1e-5, "omitted = the bone's rest position");
+        assertEquals(20f, track.keyframes().get(0).rotation().z, 1e-5);
+        assertEquals(90f, track.keyframes().get(1).rotation().z, 1e-5);
+        assertEquals(List.of("arm"), parsed.layer().maskParts());
+    }
+
+    @Test
     void teachingErrors() {
         // No clip yet.
         assertThrows(CommandException.class,

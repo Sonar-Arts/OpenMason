@@ -23,7 +23,7 @@ public final class MetaToolDefinitions {
     private final BoneEditingService bones;
     private final SkinEditingService skin;
     private final AttachmentEditingService attachments;
-    private final AnimationEditingService animation;
+    private final com.openmason.main.systems.animation.mcp.AnimationEditingService animation;
     private final ObjectMapper mapper;
     private final McpGuide guide;
 
@@ -33,7 +33,7 @@ public final class MetaToolDefinitions {
                                BoneEditingService bones,
                                SkinEditingService skin,
                                AttachmentEditingService attachments,
-                               AnimationEditingService animation,
+                               com.openmason.main.systems.animation.mcp.AnimationEditingService animation,
                                ObjectMapper mapper,
                                McpGuide guide) {
         this.summary = summary;
@@ -106,7 +106,7 @@ public final class MetaToolDefinitions {
             case "bone" -> undo ? bones.undo() : bones.redo();
             case "skin" -> undo ? skin.undo() : skin.redo();
             case "attach" -> undo ? attachments.undo() : attachments.redo();
-            case "anim" -> undo ? animation.undo() : animation.redo();
+            case "anim" -> animation.undo(!undo);
             default -> throw McpErrors.invalidEnum("domain", d,
                     java.util.List.of("model", "texture", "bone", "skin", "attach", "anim"));
         };
