@@ -1,6 +1,6 @@
 #include "omformat/omchar.hpp"
 
-#include <yyjson.h>
+#include "json_util.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -19,20 +19,9 @@ namespace {
 // ---------------------------------------------------------------------------------------------
 // Reading.
 
-struct DocDeleter {
-    void operator()(yyjson_doc* d) const { yyjson_doc_free(d); }
-};
-using DocPtr = std::unique_ptr<yyjson_doc, DocDeleter>;
-
-struct MutDocDeleter {
-    void operator()(yyjson_mut_doc* d) const { yyjson_mut_doc_free(d); }
-};
-using MutDocPtr = std::unique_ptr<yyjson_mut_doc, MutDocDeleter>;
-
-struct FreeDeleter {
-    void operator()(char* p) const { std::free(p); }
-};
-using CharPtr = std::unique_ptr<char, FreeDeleter>;
+using json::CharPtr;
+using json::DocPtr;
+using json::MutDocPtr;
 
 [[noreturn]] void fail(const std::string& message) {
     throw format_error(".omchar: " + message);
@@ -126,7 +115,7 @@ void require_unique(const std::vector<T>& items, KeyOf key, const char* section)
     }
 }
 
-constexpr const char* kKnownKeys[] = {"format", "version", "name", "objectId", "profile", "skeleton",
+constexpr const char* kKnownKeys[] = {"format", "version", "name", "objectId", "profile", "facing", "locked", "skeleton",
                                       "roles", "referencePose", "limits", "ikGoals", "chains",
                                       "sockets", "metrics", "animGraph", "appearance"};
 
@@ -321,6 +310,8 @@ std::string write_manifest(const Character& c) {
     w.put_str(root, "name", c.name);
     w.put_str(root, "objectId", c.object_id);
     w.put_str(root, "profile", c.profile);
+    w.put_str(root, "facing", c.facing);
+    if (c.locked) w.put(root, "locked", yyjson_mut_true(w.doc()));
 
     if (!c.model_entry.empty() || !c.model_ref.empty() || !c.joints.empty() || !c.joint_hash.empty()) {
         yyjson_mut_val* sk = w.obj();
@@ -442,6 +433,10 @@ void Character::set_joints(std::vector<SkeletonJoint> new_joints) {
     joint_hash = omchar::joint_hash(joints);
 }
 
+bool valid_facing(std::string_view facing) {
+    return facing == "-z" || facing == "+z" || facing == "-x" || facing == "+x";
+}
+
 std::string minify_json_object(std::string_view json) {
     DocPtr doc = parse_json(json, "appearance");
     yyjson_val* root = yyjson_doc_get_root(doc.get());
@@ -502,6 +497,12 @@ Character read(std::span<const std::byte> archive) {
     c.name = str_field(root, "name", "manifest", false);
     c.object_id = str_field(root, "objectId", "manifest", false);
     c.profile = str_field(root, "profile", "manifest", false);
+    c.facing = str_field(root, "facing", "manifest", false);
+    if (!c.facing.empty() && !valid_facing(c.facing)) fail("facing must be -z, +z, -x or +x");
+    if (yyjson_val* locked = yyjson_obj_get(root, "locked")) {
+        if (!yyjson_is_bool(locked)) fail("\"locked\" must be true or false");
+        c.locked = yyjson_get_bool(locked);
+    }
     c.anim_graph = str_field(root, "animGraph", "manifest", false);
     if (yyjson_val* sk = yyjson_obj_get(root, "skeleton")) read_skeleton(sk, c, entries);
     read_sections(root, c);

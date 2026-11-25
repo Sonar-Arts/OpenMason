@@ -1,0 +1,613 @@
+{
+  "format": "omprofile",
+  "version": "1.0",
+  "id": "bird",
+  "name": "Bird",
+  "description": "Winged biped. Frame: +Y up, faces -Z, the bird's left is -X. Reference pose: wings spread level, legs straight down.",
+  "facing": {
+    "from": "hips",
+    "to": "head"
+  },
+  "roles": [
+    {
+      "name": "hips",
+      "parent": null,
+      "required": true,
+      "side": "center",
+      "toward": [
+        "spine",
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        0,
+        -1
+      ],
+      "match": [
+        [
+          "hips",
+          1
+        ],
+        [
+          "pelvis",
+          1
+        ],
+        [
+          "root",
+          0.4
+        ],
+        [
+          "body",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "spine",
+      "parent": "hips",
+      "required": true,
+      "side": "center",
+      "toward": [
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        0,
+        -1
+      ],
+      "match": [
+        [
+          "spine",
+          1
+        ],
+        [
+          "torso",
+          0.9
+        ],
+        [
+          "chest",
+          0.8
+        ],
+        [
+          "body",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "neck",
+      "parent": "spine",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "head"
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "match": [
+        [
+          "neck",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "required": true,
+      "side": "center",
+      "direction": [
+        0,
+        0,
+        -1
+      ],
+      "match": [
+        [
+          "head",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "beak",
+      "parent": "head",
+      "required": false,
+      "side": "center",
+      "match": [
+        [
+          "beak",
+          1
+        ],
+        [
+          "bill",
+          1
+        ],
+        [
+          "jaw",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "tail_1",
+      "parent": "hips",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "tail_2"
+      ],
+      "direction": [
+        0,
+        0,
+        1
+      ],
+      "chain": {
+        "under": "hips",
+        "keywords": [
+          "tail"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "tail_2",
+      "parent": "tail_1",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "tail_3"
+      ],
+      "direction": [
+        0,
+        0,
+        1
+      ],
+      "chain": {
+        "under": "hips",
+        "keywords": [
+          "tail"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "tail_3",
+      "parent": "tail_2",
+      "required": false,
+      "side": "center",
+      "direction": [
+        0,
+        0,
+        1
+      ],
+      "chain": {
+        "under": "hips",
+        "keywords": [
+          "tail"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "upper_wing_l",
+      "parent": "spine",
+      "required": true,
+      "side": "left",
+      "mirror": "upper_wing_r",
+      "toward": [
+        "lower_wing_l",
+        "wing_tip_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "upper wing",
+          1
+        ],
+        [
+          "wing upper",
+          1
+        ],
+        [
+          "wing 1",
+          0.9
+        ],
+        [
+          "wing",
+          0.8
+        ],
+        [
+          "upper arm",
+          0.6
+        ],
+        [
+          "arm",
+          0.5
+        ],
+        [
+          "shoulder",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "lower_wing_l",
+      "parent": "upper_wing_l",
+      "required": false,
+      "side": "left",
+      "mirror": "lower_wing_r",
+      "toward": [
+        "wing_tip_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "lower wing",
+          1
+        ],
+        [
+          "wing lower",
+          1
+        ],
+        [
+          "wing 2",
+          0.9
+        ],
+        [
+          "forearm",
+          0.7
+        ],
+        [
+          "elbow",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "wing_tip_l",
+      "parent": "lower_wing_l",
+      "required": false,
+      "side": "left",
+      "mirror": "wing_tip_r",
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "wing tip",
+          1
+        ],
+        [
+          "wingtip",
+          1
+        ],
+        [
+          "wing 3",
+          0.9
+        ],
+        [
+          "hand",
+          0.6
+        ],
+        [
+          "wrist",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "upper_leg_l",
+      "parent": "hips",
+      "required": true,
+      "side": "left",
+      "mirror": "upper_leg_r",
+      "toward": [
+        "lower_leg_l"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "upper leg",
+          1
+        ],
+        [
+          "thigh",
+          1
+        ],
+        [
+          "leg",
+          0.8
+        ],
+        [
+          "hip",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "lower_leg_l",
+      "parent": "upper_leg_l",
+      "required": true,
+      "side": "left",
+      "mirror": "lower_leg_r",
+      "toward": [
+        "foot_l"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "lower leg",
+          1
+        ],
+        [
+          "shin",
+          1
+        ],
+        [
+          "knee",
+          0.8
+        ],
+        [
+          "tarsus",
+          0.9
+        ],
+        [
+          "calf",
+          0.8
+        ]
+      ]
+    },
+    {
+      "name": "foot_l",
+      "parent": "lower_leg_l",
+      "required": false,
+      "side": "left",
+      "mirror": "foot_r",
+      "match": [
+        [
+          "foot",
+          1
+        ],
+        [
+          "talon",
+          0.9
+        ],
+        [
+          "claw",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "upper_wing_r",
+      "parent": "spine",
+      "required": true,
+      "side": "right",
+      "mirror": "upper_wing_l",
+      "toward": [
+        "lower_wing_r",
+        "wing_tip_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "upper wing",
+          1
+        ],
+        [
+          "wing upper",
+          1
+        ],
+        [
+          "wing 1",
+          0.9
+        ],
+        [
+          "wing",
+          0.8
+        ],
+        [
+          "upper arm",
+          0.6
+        ],
+        [
+          "arm",
+          0.5
+        ],
+        [
+          "shoulder",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "lower_wing_r",
+      "parent": "upper_wing_r",
+      "required": false,
+      "side": "right",
+      "mirror": "lower_wing_l",
+      "toward": [
+        "wing_tip_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "lower wing",
+          1
+        ],
+        [
+          "wing lower",
+          1
+        ],
+        [
+          "wing 2",
+          0.9
+        ],
+        [
+          "forearm",
+          0.7
+        ],
+        [
+          "elbow",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "wing_tip_r",
+      "parent": "lower_wing_r",
+      "required": false,
+      "side": "right",
+      "mirror": "wing_tip_l",
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "wing tip",
+          1
+        ],
+        [
+          "wingtip",
+          1
+        ],
+        [
+          "wing 3",
+          0.9
+        ],
+        [
+          "hand",
+          0.6
+        ],
+        [
+          "wrist",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "upper_leg_r",
+      "parent": "hips",
+      "required": true,
+      "side": "right",
+      "mirror": "upper_leg_l",
+      "toward": [
+        "lower_leg_r"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "upper leg",
+          1
+        ],
+        [
+          "thigh",
+          1
+        ],
+        [
+          "leg",
+          0.8
+        ],
+        [
+          "hip",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "lower_leg_r",
+      "parent": "upper_leg_r",
+      "required": true,
+      "side": "right",
+      "mirror": "lower_leg_l",
+      "toward": [
+        "foot_r"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "lower leg",
+          1
+        ],
+        [
+          "shin",
+          1
+        ],
+        [
+          "knee",
+          0.8
+        ],
+        [
+          "tarsus",
+          0.9
+        ],
+        [
+          "calf",
+          0.8
+        ]
+      ]
+    },
+    {
+      "name": "foot_r",
+      "parent": "lower_leg_r",
+      "required": false,
+      "side": "right",
+      "mirror": "foot_l",
+      "match": [
+        [
+          "foot",
+          1
+        ],
+        [
+          "talon",
+          0.9
+        ],
+        [
+          "claw",
+          0.7
+        ]
+      ]
+    }
+  ]
+}

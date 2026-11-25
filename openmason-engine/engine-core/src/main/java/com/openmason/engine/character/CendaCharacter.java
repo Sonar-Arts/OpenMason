@@ -40,6 +40,8 @@ public final class CendaCharacter {
 
     static final int OK = 0;
     static final int ERR_VERSION = -4;
+    static final int ERR_LOCKED = -5;
+    static final int ERR_INVALID = -6;
 
     static final int FIELD_NAME = 0;
     static final int FIELD_OBJECT_ID = 1;
@@ -48,6 +50,11 @@ public final class CendaCharacter {
     static final int FIELD_MODEL_REF = 4;
     static final int FIELD_APPEARANCE = 5;
     static final int FIELD_JOINT_HASH = 6;
+    static final int FIELD_FACING = 7;
+
+    static final int PROFILE_ID = 0;
+    static final int PROFILE_NAME = 1;
+    static final int PROFILE_DESCRIPTION = 2;
 
     private static final String FAILURE;
     static final MethodHandle LAST_ERROR;
@@ -90,6 +97,26 @@ public final class CendaCharacter {
     static final MethodHandle REPORT_COUNT;
     static final MethodHandle REPORT_GET;
     static final MethodHandle REPORT_DESTROY;
+    static final MethodHandle PROFILE_BUILTIN_COUNT;
+    static final MethodHandle PROFILE_BUILTIN_ID;
+    static final MethodHandle PROFILE_BUILTIN;
+    static final MethodHandle PROFILE_READ;
+    static final MethodHandle PROFILE_WRITE;
+    static final MethodHandle PROFILE_FROM_RIG;
+    static final MethodHandle PROFILE_DESTROY;
+    static final MethodHandle PROFILE_GET_STRING;
+    static final MethodHandle PROFILE_ROLE_COUNT;
+    static final MethodHandle PROFILE_ROLE_GET;
+    static final MethodHandle AUTO_MAP;
+    static final MethodHandle AUTOMAP_COUNT;
+    static final MethodHandle AUTOMAP_GET;
+    static final MethodHandle AUTOMAP_NOTES;
+    static final MethodHandle AUTOMAP_DESTROY;
+    static final MethodHandle VALIDATE;
+    static final MethodHandle FIT_REFERENCE_POSE;
+    static final MethodHandle LOCK;
+    static final MethodHandle UNLOCK;
+    static final MethodHandle LOCKED;
 
     static {
         String failure = null;
@@ -165,6 +192,27 @@ public final class CendaCharacter {
         REPORT_COUNT = handle(lookup, "cc_report_count", FunctionDescriptor.of(I32, ADDR));
         REPORT_GET = handle(lookup, "cc_report_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
         REPORT_DESTROY = handle(lookup, "cc_report_destroy", FunctionDescriptor.ofVoid(ADDR));
+        PROFILE_BUILTIN_COUNT = handle(lookup, "cc_profile_builtin_count", FunctionDescriptor.of(I32));
+        PROFILE_BUILTIN_ID = handle(lookup, "cc_profile_builtin_id", FunctionDescriptor.of(ADDR, I32));
+        PROFILE_BUILTIN = handle(lookup, "cc_profile_builtin", FunctionDescriptor.of(ADDR, ADDR));
+        PROFILE_READ = handle(lookup, "cc_profile_read", FunctionDescriptor.of(ADDR, ADDR, I64, ADDR));
+        PROFILE_WRITE = handle(lookup, "cc_profile_write", FunctionDescriptor.of(ADDR, ADDR));
+        PROFILE_FROM_RIG = handle(lookup, "cc_profile_from_rig", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR));
+        PROFILE_DESTROY = handle(lookup, "cc_profile_destroy", FunctionDescriptor.ofVoid(ADDR));
+        PROFILE_GET_STRING = handle(lookup, "cc_profile_get_string", FunctionDescriptor.of(ADDR, ADDR, I32));
+        PROFILE_ROLE_COUNT = handle(lookup, "cc_profile_role_count", FunctionDescriptor.of(I32, ADDR));
+        PROFILE_ROLE_GET = handle(lookup, "cc_profile_role_get",
+            FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR, ADDR, ADDR, ADDR));
+        AUTO_MAP = handle(lookup, "cc_char_auto_map", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR));
+        AUTOMAP_COUNT = handle(lookup, "cc_automap_count", FunctionDescriptor.of(I32, ADDR));
+        AUTOMAP_GET = handle(lookup, "cc_automap_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR));
+        AUTOMAP_NOTES = handle(lookup, "cc_automap_notes", FunctionDescriptor.of(ADDR, ADDR));
+        AUTOMAP_DESTROY = handle(lookup, "cc_automap_destroy", FunctionDescriptor.ofVoid(ADDR));
+        VALIDATE = handle(lookup, "cc_char_validate", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR));
+        FIT_REFERENCE_POSE = handle(lookup, "cc_char_fit_reference_pose", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        LOCK = handle(lookup, "cc_char_lock", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        UNLOCK = handle(lookup, "cc_char_unlock", FunctionDescriptor.of(I32, ADDR));
+        LOCKED = handle(lookup, "cc_char_locked", FunctionDescriptor.of(I32, ADDR));
     }
 
     private CendaCharacter() {

@@ -85,7 +85,10 @@ public final class CharacterDefinition implements AutoCloseable {
     public enum IssueCode {
         NO_SKELETON(1), HASH_MISMATCH(2), UNKNOWN_JOINT(3), JOINT_MISSING(4), JOINT_ADDED(5),
         JOINT_REPARENTED(6), JOINT_KIND_CHANGED(7), JOINT_RENAMED(8), CHAIN_ORDER(9), CHAIN_GOAL(10),
-        LIMIT_INVERTED(11), METRIC_NEGATIVE(12), OTHER(0);
+        LIMIT_INVERTED(11), METRIC_NEGATIVE(12),
+        // Profile checks (validate) and auto-map notes.
+        REQUIRED_MISSING(13), DUPLICATE_JOINT(14), HIERARCHY_ORDER(15), MIRROR_ASYMMETRIC(16), SIDE_MISMATCH(17),
+        UNKNOWN_ROLE(18), PROFILE_MISMATCH(19), SIDE_FROM_GEOMETRY(20), PROMOTED(21), FACING(22), OTHER(0);
 
         private final int code;
 
@@ -103,6 +106,14 @@ public final class CharacterDefinition implements AutoCloseable {
 
     /** One finding of {@link #check(Rig)}; {@code subject} is the joint id, chain, socket or metric concerned. */
     public record Issue(Severity severity, IssueCode code, String subject, String message) {
+    }
+
+    /** One role {@link #autoMap} assigned; {@code confidence} in (0, 1]. */
+    public record RoleMatch(String role, String jointId, float confidence) {
+    }
+
+    /** What {@link #autoMap} did: the roles it assigned (profile order) and its notes. */
+    public record AutoMapResult(List<RoleMatch> matches, List<Issue> notes) {
     }
 
     private static final class State implements Runnable {
@@ -204,7 +215,7 @@ public final class CharacterDefinition implements AutoCloseable {
         cleanable.clean();
     }
 
-    private MemorySegment handle() {
+    MemorySegment handle() {
         MemorySegment h = state.handle;
         if (h == null) throw new IllegalStateException("CharacterDefinition is closed");
         return h;
@@ -263,6 +274,17 @@ public final class CharacterDefinition implements AutoCloseable {
     /** Sets the appearance section; must be a JSON object, null or "" clears it. */
     public void setAppearanceJson(String json) {
         setString(CendaCharacter.FIELD_APPEARANCE, json);
+    }
+
+    /** The model's forward axis: {@code -z} (the engine convention, also when unset), {@code +z}, {@code -x} or {@code +x}. */
+    public String facing() {
+        String f = getString(CendaCharacter.FIELD_FACING);
+        return f.isEmpty() ? "-z" : f;
+    }
+
+    /** Sets the facing ({@code -z}, {@code +z}, {@code -x}, {@code +x}; null or "" = unset). */
+    public void setFacing(String facing) {
+        setString(CendaCharacter.FIELD_FACING, facing);
     }
 
     /** The stored skeleton structure hash ("" when no skeleton is recorded). */
@@ -638,31 +660,159 @@ public final class CharacterDefinition implements AutoCloseable {
      * set vs the rig's joints and every joint reference.
      */
     public List<Issue> check(Rig rig) {
-        try (Arena arena = Arena.ofConfined()) {
+        try {
             // A typed local: a conditional passed straight to invokeExact is typed Object.
             MemorySegment rigHandle = rig == null ? MemorySegment.NULL : rig.nativeHandle();
             MemorySegment r = (MemorySegment) CendaCharacter.CHECK.invokeExact(handle(), rigHandle);
-            if (r.equals(MemorySegment.NULL)) throw new IllegalStateException("cc_char_check: " + CendaCharacter.lastError());
-            try {
-                int n = (int) CendaCharacter.REPORT_COUNT.invokeExact(r);
-                List<Issue> out = new ArrayList<>(n);
-                MemorySegment sev = arena.allocate(CendaCharacter.I32), code = arena.allocate(CendaCharacter.I32);
-                MemorySegment subject = slot(arena), message = slot(arena);
-                for (int i = 0; i < n; i++) {
-                    check((int) CendaCharacter.REPORT_GET.invokeExact(r, i, sev, code, subject, message), "report");
-                    int s = sev.get(CendaCharacter.I32, 0);
-                    Severity severity = s >= 2 ? Severity.ERROR : s == 1 ? Severity.WARNING : Severity.INFO;
-                    out.add(new Issue(severity, IssueCode.of(code.get(CendaCharacter.I32, 0)), read(subject), read(message)));
-                }
-                return List.copyOf(out);
-            } finally {
-                CendaCharacter.REPORT_DESTROY.invokeExact(r);
-            }
+            return takeReport(r, "cc_char_check");
         } catch (Throwable t) {
             throw CendaCharacter.rethrow(t);
         } finally {
             Reference.reachabilityFence(rig);
         }
+    }
+
+    // --- Characterization (OpenMason #154) -------------------------------------------------------
+
+    /**
+     * Replaces the role map from the rig (see {@code cenda/character.h}): candidates are the rig's bones (its
+     * parts when it has none), names are scored against the profile's aliases, roles are assigned parents
+     * first, fingers/tails structurally, and an optional parent role's joint is promoted into a missing
+     * required role. Sides come from the joints' positions, not their names. Sets the profile id and, when
+     * the facing is unset and the profile can detect it, the facing.
+     *
+     * @throws IllegalStateException when the mapping is locked
+     */
+    public AutoMapResult autoMap(Rig rig, CharacterProfile profile) {
+        Objects.requireNonNull(rig, "rig");
+        Objects.requireNonNull(profile, "profile");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment m = (MemorySegment) CendaCharacter.AUTO_MAP.invokeExact(handle(), rig.nativeHandle(), profile.handle());
+            if (m.equals(MemorySegment.NULL)) {
+                String why = CendaCharacter.lastError();
+                if (locked()) throw new IllegalStateException(why);
+                throw new IllegalArgumentException("autoMap: " + why);
+            }
+            try {
+                int n = (int) CendaCharacter.AUTOMAP_COUNT.invokeExact(m);
+                List<RoleMatch> matches = new ArrayList<>(n);
+                MemorySegment role = slot(arena), joint = slot(arena);
+                MemorySegment conf = arena.allocate(CendaCharacter.F32);
+                for (int i = 0; i < n; i++) {
+                    check((int) CendaCharacter.AUTOMAP_GET.invokeExact(m, i, role, joint, conf), "autoMap");
+                    matches.add(new RoleMatch(read(role), read(joint), conf.get(CendaCharacter.F32, 0)));
+                }
+                MemorySegment notes = (MemorySegment) CendaCharacter.AUTOMAP_NOTES.invokeExact(m);
+                return new AutoMapResult(List.copyOf(matches), issues(notes, arena));
+            } finally {
+                CendaCharacter.AUTOMAP_DESTROY.invokeExact(m);
+            }
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+            Reference.reachabilityFence(profile);
+        }
+    }
+
+    /**
+     * {@link #check(Rig)} plus the profile checks: required roles, one joint per role, hierarchy order, sides
+     * (by position, in the definition's facing), mirror symmetry, unknown roles, profile id.
+     */
+    public List<Issue> validate(Rig rig, CharacterProfile profile) {
+        Objects.requireNonNull(profile, "profile");
+        try {
+            MemorySegment rigHandle = rig == null ? MemorySegment.NULL : rig.nativeHandle();
+            MemorySegment r = (MemorySegment) CendaCharacter.VALIDATE.invokeExact(handle(), rigHandle, profile.handle());
+            return takeReport(r, "cc_char_validate");
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+            Reference.reachabilityFence(profile);
+        }
+    }
+
+    /**
+     * Replaces the reference pose with the profile's (rest normalization): every mapped role with a profile
+     * direction is turned, parents first, until it points along that direction in the model's frame.
+     *
+     * @return the number of joints turned
+     * @throws IllegalStateException when the mapping is locked
+     */
+    public int fitReferencePose(Rig rig, CharacterProfile profile) {
+        Objects.requireNonNull(rig, "rig");
+        Objects.requireNonNull(profile, "profile");
+        try {
+            int rc = (int) CendaCharacter.FIT_REFERENCE_POSE.invokeExact(handle(), rig.nativeHandle(), profile.handle());
+            if (rc < 0) check(rc, "fitReferencePose");
+            return rc;
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+            Reference.reachabilityFence(profile);
+        }
+    }
+
+    /** True when the role mapping is locked. */
+    public boolean locked() {
+        try {
+            return (int) CendaCharacter.LOCKED.invokeExact(handle()) != 0;
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        }
+    }
+
+    /**
+     * Locks the role mapping (roles, skeleton, reference pose, profile, facing) after validating it.
+     *
+     * @throws IllegalStateException with the first validation error when it does not validate
+     */
+    public void lock(Rig rig, CharacterProfile profile) {
+        Objects.requireNonNull(profile, "profile");
+        try {
+            MemorySegment rigHandle = rig == null ? MemorySegment.NULL : rig.nativeHandle();
+            int rc = (int) CendaCharacter.LOCK.invokeExact(handle(), rigHandle, profile.handle());
+            if (rc != CendaCharacter.OK) throw new IllegalStateException(CendaCharacter.lastError());
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        } finally {
+            Reference.reachabilityFence(rig);
+            Reference.reachabilityFence(profile);
+        }
+    }
+
+    public void unlock() {
+        try {
+            check((int) CendaCharacter.UNLOCK.invokeExact(handle()), "unlock");
+        } catch (Throwable t) {
+            throw CendaCharacter.rethrow(t);
+        }
+    }
+
+    /** Reads a report this call owns and destroys it. */
+    private static List<Issue> takeReport(MemorySegment report, String what) throws Throwable {
+        if (report.equals(MemorySegment.NULL)) throw new IllegalStateException(what + ": " + CendaCharacter.lastError());
+        try (Arena arena = Arena.ofConfined()) {
+            return issues(report, arena);
+        } finally {
+            CendaCharacter.REPORT_DESTROY.invokeExact(report);
+        }
+    }
+
+    private static List<Issue> issues(MemorySegment report, Arena arena) throws Throwable {
+        int n = (int) CendaCharacter.REPORT_COUNT.invokeExact(report);
+        List<Issue> out = new ArrayList<>(n);
+        MemorySegment sev = arena.allocate(CendaCharacter.I32), code = arena.allocate(CendaCharacter.I32);
+        MemorySegment subject = slot(arena), message = slot(arena);
+        for (int i = 0; i < n; i++) {
+            check((int) CendaCharacter.REPORT_GET.invokeExact(report, i, sev, code, subject, message), "report");
+            int s = sev.get(CendaCharacter.I32, 0);
+            Severity severity = s >= 2 ? Severity.ERROR : s == 1 ? Severity.WARNING : Severity.INFO;
+            out.add(new Issue(severity, IssueCode.of(code.get(CendaCharacter.I32, 0)), read(subject), read(message)));
+        }
+        return List.copyOf(out);
     }
 
     // --- Marshalling -----------------------------------------------------------------------------
@@ -699,6 +849,9 @@ public final class CharacterDefinition implements AutoCloseable {
     }
 
     private static void check(int rc, String what) {
+        if (rc == CendaCharacter.ERR_LOCKED) {
+            throw new IllegalStateException(what + ": " + CendaCharacter.lastError());
+        }
         if (rc != CendaCharacter.OK) {
             throw new IllegalArgumentException(what + ": " + CendaCharacter.lastError());
         }

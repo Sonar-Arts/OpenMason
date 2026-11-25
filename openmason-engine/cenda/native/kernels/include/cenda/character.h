@@ -14,7 +14,21 @@
  * joint replaces an existing entry in place or appends a new one; a null value argument removes the
  * entry. Vectors are float[3]; rotations are Euler XYZ degrees (the rig's convention).
  *
- * Threading: a definition belongs to one thread at a time. Reports are immutable.
+ * PROFILES AND CHARACTERIZATION (OpenMason #154). A profile (cc_profile; format omformat/omprofile.hpp) is
+ * the set of named roles a skeleton maps onto: built-in "humanoid", "quadruped", "bird", or a custom .omprofile.
+ * cc_char_auto_map fills the role map from a rig: candidates are the rig's BONES (its parts only when it has
+ * no bones); names are tokenized (camelCase, separators, namespaces) and scored against each role's aliases,
+ * roles are assigned parents first so each lies under its nearest mapped ancestor, chain roles (fingers,
+ * tails) are matched structurally, and an optional parent role is promoted into a missing required child
+ * (a "shoulder" joint that is the upper arm). SIDES COME FROM GEOMETRY, not names: the model's facing is
+ * detected from the profile's facing roles (default "-z"), names only pair left/right joints, and a joint
+ * named "left" that lies on the character's right maps to the right role (with a note). cc_char_validate
+ * checks the mapping against the profile; cc_char_lock refuses a mapping with errors and freezes the
+ * mapping (roles, skeleton, reference pose, profile, facing) until cc_char_unlock. cc_char_fit_reference_pose
+ * computes the reference pose (rest normalization, Godot's rest fixer): every mapped role with a profile
+ * direction is turned, parents first, until it points along that direction in the model's frame.
+ *
+ * Threading: a definition belongs to one thread at a time. Reports and profiles are immutable.
  */
 #pragma once
 
@@ -38,7 +52,9 @@ enum {
     CC_ERR_ARG = -1,      /* null handle, bad index, non-finite number, malformed argument */
     CC_ERR_RANGE = -2,    /* index out of range */
     CC_ERR_FORMAT = -3,   /* not a valid .omchar (cc_last_error says why) */
-    CC_ERR_VERSION = -4   /* a newer major version of the format */
+    CC_ERR_VERSION = -4,  /* a newer major version of the format */
+    CC_ERR_LOCKED = -5,   /* the role mapping is locked */
+    CC_ERR_INVALID = -6   /* validation found errors (cc_char_lock) */
 };
 
 /* String fields (cc_char_get_string / cc_char_set_string). */
@@ -49,7 +65,8 @@ enum {
     CC_FIELD_ANIM_GRAPH = 3,
     CC_FIELD_MODEL_REF = 4,       /* the skeleton model by object id or path, when not embedded */
     CC_FIELD_APPEARANCE = 5,      /* a JSON object (opaque until OpenMason #162); "" = none */
-    CC_FIELD_JOINT_HASH = 6       /* read-only: the stored skeleton structure hash */
+    CC_FIELD_JOINT_HASH = 6,      /* read-only: the stored skeleton structure hash */
+    CC_FIELD_FACING = 7           /* "-z" | "+z" | "-x" | "+x"; "" = "-z" */
 };
 
 /* Joint kinds (as cr_rig: CR_JOINT_PART / CR_JOINT_BONE). */
@@ -194,7 +211,18 @@ enum {
     CC_CHECK_CHAIN_ORDER = 9,        /* error: a chain's start is not an ancestor of its end */
     CC_CHECK_CHAIN_GOAL = 10,        /* error: a chain names an IK goal that does not exist */
     CC_CHECK_LIMIT_INVERTED = 11,    /* error: a limit's min exceeds its max on some axis */
-    CC_CHECK_METRIC_NEGATIVE = 12    /* error: a metric is negative */
+    CC_CHECK_METRIC_NEGATIVE = 12,   /* error: a metric is negative */
+    /* Profile checks (cc_char_validate) and auto-map notes. */
+    CC_CHECK_REQUIRED_MISSING = 13,  /* error: a required profile role is not mapped */
+    CC_CHECK_DUPLICATE_JOINT = 14,   /* error: two roles map to one joint */
+    CC_CHECK_HIERARCHY_ORDER = 15,   /* error: a role's joint is not under its nearest mapped ancestor role's joint */
+    CC_CHECK_MIRROR_ASYMMETRIC = 16, /* warning: a left/right pair is not mirror images (5% of the skeleton height) */
+    CC_CHECK_SIDE_MISMATCH = 17,     /* error: a left role's joint lies on the character's right (or the reverse) */
+    CC_CHECK_UNKNOWN_ROLE = 18,      /* warning: a mapped role the profile does not define */
+    CC_CHECK_PROFILE_MISMATCH = 19,  /* warning: the definition names another profile */
+    CC_CHECK_SIDE_FROM_GEOMETRY = 20,/* info (auto-map): a joint's name says one side, its position the other */
+    CC_CHECK_PROMOTED = 21,          /* info (auto-map): an optional parent role's joint was used for a required role */
+    CC_CHECK_FACING = 22             /* info (auto-map): how the facing was found */
 };
 
 /* Checks the definition on its own and, with a rig (may be NULL), against that rig: the recorded
@@ -206,6 +234,69 @@ int32_t cc_report_max_severity(const cc_report* r);
 int32_t cc_report_get(const cc_report* r, int32_t index, int32_t* out_severity, int32_t* out_code,
                       const char** out_subject, const char** out_message);
 void cc_report_destroy(cc_report* r);
+
+/* --- Profiles ------------------------------------------------------------------------------------ */
+
+typedef struct cc_profile cc_profile;
+typedef struct cc_automap cc_automap;
+
+/* Profile string fields. */
+enum {
+    CC_PROFILE_ID = 0,
+    CC_PROFILE_NAME = 1,
+    CC_PROFILE_DESCRIPTION = 2
+};
+
+/* Sides (cc_profile_role_get). */
+enum {
+    CC_SIDE_CENTER = 0,
+    CC_SIDE_LEFT = 1,
+    CC_SIDE_RIGHT = 2
+};
+
+int32_t cc_profile_builtin_count(void);
+const char* cc_profile_builtin_id(int32_t index);
+/* A copy of a built-in profile; NULL for an unknown id. */
+cc_profile* cc_profile_builtin(const char* id);
+/* Parses an .omprofile (JSON). NULL on failure, *out_result = CC_ERR_FORMAT / CC_ERR_VERSION / CC_ERR_ARG. */
+cc_profile* cc_profile_read(const uint8_t* json, int64_t length, int32_t* out_result);
+cc_bytes* cc_profile_write(const cc_profile* p);
+/* A profile with one role per rig candidate joint (its bones, or its parts when it has none), named after the
+ * joint, parents and left/right pairs from the hierarchy and names, every role required, directions from the
+ * rest pose in the profile frame (the definition's facing when c is given, else "-z"). For custom creatures. */
+cc_profile* cc_profile_from_rig(const cr_rig* rig, const cc_char* c, const char* id);
+void cc_profile_destroy(cc_profile* p);
+const char* cc_profile_get_string(const cc_profile* p, int32_t field);
+int32_t cc_profile_role_count(const cc_profile* p);
+/* out_parent / out_mirror get "" for none; out_direction (3 floats) is zero when *out_has_direction is 0. */
+int32_t cc_profile_role_get(const cc_profile* p, int32_t index, const char** out_name, const char** out_parent,
+                            const char** out_mirror, int32_t* out_side, int32_t* out_required,
+                            float* out_direction, int32_t* out_has_direction);
+/* Index of a role, -1 when none. */
+int32_t cc_profile_role_find(const cc_profile* p, const char* name);
+
+/* --- Characterization ---------------------------------------------------------------------------- */
+
+/* Replaces the role map from the rig (see the header comment), sets the profile id and, when the facing is
+ * not set, the detected facing. NULL on failure (locked: CC_ERR_LOCKED in cc_last_error). */
+cc_automap* cc_char_auto_map(cc_char* c, const cr_rig* rig, const cc_profile* profile);
+int32_t cc_automap_count(const cc_automap* m);
+/* confidence in (0, 1]: the alias score (structural chain matches 0.9, promotions x0.8). */
+int32_t cc_automap_get(const cc_automap* m, int32_t index, const char** out_role, const char** out_joint,
+                       float* out_confidence);
+/* Notes (side from geometry, promotions, facing, required roles left unmapped); owned by the result. */
+const cc_report* cc_automap_notes(const cc_automap* m);
+void cc_automap_destroy(cc_automap* m);
+
+/* cc_char_check(c, rig) plus the profile checks (CC_CHECK_REQUIRED_MISSING .. CC_CHECK_PROFILE_MISMATCH). */
+cc_report* cc_char_validate(const cc_char* c, const cr_rig* rig, const cc_profile* profile);
+/* Replaces the reference pose with the fitted one; returns the number of roles turned (>= 0) or CC_ERR_*. */
+int32_t cc_char_fit_reference_pose(cc_char* c, const cr_rig* rig, const cc_profile* profile);
+
+/* Lock: CC_ERR_INVALID (and the first error in cc_last_error) when validation finds an error. */
+int32_t cc_char_lock(cc_char* c, const cr_rig* rig, const cc_profile* profile);
+int32_t cc_char_unlock(cc_char* c);
+int32_t cc_char_locked(const cc_char* c);
 
 #ifdef __cplusplus
 }

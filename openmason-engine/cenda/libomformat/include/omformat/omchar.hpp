@@ -12,6 +12,8 @@
 //   format         "omchar"
 //   version        "1.0" (readers accept 1.x; a newer major is refused)
 //   name, objectId, profile                     strings
+//   facing         "-z" | "+z" | "-x" | "+x": the model's forward axis (absent = "-z", the engine convention)
+//   locked         true when the role mapping is locked (only a definition that passes validation locks)
 //   skeleton       { model, modelRef, jointHash, joints: [{id, name, parent|null, kind: part|bone}] }
 //   roles          { "<role>": "<joint id>", ... }            (profile roles, see OpenMason #154)
 //   referencePose  [{joint, rot:[x,y,z]}]   local Euler XYZ degrees, absolute (like an OMANIM key)
@@ -132,6 +134,8 @@ struct Character {
     std::string name;
     std::string object_id;
     std::string profile;
+    std::string facing;  // "" = "-z"
+    bool locked = false;
     std::string anim_graph;
 
     // Skeleton.
@@ -161,6 +165,9 @@ struct Character {
 // Structure hash of a joint set: FNV-1a 64 over (id, parent id, kind) of every joint, sorted by id.
 // Names are left out (a rename breaks nothing: references are ids). Format "fnv1a64:<16 hex>".
 std::string joint_hash(const std::vector<SkeletonJoint>& joints);
+
+// True for a valid facing value ("-z", "+z", "-x", "+x").
+bool valid_facing(std::string_view facing);
 
 // Validates a JSON object and returns it minified (for Character::appearance_json). Throws format_error
 // when the text is not a JSON object.

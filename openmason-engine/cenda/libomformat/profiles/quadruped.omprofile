@@ -1,0 +1,807 @@
+{
+  "format": "omprofile",
+  "version": "1.0",
+  "id": "quadruped",
+  "name": "Quadruped",
+  "description": "Four-legged creature. Frame: +Y up, faces -Z, the creature's left is -X. Reference pose: legs straight down, spine level.",
+  "facing": {
+    "from": "hips",
+    "to": "head"
+  },
+  "roles": [
+    {
+      "name": "hips",
+      "parent": null,
+      "required": true,
+      "side": "center",
+      "toward": [
+        "spine",
+        "chest",
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        0,
+        -1
+      ],
+      "match": [
+        [
+          "hips",
+          1
+        ],
+        [
+          "pelvis",
+          1
+        ],
+        [
+          "hip",
+          0.8
+        ],
+        [
+          "root",
+          0.4
+        ],
+        [
+          "rump",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "spine",
+      "parent": "hips",
+      "required": true,
+      "side": "center",
+      "toward": [
+        "chest",
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        0,
+        -1
+      ],
+      "match": [
+        [
+          "spine",
+          1
+        ],
+        [
+          "back",
+          0.6
+        ],
+        [
+          "torso",
+          0.9
+        ],
+        [
+          "body",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "chest",
+      "parent": "spine",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        0,
+        -1
+      ],
+      "match": [
+        [
+          "chest",
+          1
+        ],
+        [
+          "spine 1",
+          0.9
+        ],
+        [
+          "shoulders",
+          0.7
+        ],
+        [
+          "withers",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "neck",
+      "parent": "chest",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "head"
+      ],
+      "direction": [
+        0,
+        0.7071067811865476,
+        -0.7071067811865476
+      ],
+      "match": [
+        [
+          "neck",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "required": true,
+      "side": "center",
+      "direction": [
+        0,
+        0,
+        -1
+      ],
+      "match": [
+        [
+          "head",
+          1
+        ],
+        [
+          "skull",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "jaw",
+      "parent": "head",
+      "required": false,
+      "side": "center",
+      "match": [
+        [
+          "jaw",
+          1
+        ],
+        [
+          "mouth",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "ear_l",
+      "parent": "head",
+      "required": false,
+      "side": "left",
+      "mirror": "ear_r",
+      "match": [
+        [
+          "ear",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "ear_r",
+      "parent": "head",
+      "required": false,
+      "side": "right",
+      "mirror": "ear_l",
+      "match": [
+        [
+          "ear",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "tail_1",
+      "parent": "hips",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "tail_2"
+      ],
+      "direction": [
+        0,
+        0,
+        1
+      ],
+      "chain": {
+        "under": "hips",
+        "keywords": [
+          "tail"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "tail_2",
+      "parent": "tail_1",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "tail_3"
+      ],
+      "direction": [
+        0,
+        0,
+        1
+      ],
+      "chain": {
+        "under": "hips",
+        "keywords": [
+          "tail"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "tail_3",
+      "parent": "tail_2",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "tail_4"
+      ],
+      "direction": [
+        0,
+        0,
+        1
+      ],
+      "chain": {
+        "under": "hips",
+        "keywords": [
+          "tail"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "tail_4",
+      "parent": "tail_3",
+      "required": false,
+      "side": "center",
+      "direction": [
+        0,
+        0,
+        1
+      ],
+      "chain": {
+        "under": "hips",
+        "keywords": [
+          "tail"
+        ],
+        "position": 3
+      }
+    },
+    {
+      "name": "front_upper_leg_l",
+      "parent": "chest",
+      "required": true,
+      "side": "left",
+      "mirror": "front_upper_leg_r",
+      "toward": [
+        "front_lower_leg_l"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "front upper leg",
+          1
+        ],
+        [
+          "front thigh",
+          1
+        ],
+        [
+          "front leg",
+          0.9
+        ],
+        [
+          "fore leg",
+          0.9
+        ],
+        [
+          "foreleg",
+          0.9
+        ],
+        [
+          "upper arm",
+          0.7
+        ],
+        [
+          "arm",
+          0.6
+        ],
+        [
+          "shoulder",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "front_lower_leg_l",
+      "parent": "front_upper_leg_l",
+      "required": true,
+      "side": "left",
+      "mirror": "front_lower_leg_r",
+      "toward": [
+        "front_foot_l"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "front lower leg",
+          1
+        ],
+        [
+          "front shin",
+          0.9
+        ],
+        [
+          "front calf",
+          0.9
+        ],
+        [
+          "front knee",
+          0.9
+        ],
+        [
+          "forearm",
+          0.8
+        ],
+        [
+          "elbow",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "front_foot_l",
+      "parent": "front_lower_leg_l",
+      "required": false,
+      "side": "left",
+      "mirror": "front_foot_r",
+      "match": [
+        [
+          "front foot",
+          1
+        ],
+        [
+          "front paw",
+          1
+        ],
+        [
+          "front hoof",
+          1
+        ],
+        [
+          "hand",
+          0.6
+        ],
+        [
+          "paw",
+          0.5
+        ],
+        [
+          "hoof",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "back_upper_leg_l",
+      "parent": "hips",
+      "required": true,
+      "side": "left",
+      "mirror": "back_upper_leg_r",
+      "toward": [
+        "back_lower_leg_l"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "back upper leg",
+          1
+        ],
+        [
+          "hind upper leg",
+          1
+        ],
+        [
+          "back thigh",
+          1
+        ],
+        [
+          "hind thigh",
+          1
+        ],
+        [
+          "back leg",
+          0.9
+        ],
+        [
+          "hind leg",
+          0.9
+        ],
+        [
+          "rear leg",
+          0.9
+        ],
+        [
+          "thigh",
+          0.6
+        ],
+        [
+          "hip",
+          0.5
+        ],
+        [
+          "leg",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "back_lower_leg_l",
+      "parent": "back_upper_leg_l",
+      "required": true,
+      "side": "left",
+      "mirror": "back_lower_leg_r",
+      "toward": [
+        "back_foot_l"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "back lower leg",
+          1
+        ],
+        [
+          "hind lower leg",
+          1
+        ],
+        [
+          "back shin",
+          0.9
+        ],
+        [
+          "hind shin",
+          0.9
+        ],
+        [
+          "hock",
+          0.8
+        ],
+        [
+          "calf",
+          0.6
+        ],
+        [
+          "knee",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "back_foot_l",
+      "parent": "back_lower_leg_l",
+      "required": false,
+      "side": "left",
+      "mirror": "back_foot_r",
+      "match": [
+        [
+          "back foot",
+          1
+        ],
+        [
+          "hind foot",
+          1
+        ],
+        [
+          "back paw",
+          1
+        ],
+        [
+          "hind paw",
+          1
+        ],
+        [
+          "back hoof",
+          1
+        ],
+        [
+          "hind hoof",
+          1
+        ],
+        [
+          "foot",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "front_upper_leg_r",
+      "parent": "chest",
+      "required": true,
+      "side": "right",
+      "mirror": "front_upper_leg_l",
+      "toward": [
+        "front_lower_leg_r"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "front upper leg",
+          1
+        ],
+        [
+          "front thigh",
+          1
+        ],
+        [
+          "front leg",
+          0.9
+        ],
+        [
+          "fore leg",
+          0.9
+        ],
+        [
+          "foreleg",
+          0.9
+        ],
+        [
+          "upper arm",
+          0.7
+        ],
+        [
+          "arm",
+          0.6
+        ],
+        [
+          "shoulder",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "front_lower_leg_r",
+      "parent": "front_upper_leg_r",
+      "required": true,
+      "side": "right",
+      "mirror": "front_lower_leg_l",
+      "toward": [
+        "front_foot_r"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "front lower leg",
+          1
+        ],
+        [
+          "front shin",
+          0.9
+        ],
+        [
+          "front calf",
+          0.9
+        ],
+        [
+          "front knee",
+          0.9
+        ],
+        [
+          "forearm",
+          0.8
+        ],
+        [
+          "elbow",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "front_foot_r",
+      "parent": "front_lower_leg_r",
+      "required": false,
+      "side": "right",
+      "mirror": "front_foot_l",
+      "match": [
+        [
+          "front foot",
+          1
+        ],
+        [
+          "front paw",
+          1
+        ],
+        [
+          "front hoof",
+          1
+        ],
+        [
+          "hand",
+          0.6
+        ],
+        [
+          "paw",
+          0.5
+        ],
+        [
+          "hoof",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "back_upper_leg_r",
+      "parent": "hips",
+      "required": true,
+      "side": "right",
+      "mirror": "back_upper_leg_l",
+      "toward": [
+        "back_lower_leg_r"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "back upper leg",
+          1
+        ],
+        [
+          "hind upper leg",
+          1
+        ],
+        [
+          "back thigh",
+          1
+        ],
+        [
+          "hind thigh",
+          1
+        ],
+        [
+          "back leg",
+          0.9
+        ],
+        [
+          "hind leg",
+          0.9
+        ],
+        [
+          "rear leg",
+          0.9
+        ],
+        [
+          "thigh",
+          0.6
+        ],
+        [
+          "hip",
+          0.5
+        ],
+        [
+          "leg",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "back_lower_leg_r",
+      "parent": "back_upper_leg_r",
+      "required": true,
+      "side": "right",
+      "mirror": "back_lower_leg_l",
+      "toward": [
+        "back_foot_r"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "back lower leg",
+          1
+        ],
+        [
+          "hind lower leg",
+          1
+        ],
+        [
+          "back shin",
+          0.9
+        ],
+        [
+          "hind shin",
+          0.9
+        ],
+        [
+          "hock",
+          0.8
+        ],
+        [
+          "calf",
+          0.6
+        ],
+        [
+          "knee",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "back_foot_r",
+      "parent": "back_lower_leg_r",
+      "required": false,
+      "side": "right",
+      "mirror": "back_foot_l",
+      "match": [
+        [
+          "back foot",
+          1
+        ],
+        [
+          "hind foot",
+          1
+        ],
+        [
+          "back paw",
+          1
+        ],
+        [
+          "hind paw",
+          1
+        ],
+        [
+          "back hoof",
+          1
+        ],
+        [
+          "hind hoof",
+          1
+        ],
+        [
+          "foot",
+          0.6
+        ]
+      ]
+    }
+  ]
+}

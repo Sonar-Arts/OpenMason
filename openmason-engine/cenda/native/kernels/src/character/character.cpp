@@ -1,49 +1,27 @@
 // Cenda character (cc_*): the .omchar editing model, checks and measurements. See cenda/character.h.
-#include "cenda/character.h"
-
-#include "../rig/rig_internal.hpp"
-#include "omformat/omchar.hpp"
+#include "character_internal.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <exception>
 #include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-namespace oc = cenda::omformat::omchar;
+using namespace cenda::character;
 
-struct cc_char {
-    oc::Character def;
-};
+namespace cenda::character {
 
-struct cc_bytes {
-    std::vector<std::byte> data;
-};
-
-struct cc_report {
-    struct Item {
-        int32_t severity;
-        int32_t code;
-        std::string subject;
-        std::string message;
-    };
-    std::vector<Item> items;
-};
-
-namespace {
-
-thread_local std::string g_last_error;
-
-int32_t error(int32_t code, const std::string& message) {
-    g_last_error = message;
-    return code;
+std::string& last_error() {
+    thread_local std::string message;
+    return message;
 }
 
-void clear_error() { g_last_error.clear(); }
+}  // namespace cenda::character
+
+namespace {
 
 bool finite3(const float* v) {
     return v == nullptr || (std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]));
@@ -60,13 +38,6 @@ void put(const oc::Vec3& v, float* out) {
     out[2] = v.z;
 }
 
-template <typename T>
-void set_out(T* out, T value) {
-    if (out != nullptr) *out = value;
-}
-
-bool valid_key(const char* s) { return s != nullptr && s[0] != '\0'; }
-
 // Replaces the entry whose key matches in place, else appends; erases when value is absent.
 template <typename T, typename KeyOf>
 void upsert(std::vector<T>& items, const std::string& key, KeyOf key_of, const T* value) {
@@ -80,49 +51,8 @@ void upsert(std::vector<T>& items, const std::string& key, KeyOf key_of, const T
     }
 }
 
-template <typename T>
-bool in_range(const std::vector<T>& items, int32_t index) {
-    return index >= 0 && static_cast<std::size_t>(index) < items.size();
-}
-
-#define CC_GUARD_BEGIN try {
-#define CC_GUARD_END(fallback)                                     \
-    }                                                              \
-    catch (const std::exception& e) {                              \
-        g_last_error = e.what();                                   \
-        return fallback;                                           \
-    }                                                              \
-    catch (...) {                                                  \
-        g_last_error = "unknown error";                            \
-        return fallback;                                           \
-    }
-
-// The point a joint stands for: a bone's head, a part's pivot (world matrix W, column-major).
-void joint_point(const cr_rig* rig, int32_t j, const float* world, double out[3]) {
-    const float* m = world + static_cast<std::size_t>(j) * 16;
-    const auto& joint = rig->joints[static_cast<std::size_t>(j)];
-    double p[3] = {0.0, 0.0, 0.0};
-    if (joint.kind == CR_JOINT_PART) {
-        p[0] = joint.origin[0];
-        p[1] = joint.origin[1];
-        p[2] = joint.origin[2];
-    }
-    for (int r = 0; r < 3; ++r) {
-        out[r] = static_cast<double>(m[r]) * p[0] + static_cast<double>(m[4 + r]) * p[1] +
-                 static_cast<double>(m[8 + r]) * p[2] + static_cast<double>(m[12 + r]);
-    }
-}
-
-int32_t rig_index(const cr_rig* rig, const std::string& id) {
-    auto it = rig->by_id.find(id);
-    return it == rig->by_id.end() ? -1 : it->second;
-}
-
-std::string role_joint(const oc::Character& def, const char* role) {
-    for (const oc::RoleBinding& r : def.roles) {
-        if (r.role == role) return r.joint;
-    }
-    return {};
+int32_t locked_error(const char* what) {
+    return error(CC_ERR_LOCKED, std::string(what) + ": the role mapping is locked (cc_char_unlock first)");
 }
 
 }  // namespace
@@ -131,7 +61,7 @@ extern "C" {
 
 int32_t cc_abi_version(void) { return CC_ABI_VERSION; }
 
-const char* cc_last_error(void) { return g_last_error.c_str(); }
+const char* cc_last_error(void) { return last_error().c_str(); }
 
 // --- Lifetime and I/O ------------------------------------------------------------------------------
 
@@ -214,6 +144,7 @@ const char* cc_char_get_string(const cc_char* c, int32_t field) {
         case CC_FIELD_MODEL_REF: return d.model_ref.c_str();
         case CC_FIELD_APPEARANCE: return d.appearance_json.c_str();
         case CC_FIELD_JOINT_HASH: return d.joint_hash.c_str();
+        case CC_FIELD_FACING: return d.facing.c_str();
         default: return "";
     }
 }
@@ -224,12 +155,17 @@ int32_t cc_char_set_string(cc_char* c, int32_t field, const char* value) {
     clear_error();
     std::string v = value == nullptr ? std::string() : std::string(value);
     oc::Character& d = c->def;
+    if (d.locked && (field == CC_FIELD_PROFILE || field == CC_FIELD_FACING)) return locked_error("cc_char_set_string");
     switch (field) {
         case CC_FIELD_NAME: d.name = std::move(v); break;
         case CC_FIELD_OBJECT_ID: d.object_id = std::move(v); break;
         case CC_FIELD_PROFILE: d.profile = std::move(v); break;
         case CC_FIELD_ANIM_GRAPH: d.anim_graph = std::move(v); break;
         case CC_FIELD_MODEL_REF: d.model_ref = std::move(v); break;
+        case CC_FIELD_FACING:
+            if (!v.empty() && !oc::valid_facing(v)) return error(CC_ERR_ARG, "facing must be -z, +z, -x or +x");
+            d.facing = std::move(v);
+            break;
         case CC_FIELD_APPEARANCE:
             try {
                 d.appearance_json = v.empty() ? std::string() : oc::minify_json_object(v);
@@ -261,6 +197,7 @@ int32_t cc_char_joint_get(const cc_char* c, int32_t index, const char** out_id, 
 
 int32_t cc_char_set_skeleton(cc_char* c, const cr_rig* rig) {
     if (c == nullptr || rig == nullptr) return error(CC_ERR_ARG, "cc_char_set_skeleton: null argument");
+    if (c->def.locked) return locked_error("cc_char_set_skeleton");
     CC_GUARD_BEGIN
     clear_error();
     std::vector<oc::SkeletonJoint> joints;
@@ -324,6 +261,7 @@ int32_t cc_char_role_get(const cc_char* c, int32_t index, const char** out_role,
 int32_t cc_char_role_set(cc_char* c, const char* role, const char* joint) {
     if (c == nullptr || !valid_key(role)) return error(CC_ERR_ARG, "cc_char_role_set: null definition or empty role");
     if (joint != nullptr && joint[0] == '\0') return error(CC_ERR_ARG, "cc_char_role_set: empty joint id");
+    if (c->def.locked) return locked_error("cc_char_role_set");
     CC_GUARD_BEGIN
     clear_error();
     oc::RoleBinding value{role, joint == nullptr ? std::string() : std::string(joint)};
@@ -359,6 +297,7 @@ int32_t cc_char_pose_get(const cc_char* c, int32_t index, const char** out_joint
 int32_t cc_char_pose_set(cc_char* c, const char* joint, const float* rot) {
     if (c == nullptr || !valid_key(joint)) return error(CC_ERR_ARG, "cc_char_pose_set: null definition or empty joint");
     if (!finite3(rot)) return error(CC_ERR_ARG, "cc_char_pose_set: non-finite rotation");
+    if (c->def.locked) return locked_error("cc_char_pose_set");
     CC_GUARD_BEGIN
     clear_error();
     oc::JointRotation value{joint, vec(rot, {})};

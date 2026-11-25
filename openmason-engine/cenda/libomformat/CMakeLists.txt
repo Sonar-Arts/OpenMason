@@ -38,10 +38,29 @@ if(NOT MSVC)
     target_compile_options(cenda_miniz PRIVATE -w)
 endif()
 
+# The shipped skeleton profiles (profiles/*.omprofile, OpenMason #154) are compiled in as byte arrays
+# (not string literals: MSVC caps a string literal at 16 KB). Editing a profile re-runs configure.
+set(OMPROFILE_ARRAYS "")
+set(OMPROFILE_ENTRIES "")
+foreach(_profile humanoid quadruped bird)
+    set(_file ${CMAKE_CURRENT_SOURCE_DIR}/profiles/${_profile}.omprofile)
+    file(READ ${_file} _hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes "${_hex}")
+    string(REGEX REPLACE "((0x[0-9a-f][0-9a-f],){24})" "\\1\n    " _bytes "${_bytes}")
+    string(APPEND OMPROFILE_ARRAYS "const unsigned char k_${_profile}[] = {\n    ${_bytes}};\n")
+    string(APPEND OMPROFILE_ENTRIES
+            "    {\"${_profile}\", std::string_view(reinterpret_cast<const char*>(k_${_profile}), sizeof k_${_profile})},\n")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_file})
+endforeach()
+configure_file(src/builtin_profiles.cpp.in ${CMAKE_CURRENT_BINARY_DIR}/builtin_profiles.cpp @ONLY)
+
 add_library(omformat STATIC
         src/version.cpp
         src/zip_archive.cpp
-        src/omchar.cpp)
+        src/omchar.cpp
+        src/omprofile.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/builtin_profiles.cpp)
+target_include_directories(omformat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(cenda::omformat ALIAS omformat)
 
 target_include_directories(omformat PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

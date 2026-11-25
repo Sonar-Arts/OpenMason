@@ -1,0 +1,1680 @@
+{
+  "format": "omprofile",
+  "version": "1.0",
+  "id": "humanoid",
+  "name": "Humanoid",
+  "description": "Two-legged, two-armed character (Unity Humanoid / Godot SkeletonProfileHumanoid / HumanIK role set). Frame: +Y up, faces -Z, the character's left is -X. Reference pose: T-pose.",
+  "facing": {
+    "roles": [
+      "foot_l",
+      "foot_r",
+      "toes_l",
+      "toes_r"
+    ]
+  },
+  "roles": [
+    {
+      "name": "hips",
+      "parent": null,
+      "required": true,
+      "side": "center",
+      "toward": [
+        "spine",
+        "chest",
+        "upper_chest",
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "match": [
+        [
+          "hips",
+          1
+        ],
+        [
+          "pelvis",
+          1
+        ],
+        [
+          "hip",
+          0.9
+        ],
+        [
+          "cog",
+          0.5
+        ],
+        [
+          "root",
+          0.4
+        ]
+      ]
+    },
+    {
+      "name": "spine",
+      "parent": "hips",
+      "required": true,
+      "side": "center",
+      "toward": [
+        "chest",
+        "upper_chest",
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "match": [
+        [
+          "spine",
+          1
+        ],
+        [
+          "spine 0",
+          1
+        ],
+        [
+          "torso",
+          0.9
+        ],
+        [
+          "abdomen",
+          0.9
+        ],
+        [
+          "lower back",
+          0.8
+        ],
+        [
+          "waist",
+          0.7
+        ],
+        [
+          "belly",
+          0.6
+        ]
+      ]
+    },
+    {
+      "name": "chest",
+      "parent": "spine",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "upper_chest",
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "match": [
+        [
+          "chest",
+          1
+        ],
+        [
+          "spine 1",
+          1
+        ],
+        [
+          "ribcage",
+          0.9
+        ],
+        [
+          "thorax",
+          0.9
+        ],
+        [
+          "rib cage",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "upper_chest",
+      "parent": "chest",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "neck",
+        "head"
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "match": [
+        [
+          "upper chest",
+          1
+        ],
+        [
+          "upperchest",
+          1
+        ],
+        [
+          "spine 2",
+          1
+        ],
+        [
+          "spine 3",
+          0.8
+        ]
+      ]
+    },
+    {
+      "name": "neck",
+      "parent": "upper_chest",
+      "required": false,
+      "side": "center",
+      "toward": [
+        "head"
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "match": [
+        [
+          "neck",
+          1
+        ],
+        [
+          "neck 1",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "required": true,
+      "side": "center",
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "match": [
+        [
+          "head",
+          1
+        ],
+        [
+          "skull",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "jaw",
+      "parent": "head",
+      "required": false,
+      "side": "center",
+      "match": [
+        [
+          "jaw",
+          1
+        ],
+        [
+          "chin",
+          0.6
+        ],
+        [
+          "mandible",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "eye_l",
+      "parent": "head",
+      "required": false,
+      "side": "left",
+      "mirror": "eye_r",
+      "match": [
+        [
+          "eye",
+          1
+        ],
+        [
+          "eyeball",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "eye_r",
+      "parent": "head",
+      "required": false,
+      "side": "right",
+      "mirror": "eye_l",
+      "match": [
+        [
+          "eye",
+          1
+        ],
+        [
+          "eyeball",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "shoulder_l",
+      "parent": "upper_chest",
+      "required": false,
+      "side": "left",
+      "mirror": "shoulder_r",
+      "toward": [
+        "upper_arm_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "shoulder",
+          1
+        ],
+        [
+          "clavicle",
+          1
+        ],
+        [
+          "collar",
+          0.9
+        ],
+        [
+          "collarbone",
+          1
+        ],
+        [
+          "collar bone",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "upper_arm_l",
+      "parent": "shoulder_l",
+      "required": true,
+      "side": "left",
+      "mirror": "upper_arm_r",
+      "toward": [
+        "lower_arm_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "upper arm",
+          1
+        ],
+        [
+          "upperarm",
+          1
+        ],
+        [
+          "up arm",
+          0.9
+        ],
+        [
+          "uparm",
+          0.9
+        ],
+        [
+          "arm",
+          0.8
+        ],
+        [
+          "humerus",
+          0.9
+        ],
+        [
+          "bicep",
+          0.7
+        ],
+        [
+          "shoulder",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "lower_arm_l",
+      "parent": "upper_arm_l",
+      "required": true,
+      "side": "left",
+      "mirror": "lower_arm_r",
+      "toward": [
+        "hand_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "lower arm",
+          1
+        ],
+        [
+          "lowerarm",
+          1
+        ],
+        [
+          "forearm",
+          1
+        ],
+        [
+          "fore arm",
+          1
+        ],
+        [
+          "elbow",
+          0.9
+        ],
+        [
+          "radius",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "hand_l",
+      "parent": "lower_arm_l",
+      "required": true,
+      "side": "left",
+      "mirror": "hand_r",
+      "toward": [
+        "middle_proximal_l",
+        "index_proximal_l",
+        "ring_proximal_l",
+        "little_proximal_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "hand",
+          1
+        ],
+        [
+          "wrist",
+          0.9
+        ],
+        [
+          "palm",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "upper_arm_twist_l",
+      "parent": "upper_arm_l",
+      "required": false,
+      "side": "left",
+      "mirror": "upper_arm_twist_r",
+      "match": [
+        [
+          "upper arm twist",
+          1
+        ],
+        [
+          "upperarm twist",
+          1
+        ],
+        [
+          "arm twist",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "lower_arm_twist_l",
+      "parent": "lower_arm_l",
+      "required": false,
+      "side": "left",
+      "mirror": "lower_arm_twist_r",
+      "match": [
+        [
+          "lower arm twist",
+          1
+        ],
+        [
+          "lowerarm twist",
+          1
+        ],
+        [
+          "forearm twist",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "shoulder_r",
+      "parent": "upper_chest",
+      "required": false,
+      "side": "right",
+      "mirror": "shoulder_l",
+      "toward": [
+        "upper_arm_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "shoulder",
+          1
+        ],
+        [
+          "clavicle",
+          1
+        ],
+        [
+          "collar",
+          0.9
+        ],
+        [
+          "collarbone",
+          1
+        ],
+        [
+          "collar bone",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "upper_arm_r",
+      "parent": "shoulder_r",
+      "required": true,
+      "side": "right",
+      "mirror": "upper_arm_l",
+      "toward": [
+        "lower_arm_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "upper arm",
+          1
+        ],
+        [
+          "upperarm",
+          1
+        ],
+        [
+          "up arm",
+          0.9
+        ],
+        [
+          "uparm",
+          0.9
+        ],
+        [
+          "arm",
+          0.8
+        ],
+        [
+          "humerus",
+          0.9
+        ],
+        [
+          "bicep",
+          0.7
+        ],
+        [
+          "shoulder",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "lower_arm_r",
+      "parent": "upper_arm_r",
+      "required": true,
+      "side": "right",
+      "mirror": "lower_arm_l",
+      "toward": [
+        "hand_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "lower arm",
+          1
+        ],
+        [
+          "lowerarm",
+          1
+        ],
+        [
+          "forearm",
+          1
+        ],
+        [
+          "fore arm",
+          1
+        ],
+        [
+          "elbow",
+          0.9
+        ],
+        [
+          "radius",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "hand_r",
+      "parent": "lower_arm_r",
+      "required": true,
+      "side": "right",
+      "mirror": "hand_l",
+      "toward": [
+        "middle_proximal_r",
+        "index_proximal_r",
+        "ring_proximal_r",
+        "little_proximal_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "match": [
+        [
+          "hand",
+          1
+        ],
+        [
+          "wrist",
+          0.9
+        ],
+        [
+          "palm",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "upper_arm_twist_r",
+      "parent": "upper_arm_r",
+      "required": false,
+      "side": "right",
+      "mirror": "upper_arm_twist_l",
+      "match": [
+        [
+          "upper arm twist",
+          1
+        ],
+        [
+          "upperarm twist",
+          1
+        ],
+        [
+          "arm twist",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "lower_arm_twist_r",
+      "parent": "lower_arm_r",
+      "required": false,
+      "side": "right",
+      "mirror": "lower_arm_twist_l",
+      "match": [
+        [
+          "lower arm twist",
+          1
+        ],
+        [
+          "lowerarm twist",
+          1
+        ],
+        [
+          "forearm twist",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "upper_leg_l",
+      "parent": "hips",
+      "required": true,
+      "side": "left",
+      "mirror": "upper_leg_r",
+      "toward": [
+        "lower_leg_l"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "upper leg",
+          1
+        ],
+        [
+          "upperleg",
+          1
+        ],
+        [
+          "thigh",
+          1
+        ],
+        [
+          "up leg",
+          1
+        ],
+        [
+          "upleg",
+          1
+        ],
+        [
+          "femur",
+          0.9
+        ],
+        [
+          "leg",
+          0.8
+        ],
+        [
+          "hip",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "lower_leg_l",
+      "parent": "upper_leg_l",
+      "required": true,
+      "side": "left",
+      "mirror": "lower_leg_r",
+      "toward": [
+        "foot_l"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "lower leg",
+          1
+        ],
+        [
+          "lowerleg",
+          1
+        ],
+        [
+          "calf",
+          1
+        ],
+        [
+          "shin",
+          1
+        ],
+        [
+          "knee",
+          0.9
+        ],
+        [
+          "tibia",
+          0.9
+        ],
+        [
+          "leg",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "foot_l",
+      "parent": "lower_leg_l",
+      "required": true,
+      "side": "left",
+      "mirror": "foot_r",
+      "match": [
+        [
+          "foot",
+          1
+        ],
+        [
+          "ankle",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "toes_l",
+      "parent": "foot_l",
+      "required": false,
+      "side": "left",
+      "mirror": "toes_r",
+      "match": [
+        [
+          "toe",
+          1
+        ],
+        [
+          "toes",
+          1
+        ],
+        [
+          "toe base",
+          1
+        ],
+        [
+          "ball",
+          0.8
+        ]
+      ]
+    },
+    {
+      "name": "upper_leg_twist_l",
+      "parent": "upper_leg_l",
+      "required": false,
+      "side": "left",
+      "mirror": "upper_leg_twist_r",
+      "match": [
+        [
+          "upper leg twist",
+          1
+        ],
+        [
+          "thigh twist",
+          1
+        ],
+        [
+          "upleg twist",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "lower_leg_twist_l",
+      "parent": "lower_leg_l",
+      "required": false,
+      "side": "left",
+      "mirror": "lower_leg_twist_r",
+      "match": [
+        [
+          "lower leg twist",
+          1
+        ],
+        [
+          "calf twist",
+          1
+        ],
+        [
+          "shin twist",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "upper_leg_r",
+      "parent": "hips",
+      "required": true,
+      "side": "right",
+      "mirror": "upper_leg_l",
+      "toward": [
+        "lower_leg_r"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "upper leg",
+          1
+        ],
+        [
+          "upperleg",
+          1
+        ],
+        [
+          "thigh",
+          1
+        ],
+        [
+          "up leg",
+          1
+        ],
+        [
+          "upleg",
+          1
+        ],
+        [
+          "femur",
+          0.9
+        ],
+        [
+          "leg",
+          0.8
+        ],
+        [
+          "hip",
+          0.7
+        ]
+      ]
+    },
+    {
+      "name": "lower_leg_r",
+      "parent": "upper_leg_r",
+      "required": true,
+      "side": "right",
+      "mirror": "lower_leg_l",
+      "toward": [
+        "foot_r"
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "match": [
+        [
+          "lower leg",
+          1
+        ],
+        [
+          "lowerleg",
+          1
+        ],
+        [
+          "calf",
+          1
+        ],
+        [
+          "shin",
+          1
+        ],
+        [
+          "knee",
+          0.9
+        ],
+        [
+          "tibia",
+          0.9
+        ],
+        [
+          "leg",
+          0.5
+        ]
+      ]
+    },
+    {
+      "name": "foot_r",
+      "parent": "lower_leg_r",
+      "required": true,
+      "side": "right",
+      "mirror": "foot_l",
+      "match": [
+        [
+          "foot",
+          1
+        ],
+        [
+          "ankle",
+          0.9
+        ]
+      ]
+    },
+    {
+      "name": "toes_r",
+      "parent": "foot_r",
+      "required": false,
+      "side": "right",
+      "mirror": "toes_l",
+      "match": [
+        [
+          "toe",
+          1
+        ],
+        [
+          "toes",
+          1
+        ],
+        [
+          "toe base",
+          1
+        ],
+        [
+          "ball",
+          0.8
+        ]
+      ]
+    },
+    {
+      "name": "upper_leg_twist_r",
+      "parent": "upper_leg_r",
+      "required": false,
+      "side": "right",
+      "mirror": "upper_leg_twist_l",
+      "match": [
+        [
+          "upper leg twist",
+          1
+        ],
+        [
+          "thigh twist",
+          1
+        ],
+        [
+          "upleg twist",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "lower_leg_twist_r",
+      "parent": "lower_leg_r",
+      "required": false,
+      "side": "right",
+      "mirror": "lower_leg_twist_l",
+      "match": [
+        [
+          "lower leg twist",
+          1
+        ],
+        [
+          "calf twist",
+          1
+        ],
+        [
+          "shin twist",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "thumb_proximal_l",
+      "parent": "hand_l",
+      "required": false,
+      "side": "left",
+      "mirror": "thumb_proximal_r",
+      "toward": [
+        "thumb_intermediate_l"
+      ],
+      "direction": [
+        -0.7071067811865476,
+        0,
+        -0.7071067811865476
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "thumb"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "thumb_intermediate_l",
+      "parent": "thumb_proximal_l",
+      "required": false,
+      "side": "left",
+      "mirror": "thumb_intermediate_r",
+      "toward": [
+        "thumb_distal_l"
+      ],
+      "direction": [
+        -0.7071067811865476,
+        0,
+        -0.7071067811865476
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "thumb"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "thumb_distal_l",
+      "parent": "thumb_intermediate_l",
+      "required": false,
+      "side": "left",
+      "mirror": "thumb_distal_r",
+      "direction": [
+        -0.7071067811865476,
+        0,
+        -0.7071067811865476
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "thumb"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "index_proximal_l",
+      "parent": "hand_l",
+      "required": false,
+      "side": "left",
+      "mirror": "index_proximal_r",
+      "toward": [
+        "index_intermediate_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "index",
+          "pointer"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "index_intermediate_l",
+      "parent": "index_proximal_l",
+      "required": false,
+      "side": "left",
+      "mirror": "index_intermediate_r",
+      "toward": [
+        "index_distal_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "index",
+          "pointer"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "index_distal_l",
+      "parent": "index_intermediate_l",
+      "required": false,
+      "side": "left",
+      "mirror": "index_distal_r",
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "index",
+          "pointer"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "middle_proximal_l",
+      "parent": "hand_l",
+      "required": false,
+      "side": "left",
+      "mirror": "middle_proximal_r",
+      "toward": [
+        "middle_intermediate_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "middle"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "middle_intermediate_l",
+      "parent": "middle_proximal_l",
+      "required": false,
+      "side": "left",
+      "mirror": "middle_intermediate_r",
+      "toward": [
+        "middle_distal_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "middle"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "middle_distal_l",
+      "parent": "middle_intermediate_l",
+      "required": false,
+      "side": "left",
+      "mirror": "middle_distal_r",
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "middle"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "ring_proximal_l",
+      "parent": "hand_l",
+      "required": false,
+      "side": "left",
+      "mirror": "ring_proximal_r",
+      "toward": [
+        "ring_intermediate_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "ring"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "ring_intermediate_l",
+      "parent": "ring_proximal_l",
+      "required": false,
+      "side": "left",
+      "mirror": "ring_intermediate_r",
+      "toward": [
+        "ring_distal_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "ring"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "ring_distal_l",
+      "parent": "ring_intermediate_l",
+      "required": false,
+      "side": "left",
+      "mirror": "ring_distal_r",
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "ring"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "little_proximal_l",
+      "parent": "hand_l",
+      "required": false,
+      "side": "left",
+      "mirror": "little_proximal_r",
+      "toward": [
+        "little_intermediate_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "little",
+          "pinky",
+          "pinkie"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "little_intermediate_l",
+      "parent": "little_proximal_l",
+      "required": false,
+      "side": "left",
+      "mirror": "little_intermediate_r",
+      "toward": [
+        "little_distal_l"
+      ],
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "little",
+          "pinky",
+          "pinkie"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "little_distal_l",
+      "parent": "little_intermediate_l",
+      "required": false,
+      "side": "left",
+      "mirror": "little_distal_r",
+      "direction": [
+        -1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_l",
+        "keywords": [
+          "little",
+          "pinky",
+          "pinkie"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "thumb_proximal_r",
+      "parent": "hand_r",
+      "required": false,
+      "side": "right",
+      "mirror": "thumb_proximal_l",
+      "toward": [
+        "thumb_intermediate_r"
+      ],
+      "direction": [
+        0.7071067811865476,
+        0,
+        -0.7071067811865476
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "thumb"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "thumb_intermediate_r",
+      "parent": "thumb_proximal_r",
+      "required": false,
+      "side": "right",
+      "mirror": "thumb_intermediate_l",
+      "toward": [
+        "thumb_distal_r"
+      ],
+      "direction": [
+        0.7071067811865476,
+        0,
+        -0.7071067811865476
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "thumb"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "thumb_distal_r",
+      "parent": "thumb_intermediate_r",
+      "required": false,
+      "side": "right",
+      "mirror": "thumb_distal_l",
+      "direction": [
+        0.7071067811865476,
+        0,
+        -0.7071067811865476
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "thumb"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "index_proximal_r",
+      "parent": "hand_r",
+      "required": false,
+      "side": "right",
+      "mirror": "index_proximal_l",
+      "toward": [
+        "index_intermediate_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "index",
+          "pointer"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "index_intermediate_r",
+      "parent": "index_proximal_r",
+      "required": false,
+      "side": "right",
+      "mirror": "index_intermediate_l",
+      "toward": [
+        "index_distal_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "index",
+          "pointer"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "index_distal_r",
+      "parent": "index_intermediate_r",
+      "required": false,
+      "side": "right",
+      "mirror": "index_distal_l",
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "index",
+          "pointer"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "middle_proximal_r",
+      "parent": "hand_r",
+      "required": false,
+      "side": "right",
+      "mirror": "middle_proximal_l",
+      "toward": [
+        "middle_intermediate_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "middle"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "middle_intermediate_r",
+      "parent": "middle_proximal_r",
+      "required": false,
+      "side": "right",
+      "mirror": "middle_intermediate_l",
+      "toward": [
+        "middle_distal_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "middle"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "middle_distal_r",
+      "parent": "middle_intermediate_r",
+      "required": false,
+      "side": "right",
+      "mirror": "middle_distal_l",
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "middle"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "ring_proximal_r",
+      "parent": "hand_r",
+      "required": false,
+      "side": "right",
+      "mirror": "ring_proximal_l",
+      "toward": [
+        "ring_intermediate_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "ring"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "ring_intermediate_r",
+      "parent": "ring_proximal_r",
+      "required": false,
+      "side": "right",
+      "mirror": "ring_intermediate_l",
+      "toward": [
+        "ring_distal_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "ring"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "ring_distal_r",
+      "parent": "ring_intermediate_r",
+      "required": false,
+      "side": "right",
+      "mirror": "ring_distal_l",
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "ring"
+        ],
+        "position": 2
+      }
+    },
+    {
+      "name": "little_proximal_r",
+      "parent": "hand_r",
+      "required": false,
+      "side": "right",
+      "mirror": "little_proximal_l",
+      "toward": [
+        "little_intermediate_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "little",
+          "pinky",
+          "pinkie"
+        ],
+        "position": 0
+      }
+    },
+    {
+      "name": "little_intermediate_r",
+      "parent": "little_proximal_r",
+      "required": false,
+      "side": "right",
+      "mirror": "little_intermediate_l",
+      "toward": [
+        "little_distal_r"
+      ],
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "little",
+          "pinky",
+          "pinkie"
+        ],
+        "position": 1
+      }
+    },
+    {
+      "name": "little_distal_r",
+      "parent": "little_intermediate_r",
+      "required": false,
+      "side": "right",
+      "mirror": "little_distal_l",
+      "direction": [
+        1.0,
+        0,
+        0
+      ],
+      "chain": {
+        "under": "hand_r",
+        "keywords": [
+          "little",
+          "pinky",
+          "pinkie"
+        ],
+        "position": 2
+      }
+    }
+  ]
+}

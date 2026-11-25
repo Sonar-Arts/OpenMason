@@ -112,7 +112,9 @@ add_library(cenda_kernels SHARED
         src/nav/nav_agents.cpp
         src/rig/rig.cpp
         src/rig/skin.cpp
-        src/character/character.cpp)
+        src/character/character.cpp
+        src/character/profile.cpp
+        src/character/characterize.cpp)
 
 target_include_directories(cenda_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cenda_kernels
