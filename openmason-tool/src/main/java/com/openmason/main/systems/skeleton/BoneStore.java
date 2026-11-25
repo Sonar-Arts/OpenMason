@@ -1,44 +1,85 @@
 package com.openmason.main.systems.skeleton;
 
 import com.openmason.engine.format.omo.OMOFormat;
+import com.openmason.engine.modeling.parts.PartTransform;
+import com.openmason.engine.rig.Rig;
+import com.openmason.engine.rig.RigJoint;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import org.joml.Vector3fc;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
  * Session-level skeleton storage for the currently loaded model.
  *
- * <p>Holds the editable list of {@link OMOFormat.BoneEntry} records along with cached
- * world-space transforms. Pure data + math; rendering is handled separately by
- * {@code BoneGizmoRenderer}, and serialization by the OMO I/O layer.
+ * <p>Holds the editable list of {@link OMOFormat.BoneEntry} records (the REST pose) plus an optional
+ * POSE layer (posed local position/rotation per bone, set by the animation preview), and exposes the
+ * bones' world frames. The frames come from the native rig ({@code cenda/rig.h} BONE joints, through
+ * {@link Rig#restWorld}): head = {@code parentFrame·T(origin)·T(pos)·R(rot)}, tail =
+ * {@code head·T(endpoint)} — children (bones or parts) inherit the tail. Java only marshals: a chain
+ * whose root bone hangs under a non-bone node (a part) is solved natively relative to that root, and
+ * the external parent frame (from {@link #setExternalParentResolver}) is multiplied on afterwards.
+ * Parent cycles (malformed data) are cut where they are detected.
  *
- * <p>The skeleton is treated as a tree where each bone's local rest-pose transform is
- * {@code T(origin) * T(pos) * R(rot_xyz)}. World transforms are composed by walking
- * each bone's parent chain. Cycles (malformed data) are detected and broken silently
- * to avoid infinite recursion.
+ * <p>While the pose layer is active ({@link #isPoseActive()}), the world frames use each posed bone's
+ * posed local values (bones without a pose entry use their rest values), so parts parented to bones
+ * follow the preview through the part manager's external resolver. {@link #clearPose()} returns to
+ * rest. Rest edits ({@link #put}) never touch the pose layer.
  *
- * <p>Single responsibility: own the bone list and expose derived pose information.
+ * <p>Single responsibility: own the bone list + pose layer and expose derived frames.
  */
 public final class BoneStore {
 
     private static final Logger logger = LoggerFactory.getLogger(BoneStore.class);
 
+    /** A bone's posed local values (scale is always 1 — bones carry no geometric scale). */
+    public record BonePose(Vector3fc position, Vector3fc rotation) {
+        public BonePose {
+            position = new Vector3f(position != null ? position : new Vector3f());
+            rotation = new Vector3f(rotation != null ? rotation : new Vector3f());
+        }
+    }
+
+    /**
+     * Intercepts a gizmo edit of a bone's local position/rotation (see {@link #editLocal}). Return
+     * true when the edit was consumed as animation (posed / auto-keyed); false lets it become a rest
+     * edit.
+     */
+    @FunctionalInterface
+    public interface PoseEditHandler {
+        boolean onBoneEdit(String boneId, Vector3f position, Vector3f rotation);
+    }
+
     private final List<OMOFormat.BoneEntry> bones = new ArrayList<>();
     private final Map<String, OMOFormat.BoneEntry> byId = new HashMap<>();
 
-    private Map<String, Matrix4f> cachedWorld;     // head-frame world matrices
-    private Map<String, Matrix4f> cachedTailWorld; // tail-frame world matrices (children inherit from these)
+    // Pose layer (animation preview).
+    private final Map<String, BonePose> pose = new LinkedHashMap<>();
+    private boolean poseActive;
+    private Function<String, PartTransform> partRestLookup;
+    private PoseEditHandler poseEditHandler;
+
+    // Native solve cache: frames relative to each chain's external root frame.
     private boolean cacheDirty = true;
+    private Map<String, Integer> indexById = Map.of();
+    private int[] chainRoot = new int[0];
+    private Matrix4f[] relHead = new Matrix4f[0];
+    private Matrix4f[] relTail = new Matrix4f[0];
+
+    /** Re-entrancy guard for cross-store parent resolution (parts ↔ bones). */
+    private final Set<String> resolvingExternal = new HashSet<>();
 
     /**
      * Resolves a parent matrix for a {@code parentBoneId} that is not a known bone id.
@@ -48,9 +89,8 @@ public final class BoneStore {
     private Function<String, Matrix4f> externalParentResolver;
 
     /**
-     * Fired after any structural mutation (set, put, remove, clear). Lets external
-     * stores (e.g. a part manager that composes its transforms with bone matrices)
-     * invalidate their own caches and rebuild.
+     * Fired after any structural mutation (set, put, remove, clear) and pose change. Lets external
+     * stores (e.g. a part manager that composes its transforms with bone matrices) rebuild.
      */
     private Runnable onChange;
 
@@ -70,7 +110,7 @@ public final class BoneStore {
         invalidate();
     }
 
-    /** Wire a callback fired after any structural mutation. */
+    /** Wire a callback fired after any structural mutation or pose change. */
     public void setOnChange(Runnable onChange) {
         this.onChange = onChange;
     }
@@ -79,7 +119,7 @@ public final class BoneStore {
         if (onChange != null) onChange.run();
     }
 
-    /** Replace the entire skeleton. Null or empty clears the skeleton. */
+    /** Replace the entire skeleton. Null or empty clears the skeleton. Pose entries of gone bones drop. */
     public void setBones(List<OMOFormat.BoneEntry> entries) {
         bones.clear();
         byId.clear();
@@ -90,18 +130,20 @@ public final class BoneStore {
                 byId.put(b.id(), b);
             }
         }
+        pose.keySet().retainAll(byId.keySet());
         invalidate();
         fireOnChange();
     }
 
-    /** Add or replace a single bone (by id). */
+    /** Add or replace a single bone (by id; a replaced bone keeps its list position). A REST edit. */
     public void put(OMOFormat.BoneEntry entry) {
         Objects.requireNonNull(entry, "entry");
         OMOFormat.BoneEntry existing = byId.get(entry.id());
         if (existing != null) {
-            bones.remove(existing);
+            bones.set(bones.indexOf(existing), entry);
+        } else {
+            bones.add(entry);
         }
-        bones.add(entry);
         byId.put(entry.id(), entry);
         invalidate();
         fireOnChange();
@@ -114,24 +156,13 @@ public final class BoneStore {
             return false;
         }
         bones.remove(existing);
-        // Re-parent any children to null (root).
-        List<OMOFormat.BoneEntry> reparented = new ArrayList<>();
-        for (OMOFormat.BoneEntry b : bones) {
+        pose.remove(boneId);
+        for (int i = 0; i < bones.size(); i++) {
+            OMOFormat.BoneEntry b = bones.get(i);
             if (boneId.equals(b.parentBoneId())) {
-                reparented.add(new OMOFormat.BoneEntry(
-                        b.id(), b.name(), null,
-                        b.originX(), b.originY(), b.originZ(),
-                        b.posX(), b.posY(), b.posZ(),
-                        b.rotX(), b.rotY(), b.rotZ(),
-                        b.endpointX(), b.endpointY(), b.endpointZ()
-                ));
-            }
-        }
-        for (OMOFormat.BoneEntry r : reparented) {
-            byId.put(r.id(), r);
-            int idx = indexOfId(r.id());
-            if (idx >= 0) {
-                bones.set(idx, r);
+                OMOFormat.BoneEntry r = withParent(b, null);
+                bones.set(i, r);
+                byId.put(r.id(), r);
             }
         }
         invalidate();
@@ -144,6 +175,7 @@ public final class BoneStore {
         if (bones.isEmpty()) return;
         bones.clear();
         byId.clear();
+        pose.clear();
         invalidate();
         fireOnChange();
     }
@@ -156,7 +188,7 @@ public final class BoneStore {
         return bones.size();
     }
 
-    /** Returns an unmodifiable snapshot of the current bone list. */
+    /** Returns an unmodifiable snapshot of the current bone list (rest pose). */
     public List<OMOFormat.BoneEntry> getBones() {
         return Collections.unmodifiableList(new ArrayList<>(bones));
     }
@@ -165,38 +197,179 @@ public final class BoneStore {
         return id == null ? null : byId.get(id);
     }
 
+    /** First bone with this exact name, else case-insensitive; null when none. */
+    public OMOFormat.BoneEntry getByName(String name) {
+        if (name == null || name.isBlank()) return null;
+        for (OMOFormat.BoneEntry b : bones) {
+            if (name.equals(b.name())) return b;
+        }
+        for (OMOFormat.BoneEntry b : bones) {
+            if (name.equalsIgnoreCase(b.name())) return b;
+        }
+        return null;
+    }
+
     /** Force the world-pose cache to rebuild on next query. */
     public void invalidate() {
         cacheDirty = true;
     }
 
+    // ===================== Pose layer =====================
+
+    /** True while the animation preview poses the skeleton (and the model's parts). */
+    public boolean isPoseActive() {
+        return poseActive;
+    }
+
+    /** The bone's pose entry, or null when it shows its rest values. */
+    public BonePose getPose(String boneId) {
+        return poseActive ? pose.get(boneId) : null;
+    }
+
+    /** Ids of the bones that currently carry a pose entry. */
+    public Set<String> posedBoneIds() {
+        return poseActive ? Set.copyOf(pose.keySet()) : Set.of();
+    }
+
+    /**
+     * The rest transform of a part while the pose layer is active (the preview's rest snapshot), or
+     * null when unknown / not posing. The skinned preview binds weights against these.
+     */
+    public PartTransform partRestOf(String partId) {
+        Function<String, PartTransform> lookup = partRestLookup;
+        return poseActive && lookup != null ? lookup.apply(partId) : null;
+    }
+
+    /**
+     * Replace the whole pose layer and activate it. Bones absent from {@code poses} show their rest
+     * values. {@code partRest} gives the parts' rest transforms for the duration of the pose.
+     *
+     * @param notify fire the change callback (part rebuild) when something changed
+     * @return true when the effective pose changed (including activation)
+     */
+    public boolean setPose(Map<String, BonePose> poses, Function<String, PartTransform> partRest, boolean notify) {
+        Map<String, BonePose> next = new LinkedHashMap<>();
+        if (poses != null) {
+            for (Map.Entry<String, BonePose> e : poses.entrySet()) {
+                if (e.getValue() != null && byId.containsKey(e.getKey())) next.put(e.getKey(), e.getValue());
+            }
+        }
+        boolean changed = !poseActive || !pose.equals(next);
+        pose.clear();
+        pose.putAll(next);
+        poseActive = true;
+        partRestLookup = partRest;
+        if (changed) {
+            invalidate();
+            if (notify) fireOnChange();
+        }
+        return changed;
+    }
+
+    /** Pose one bone (activating the layer if needed) and notify. */
+    public void setBonePose(String boneId, Vector3fc position, Vector3fc rotation) {
+        if (!byId.containsKey(boneId)) return;
+        BonePose next = new BonePose(position, rotation);
+        if (poseActive && next.equals(pose.get(boneId))) return;
+        pose.put(boneId, next);
+        poseActive = true;
+        invalidate();
+        fireOnChange();
+    }
+
+    /**
+     * Drop the pose layer (rest restore).
+     *
+     * @param notify fire the change callback when the layer was active
+     * @return true when the layer was active
+     */
+    public boolean clearPose(boolean notify) {
+        boolean was = poseActive;
+        pose.clear();
+        poseActive = false;
+        partRestLookup = null;
+        if (was) {
+            invalidate();
+            if (notify) fireOnChange();
+        }
+        return was;
+    }
+
+    /** {@link #clearPose(boolean)} with notification. */
+    public void clearPose() {
+        clearPose(true);
+    }
+
+    /** Install the gizmo pose-edit interceptor (the animation editor); null removes it. */
+    public void setPoseEditHandler(PoseEditHandler handler) {
+        this.poseEditHandler = handler;
+    }
+
+    /** The installed pose-edit interceptor, or null. */
+    public PoseEditHandler getPoseEditHandler() {
+        return poseEditHandler;
+    }
+
+    /** The bone's effective local position: posed while the pose layer has it, else rest. */
+    public Vector3f getLocalPosition(String boneId) {
+        BonePose p = getPose(boneId);
+        if (p != null) return new Vector3f(p.position());
+        OMOFormat.BoneEntry b = byId.get(boneId);
+        return b == null ? null : new Vector3f(b.posX(), b.posY(), b.posZ());
+    }
+
+    /** The bone's effective local rotation (Euler XYZ degrees): posed, else rest. */
+    public Vector3f getLocalRotation(String boneId) {
+        BonePose p = getPose(boneId);
+        if (p != null) return new Vector3f(p.rotation());
+        OMOFormat.BoneEntry b = byId.get(boneId);
+        return b == null ? null : new Vector3f(b.rotX(), b.rotY(), b.rotZ());
+    }
+
+    /**
+     * A viewport (gizmo) edit of a bone's local position/rotation (null = unchanged). The pose-edit
+     * handler gets it first (the animation editor poses / auto-keys it); otherwise it is a REST edit.
+     */
+    public void editLocal(String boneId, Vector3f position, Vector3f rotation) {
+        OMOFormat.BoneEntry b = byId.get(boneId);
+        if (b == null) return;
+        Vector3f pos = position != null ? position : getLocalPosition(boneId);
+        Vector3f rot = rotation != null ? rotation : getLocalRotation(boneId);
+        PoseEditHandler handler = poseEditHandler;
+        if (handler != null && handler.onBoneEdit(boneId, new Vector3f(pos), new Vector3f(rot))) {
+            return;
+        }
+        put(new OMOFormat.BoneEntry(
+                b.id(), b.name(), b.parentBoneId(),
+                b.originX(), b.originY(), b.originZ(),
+                pos.x, pos.y, pos.z,
+                rot.x, rot.y, rot.z,
+                b.endpointX(), b.endpointY(), b.endpointZ()));
+    }
+
+    // ===================== Frames =====================
+
     /**
      * Returns the head-frame world matrix for the given bone — the matrix whose
      * translation is the head joint position and whose rotation is the bone's
-     * applied rest-pose rotation. {@code null} if the bone is unknown.
+     * applied (posed or rest) rotation. A fresh copy; {@code null} if the bone is unknown.
      */
     public Matrix4f getWorldTransform(String boneId) {
-        OMOFormat.BoneEntry bone = byId.get(boneId);
-        if (bone == null) return null;
-        ensureCacheReady();
-        Matrix4f cached = cachedWorld.get(boneId);
-        if (cached != null) return cached;
-        return computeHeadWorld(bone, new ArrayList<>());
+        Integer i = index(boneId);
+        if (i == null) return null;
+        return external(i).mul(relHead[i]);
     }
 
     /**
      * Returns the tail-frame world matrix for the given bone — head matrix
      * translated by the bone's local-space {@code endpoint} offset. Children
      * (parts or other bones) inherit from this frame, so rotating a bone rotates
-     * everything below it. {@code null} if the bone is unknown.
+     * everything below it. A fresh copy; {@code null} if the bone is unknown.
      */
     public Matrix4f getTailWorldTransform(String boneId) {
-        OMOFormat.BoneEntry bone = byId.get(boneId);
-        if (bone == null) return null;
-        ensureCacheReady();
-        Matrix4f cached = cachedTailWorld.get(boneId);
-        if (cached != null) return cached;
-        return computeTailWorld(bone, new ArrayList<>());
+        Integer i = index(boneId);
+        if (i == null) return null;
+        return external(i).mul(relTail[i]);
     }
 
     /**
@@ -219,130 +392,129 @@ public final class BoneStore {
      * that want to walk every bone once per frame.
      */
     public Map<String, Vector3f> snapshotJointWorldPositions() {
-        ensureCacheReady();
-        for (OMOFormat.BoneEntry b : bones) {
-            if (!cachedWorld.containsKey(b.id())) {
-                computeHeadWorld(b, new ArrayList<>());
-            }
-        }
-        Map<String, Vector3f> out = new LinkedHashMap<>(cachedWorld.size());
-        for (Map.Entry<String, Matrix4f> e : cachedWorld.entrySet()) {
-            out.put(e.getKey(), e.getValue().transformPosition(new Vector3f()));
+        Map<String, Vector3f> out = new LinkedHashMap<>(bones.size());
+        for (OMOFormat.BoneEntry b : List.copyOf(bones)) {
+            Vector3f v = getJointWorldPosition(b.id());
+            if (v != null) out.put(b.id(), v);
         }
         return out;
     }
 
     /** Snapshot of tail world positions keyed by bone id. */
     public Map<String, Vector3f> snapshotTailWorldPositions() {
-        ensureCacheReady();
-        for (OMOFormat.BoneEntry b : bones) {
-            if (!cachedTailWorld.containsKey(b.id())) {
-                computeTailWorld(b, new ArrayList<>());
-            }
-        }
-        Map<String, Vector3f> out = new LinkedHashMap<>(cachedTailWorld.size());
-        for (Map.Entry<String, Matrix4f> e : cachedTailWorld.entrySet()) {
-            out.put(e.getKey(), e.getValue().transformPosition(new Vector3f()));
+        Map<String, Vector3f> out = new LinkedHashMap<>(bones.size());
+        for (OMOFormat.BoneEntry b : List.copyOf(bones)) {
+            Vector3f v = getTailWorldPosition(b.id());
+            if (v != null) out.put(b.id(), v);
         }
         return out;
     }
 
-    /**
-     * Lazily prepare the cache maps. Safe under cross-store re-entrancy — never
-     * recursively replaces an in-progress cache, which would clobber partial results
-     * when the external resolver calls back into us through a parts-with-bone-parents
-     * chain.
-     */
-    private void ensureCacheReady() {
-        if (cacheDirty || cachedWorld == null) {
-            cachedWorld = new LinkedHashMap<>(bones.size());
-            cachedTailWorld = new LinkedHashMap<>(bones.size());
-            cacheDirty = false;
-        }
+    // ===================== Native solve =====================
+
+    private Integer index(String boneId) {
+        if (boneId == null || !byId.containsKey(boneId)) return null;
+        ensureSolved();
+        return indexById.get(boneId);
     }
 
     /**
-     * Compute the bone's head-frame world matrix.
-     * Composition: {@code parent_tail × T(origin) × T(pos) × R(rot)} — head sits at
-     * {@code origin + pos} in the parent's tail space, with the bone's local rotation
-     * applied around the head joint.
+     * Rebuild the relative frames through the native rig: every bone is a BONE joint, a bone whose
+     * parent is another bone is its child, every other bone is a chain root (its external parent
+     * frame is applied at query time). Posed bones use their posed local values.
      */
-    private Matrix4f computeHeadWorld(OMOFormat.BoneEntry bone, List<String> visiting) {
-        if (bone == null) {
+    private void ensureSolved() {
+        if (!cacheDirty) return;
+        int n = bones.size();
+        Map<String, Integer> idx = new HashMap<>(n * 2);
+        for (int i = 0; i < n; i++) idx.put(bones.get(i).id(), i);
+
+        int[] parent = new int[n];
+        for (int i = 0; i < n; i++) {
+            String p = bones.get(i).parentBoneId();
+            Integer pi = (p == null || p.isBlank()) ? null : idx.get(p);
+            parent[i] = pi == null || pi == i ? -1 : pi;
+        }
+        cutCycles(parent);
+        int[] roots = new int[n];
+        for (int i = 0; i < n; i++) {
+            int r = i;
+            while (parent[r] >= 0) r = parent[r];
+            roots[i] = r;
+        }
+
+        Matrix4f[] head = new Matrix4f[n];
+        Matrix4f[] tail = new Matrix4f[n];
+        if (n > 0) {
+            List<RigJoint> joints = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                OMOFormat.BoneEntry b = bones.get(i);
+                BonePose p = poseActive ? pose.get(b.id()) : null;
+                Vector3fc pos = p != null ? p.position() : new Vector3f(b.posX(), b.posY(), b.posZ());
+                Vector3fc rot = p != null ? p.rotation() : new Vector3f(b.rotX(), b.rotY(), b.rotZ());
+                joints.add(RigJoint.bone(b.id(), b.name(), parent[i], false,
+                        new Vector3f(b.originX(), b.originY(), b.originZ()), pos, rot,
+                        new Vector3f(b.endpointX(), b.endpointY(), b.endpointZ())));
+            }
+            try (Rig rig = Rig.create(joints)) {
+                rig.restWorld(head, tail);
+            }
+        }
+        this.indexById = idx;
+        this.chainRoot = roots;
+        this.relHead = head;
+        this.relTail = tail;
+        this.cacheDirty = false;
+    }
+
+    /** Cut every parent cycle at the joint where the walk detects it (that joint becomes a root). */
+    private void cutCycles(int[] parent) {
+        int n = parent.length;
+        int[] state = new int[n]; // 0 = unvisited, 1 = on the current walk, 2 = done
+        for (int start = 0; start < n; start++) {
+            if (state[start] != 0) continue;
+            List<Integer> walk = new ArrayList<>();
+            int cur = start;
+            while (cur >= 0 && state[cur] == 0) {
+                state[cur] = 1;
+                walk.add(cur);
+                int next = parent[cur];
+                if (next >= 0 && state[next] == 1) {
+                    logger.warn("Bone hierarchy cycle detected at '{}' — breaking chain", bones.get(cur).id());
+                    parent[cur] = -1;
+                    next = -1;
+                }
+                cur = next;
+            }
+            for (int w : walk) state[w] = 2;
+        }
+    }
+
+    /** A fresh copy of the external frame of bone {@code i}'s chain root (identity for true roots). */
+    private Matrix4f external(int i) {
+        OMOFormat.BoneEntry root = bones.get(chainRoot[i]);
+        String parentId = root.parentBoneId();
+        if (parentId == null || parentId.isBlank() || byId.containsKey(parentId) || externalParentResolver == null) {
             return new Matrix4f();
         }
-        Matrix4f cached = cachedWorld.get(bone.id());
-        if (cached != null) {
-            return cached;
-        }
-        if (visiting.contains(bone.id())) {
-            logger.warn("Bone hierarchy cycle detected at '{}' — breaking chain", bone.id());
-            Matrix4f identity = new Matrix4f();
-            cachedWorld.put(bone.id(), identity);
-            return identity;
-        }
-        visiting.add(bone.id());
-
-        Matrix4f parentTail = parentFrame(bone, visiting);
-
-        Matrix4f local = new Matrix4f()
-                .translate(bone.originX(), bone.originY(), bone.originZ())
-                .translate(bone.posX(), bone.posY(), bone.posZ())
-                .rotateXYZ(
-                        (float) Math.toRadians(bone.rotX()),
-                        (float) Math.toRadians(bone.rotY()),
-                        (float) Math.toRadians(bone.rotZ())
-                );
-
-        Matrix4f world = new Matrix4f(parentTail).mul(local);
-        cachedWorld.put(bone.id(), world);
-        visiting.remove(bone.id());
-        return world;
-    }
-
-    /**
-     * Compute the bone's tail-frame world matrix.
-     * Composition: {@code head × T(endpoint)} — the bone's local-space endpoint
-     * offset applied after the head rotation, so rotating the bone rotates its
-     * tail (and everything that inherits from it).
-     */
-    private Matrix4f computeTailWorld(OMOFormat.BoneEntry bone, List<String> visiting) {
-        if (bone == null) {
+        if (!resolvingExternal.add(root.id())) {
+            logger.warn("Bone/part hierarchy cycle through bone '{}' — treating it as a root", root.id());
             return new Matrix4f();
         }
-        Matrix4f cached = cachedTailWorld.get(bone.id());
-        if (cached != null) {
-            return cached;
+        try {
+            Matrix4f m = externalParentResolver.apply(parentId);
+            return m != null ? new Matrix4f(m) : new Matrix4f();
+        } finally {
+            resolvingExternal.remove(root.id());
         }
-        Matrix4f head = computeHeadWorld(bone, visiting);
-        Matrix4f tail = new Matrix4f(head)
-                .translate(bone.endpointX(), bone.endpointY(), bone.endpointZ());
-        cachedTailWorld.put(bone.id(), tail);
-        return tail;
     }
 
-    /**
-     * Resolve the frame this bone inherits from — its parent's tail frame for
-     * bone parents, the external resolver's value for non-bone parents (e.g.
-     * a parent part), or identity for roots.
-     */
-    private Matrix4f parentFrame(OMOFormat.BoneEntry bone, List<String> visiting) {
-        if (bone.isRoot()) return new Matrix4f();
-        OMOFormat.BoneEntry parent = byId.get(bone.parentBoneId());
-        if (parent != null) {
-            return computeTailWorld(parent, visiting);
-        }
-        if (externalParentResolver != null) {
-            Matrix4f external = externalParentResolver.apply(bone.parentBoneId());
-            return external != null ? new Matrix4f(external) : new Matrix4f();
-        }
-        return new Matrix4f();
-    }
-
-    private int indexOfId(String id) {
-        for (int i = 0; i < bones.size(); i++) {
-            if (bones.get(i).id().equals(id)) return i;
-        }
-        return -1;
+    private static OMOFormat.BoneEntry withParent(OMOFormat.BoneEntry b, String parent) {
+        return new OMOFormat.BoneEntry(
+                b.id(), b.name(), parent,
+                b.originX(), b.originY(), b.originZ(),
+                b.posX(), b.posY(), b.posZ(),
+                b.rotX(), b.rotY(), b.rotZ(),
+                b.endpointX(), b.endpointY(), b.endpointZ());
     }
 }

@@ -15,7 +15,9 @@ import static org.lwjgl.system.MemoryUtil.memFree;
 
 /**
  * The GPU side of one model mesh: a VAO over separate position ({@code vec3},
- * attribute 0) and UV ({@code vec2}, attribute 1) buffers plus an element buffer.
+ * attribute 0) and UV ({@code vec2}, attribute 1) buffers plus an element buffer, and — once
+ * {@link #updateSkin} ran — skin joints ({@code uvec4} of uint16, attribute 2) and weights
+ * ({@code vec4} of unorm8, attribute 3) for {@link ModelSkinGlsl}.
  *
  * <p>Positions and UVs live in their own buffers so an interactive edit that only
  * moves vertices re-uploads 12 bytes per corner instead of the whole vertex. A
@@ -33,6 +35,9 @@ public final class ModelGpuMesh implements AutoCloseable {
     private int positionVbo;
     private int uvVbo;
     private int ebo;
+    private int jointVbo;
+    private int weightVbo;
+    private int skinVertices;
 
     private int positionFloats;
     private int uvFloats;
@@ -68,6 +73,56 @@ public final class ModelGpuMesh implements AutoCloseable {
     /** Number of vertices (corners) in the position buffer. */
     public int vertexCount() {
         return positionFloats / 3;
+    }
+
+    /** True when per-vertex skin attributes were uploaded ({@link #updateSkin}). */
+    public boolean hasSkin() {
+        return skinVertices > 0;
+    }
+
+    /**
+     * Uploads the per-vertex skin attributes (4 joint indices + 4 weights per vertex, see
+     * {@link com.openmason.engine.rig.PackedSkin}). Null removes them.
+     */
+    public void updateSkin(com.openmason.engine.rig.PackedSkin skin) {
+        ensureCreated();
+        int previousVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+        GL30.glBindVertexArray(vao);
+        if (skin == null) {
+            GL20.glDisableVertexAttribArray(ModelSkinGlsl.JOINTS_LOCATION);
+            GL20.glDisableVertexAttribArray(ModelSkinGlsl.WEIGHTS_LOCATION);
+            GL30.glBindVertexArray(previousVao);
+            retrack(-(long) skinVertices * 12);
+            skinVertices = 0;
+            return;
+        }
+        if (jointVbo == 0) {
+            jointVbo = GL15.glGenBuffers();
+            weightVbo = GL15.glGenBuffers();
+        }
+        int n = skin.vertexCount();
+        java.nio.ShortBuffer joints = org.lwjgl.system.MemoryUtil.memAllocShort(Math.max(1, n * 4));
+        java.nio.ByteBuffer weights = org.lwjgl.system.MemoryUtil.memAlloc(Math.max(1, n * 4));
+        try {
+            joints.put(skin.joints()).flip();
+            weights.put(skin.weights()).flip();
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, jointVbo);
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, joints, usage);
+            GL30.glVertexAttribIPointer(ModelSkinGlsl.JOINTS_LOCATION, 4, GL11.GL_UNSIGNED_SHORT, 8, 0L);
+            GL20.glEnableVertexAttribArray(ModelSkinGlsl.JOINTS_LOCATION);
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, weightVbo);
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, weights, usage);
+            GL20.glVertexAttribPointer(ModelSkinGlsl.WEIGHTS_LOCATION, 4, GL11.GL_UNSIGNED_BYTE, true, 4, 0L);
+            GL20.glEnableVertexAttribArray(ModelSkinGlsl.WEIGHTS_LOCATION);
+        } finally {
+            org.lwjgl.system.MemoryUtil.memFree(joints);
+            org.lwjgl.system.MemoryUtil.memFree(weights);
+        }
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL30.glBindVertexArray(previousVao);
+        retrack((long) n * 12 - (long) skinVertices * 12);
+        uploadedBytes += (long) n * 12;
+        skinVertices = n;
     }
 
     /** Total bytes sent to the GPU by this mesh since creation. */
@@ -185,7 +240,11 @@ public final class ModelGpuMesh implements AutoCloseable {
         GL15.glDeleteBuffers(positionVbo);
         GL15.glDeleteBuffers(uvVbo);
         GL15.glDeleteBuffers(ebo);
-        vao = positionVbo = uvVbo = ebo = 0;
+        if (jointVbo != 0) {
+            GL15.glDeleteBuffers(jointVbo);
+            GL15.glDeleteBuffers(weightVbo);
+        }
+        vao = positionVbo = uvVbo = ebo = jointVbo = weightVbo = skinVertices = 0;
         positionFloats = uvFloats = indexCount = 0;
         if (trackedBytes > 0) {
             GpuMemoryTracker.getInstance().untrack(category, trackedBytes);

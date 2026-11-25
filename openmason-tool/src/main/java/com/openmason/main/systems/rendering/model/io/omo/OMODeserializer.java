@@ -79,6 +79,9 @@ public class OMODeserializer {
 
     private List<OMOFormat.AttachmentPointEntry> lastLoadedAttachmentPointEntries;
 
+    // Last loaded skin weights (v1.8+)
+    private OMOFormat.SkinData lastLoadedSkinData;
+
     // Last loaded face texture data (v1.2+, accessible after load())
     private OMOFormat.FaceTextureData lastLoadedFaceTextureData;
     private Map<String, byte[]> lastLoadedMaterialTextures;
@@ -157,6 +160,15 @@ public class OMODeserializer {
     }
 
     /**
+     * Skin weights from the last successful load() call (v1.8+), by part-local vertex (the local
+     * index inside each part's saved vertex span — the restored part's own vertex order). Null when
+     * the file has none.
+     */
+    public OMOFormat.SkinData getLastLoadedSkinData() {
+        return lastLoadedSkinData;
+    }
+
+    /**
      * Loads a BlockModel from a .OMO file.
      * After loading, call getLastLoadedMeshData() to retrieve any custom mesh data.
      *
@@ -172,6 +184,7 @@ public class OMODeserializer {
         lastLoadedModelTransform = null;
         lastLoadedBoneEntries = null;
         lastLoadedAttachmentPointEntries = null;
+        lastLoadedSkinData = null;
 
         if (filePath == null || filePath.trim().isEmpty()) {
             logger.error("Invalid file path");
@@ -200,6 +213,7 @@ public class OMODeserializer {
             lastLoadedModelTransform = loadedData.modelTransform();
             lastLoadedBoneEntries = loadedData.boneEntries();
             lastLoadedAttachmentPointEntries = loadedData.attachmentPointEntries();
+            lastLoadedSkinData = loadedData.skinData();
 
             // Build BlockModel from loaded data
             BlockModel model = buildModel(loadedData);
@@ -233,6 +247,7 @@ public class OMODeserializer {
         OMOFormat.ModelTransform modelTransform = null;
         List<OMOFormat.BoneEntry> boneEntries = null;
         List<OMOFormat.AttachmentPointEntry> attachmentPointEntries = null;
+        OMOFormat.SkinData skinData = null;
         Path texturePath = null;
         Map<String, byte[]> materialTextures = new HashMap<>();
 
@@ -253,6 +268,7 @@ public class OMODeserializer {
                     modelTransform = result.modelTransform;
                     boneEntries = result.boneEntries;
                     attachmentPointEntries = result.attachmentPointEntries;
+                    skinData = result.skinData;
                     logger.debug("Loaded manifest.json (version={})", document.version());
 
                 } else if (OMOFormat.DEFAULT_TEXTURE_FILENAME.equals(entryName)) {
@@ -281,7 +297,7 @@ public class OMODeserializer {
 
         return new LoadedData(document, texturePath, meshData, faceTextureData,
                               materialTextures.isEmpty() ? null : materialTextures,
-                              partEntries, modelTransform, boneEntries, attachmentPointEntries);
+                              partEntries, modelTransform, boneEntries, attachmentPointEntries, skinData);
     }
 
     /**
@@ -292,7 +308,8 @@ public class OMODeserializer {
                                        List<OMOFormat.PartEntry> partEntries,
                                        OMOFormat.ModelTransform modelTransform,
                                        List<OMOFormat.BoneEntry> boneEntries,
-                                       List<OMOFormat.AttachmentPointEntry> attachmentPointEntries) {}
+                                       List<OMOFormat.AttachmentPointEntry> attachmentPointEntries,
+                                       OMOFormat.SkinData skinData) {}
 
     /**
      * Reads and parses manifest.json from ZIP stream.
@@ -405,8 +422,14 @@ public class OMODeserializer {
             logger.debug("Loaded {} attachment point entries", attachmentPointEntries.size());
         }
 
+        // Parse skin weights if present (v1.8+) — the engine reader's parser, so tool and runtime agree
+        OMOFormat.SkinData skinData = com.openmason.engine.format.omo.OMOReader.parseSkin(root.get("skin"));
+        if (skinData != null && skinData.isEmpty()) {
+            skinData = null;
+        }
+
         return new ManifestParseResult(document, meshData, faceTextureData, partEntries, modelTransform,
-                boneEntries, attachmentPointEntries);
+                boneEntries, attachmentPointEntries, skinData);
     }
 
     /**
@@ -726,6 +749,7 @@ public class OMODeserializer {
                               List<OMOFormat.PartEntry> partEntries,
                               OMOFormat.ModelTransform modelTransform,
                               List<OMOFormat.BoneEntry> boneEntries,
-                              List<OMOFormat.AttachmentPointEntry> attachmentPointEntries) {
+                              List<OMOFormat.AttachmentPointEntry> attachmentPointEntries,
+                              OMOFormat.SkinData skinData) {
     }
 }

@@ -2,6 +2,8 @@ package com.openmason.main.systems.mcp;
 
 import com.fasterxml.jackson.annotation.JsonValue;
 import com.openmason.engine.format.omo.OMOFormat;
+import com.openmason.engine.modeling.parts.ModelPartDescriptor;
+import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.main.systems.services.EditorServices;
 import com.openmason.main.systems.ViewportController;
 import com.openmason.main.systems.skeleton.BoneCommandHistory;
@@ -111,7 +113,8 @@ public final class BoneEditingService {
         return await(MainThreadExecutor.submit(() -> recorded("Create Bone: " + name, () -> {
             BoneStore store = requireStore();
             String id = UUID.randomUUID().toString();
-            String parent = (parentBoneId == null || parentBoneId.isBlank()) ? null : resolveId(store, parentBoneId);
+            String parent = (parentBoneId == null || parentBoneId.isBlank()) ? null
+                    : resolveParentId(store, parentBoneId);
             Vector3f o = origin != null ? origin : new Vector3f();
             Vector3f p = position != null ? position : new Vector3f();
             Vector3f r = rotation != null ? rotation : new Vector3f();
@@ -185,9 +188,12 @@ public final class BoneEditingService {
             OMOFormat.BoneEntry b = resolve(store, idOrName);
             if (b == null) return Optional.<BoneView>empty();
             String parentId = (parentIdOrName == null || parentIdOrName.isBlank())
-                    ? null : resolveId(store, parentIdOrName);
+                    ? null : resolveParentId(store, parentIdOrName);
             if (parentId != null && parentId.equals(b.id())) {
                 throw new IllegalArgumentException("A bone cannot be its own parent");
+            }
+            if (parentId != null && isUnder(store, parentId, b.id())) {
+                throw new IllegalArgumentException("Refusing to parent '" + b.name() + "' under its own descendant");
             }
             OMOFormat.BoneEntry updated = new OMOFormat.BoneEntry(
                     b.id(), b.name(), parentId,
@@ -198,6 +204,31 @@ public final class BoneEditingService {
             store.put(updated);
             return Optional.of(BoneView.from(updated, store));
         })));
+    }
+
+    /**
+     * Parent a part to a bone (OMO 1.8 joint hierarchy): the part's {@code parentId} becomes the
+     * bone, so it inherits the bone's TAIL frame and follows it when posed. Like the hierarchy pane,
+     * this is a part-hierarchy edit (not on the bone undo history).
+     */
+    public PartBinding bindPart(String partIdOrName, String boneIdOrName) {
+        return await(MainThreadExecutor.submit(() -> {
+            BoneStore store = requireStore();
+            ModelPartManager pm = requirePartManager();
+            ModelPartDescriptor part = pm.getPartById(partIdOrName)
+                    .or(() -> pm.getPartByName(partIdOrName))
+                    .orElseThrow(() -> new IllegalArgumentException("Part not found: " + partIdOrName));
+            String boneId = resolveId(store, boneIdOrName);
+            if (isUnder(store, boneId, part.id())) {
+                throw new IllegalArgumentException("Refusing to bind part '" + part.name()
+                        + "' to a bone that hangs under it (cycle)");
+            }
+            boolean changed = pm.setPartParent(part.id(), boneId);
+            if (!changed && !boneId.equals(pm.getPartById(part.id()).map(ModelPartDescriptor::parentId).orElse(null))) {
+                throw new IllegalArgumentException("Could not bind part '" + part.name() + "' to the bone");
+            }
+            return new PartBinding(part.id(), part.name(), boneId, store.getById(boneId).name());
+        }));
     }
 
     // ===================== Undo / redo =====================
@@ -282,6 +313,50 @@ public final class BoneEditingService {
         return null;
     }
 
+    private ModelPartManager optPartManager() {
+        ViewportController vp = editorServices.getViewport3D();
+        return vp != null ? vp.getPartManager() : null;
+    }
+
+    private ModelPartManager requirePartManager() {
+        ModelPartManager pm = optPartManager();
+        if (pm == null) throw new IllegalStateException("No model is open in the viewport");
+        return pm;
+    }
+
+    /**
+     * A bone's parent: a bone (id or name) or — the unified joint hierarchy — a part (id or name).
+     */
+    private String resolveParentId(BoneStore store, String idOrName) {
+        OMOFormat.BoneEntry b = resolve(store, idOrName);
+        if (b != null) return b.id();
+        ModelPartManager pm = optPartManager();
+        if (pm != null) {
+            Optional<ModelPartDescriptor> part = pm.getPartById(idOrName).or(() -> pm.getPartByName(idOrName));
+            if (part.isPresent()) return part.get().id();
+        }
+        throw new IllegalArgumentException("Parent not found (no bone or part named): " + idOrName);
+    }
+
+    /** True when {@code nodeId} is {@code ancestorId} or hangs under it in the parts+bones hierarchy. */
+    private boolean isUnder(BoneStore store, String nodeId, String ancestorId) {
+        ModelPartManager pm = optPartManager();
+        String cursor = nodeId;
+        int safety = store.size() + (pm != null ? pm.getPartCount() : 0) + 2;
+        while (cursor != null && safety-- > 0) {
+            if (cursor.equals(ancestorId)) return true;
+            OMOFormat.BoneEntry b = store.getById(cursor);
+            if (b != null) {
+                cursor = b.parentBoneId();
+            } else if (pm != null) {
+                cursor = pm.getPartById(cursor).map(ModelPartDescriptor::parentId).orElse(null);
+            } else {
+                cursor = null;
+            }
+        }
+        return false;
+    }
+
     private static String resolveId(BoneStore store, String idOrName) {
         OMOFormat.BoneEntry b = resolve(store, idOrName);
         if (b == null) {
@@ -305,6 +380,9 @@ public final class BoneEditingService {
     // ===================== DTOs =====================
 
     public record SkeletonInfo(boolean available, int boneCount, String selectedBoneId) {}
+
+    /** Result of {@link #bindPart}: the part now hangs under the bone. */
+    public record PartBinding(String partId, String partName, String boneId, String boneName) {}
 
     /** Serializes as a compact {@code [x, y, z]} array to keep MCP responses small. */
     public record Vec3(float x, float y, float z) {

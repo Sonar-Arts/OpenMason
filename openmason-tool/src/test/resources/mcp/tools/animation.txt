@@ -8,6 +8,7 @@ anim_list_keyframes
 anim_list_tracks
 anim_load
 anim_new_clip
+anim_open_editor
 anim_save
 anim_set_clip
 anim_set_layer

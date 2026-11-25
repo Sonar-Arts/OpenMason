@@ -51,13 +51,24 @@ public final class OMASerializer {
      */
     public boolean save(AnimationClip clip, String filePath,
                         java.util.function.Function<String, String> partNameLookup) {
+        return save(clip, filePath, partNameLookup, null);
+    }
+
+    /**
+     * Save with a name lookup and a bone test: a track whose joint is a bone gets
+     * {@code "targetType": "bone"} on its track ref (OMO 1.8 rig; readers ignore it — a track's
+     * {@code partId} may name a bone either way).
+     */
+    public boolean save(AnimationClip clip, String filePath,
+                        java.util.function.Function<String, String> partNameLookup,
+                        java.util.function.Predicate<String> isBone) {
         if (clip == null || filePath == null) {
             return false;
         }
         String resolved = OMAFormat.ensureExtension(filePath);
 
         try (FileOutputStream fos = new FileOutputStream(resolved)) {
-            write(clip, fos, partNameLookup);
+            write(clip, fos, partNameLookup, isBone);
             logger.info("Saved animation clip '{}' ({} tracks) to {}",
                     clip.name(), clip.tracks().size(), resolved);
             return true;
@@ -73,20 +84,29 @@ public final class OMASerializer {
      */
     public byte[] toBytes(AnimationClip clip, java.util.function.Function<String, String> partNameLookup)
             throws IOException {
+        return toBytes(clip, partNameLookup, null);
+    }
+
+    /** {@link #toBytes(AnimationClip, java.util.function.Function)} marking bone tracks. */
+    public byte[] toBytes(AnimationClip clip, java.util.function.Function<String, String> partNameLookup,
+                          java.util.function.Predicate<String> isBone) throws IOException {
         java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        write(clip, out, partNameLookup);
+        write(clip, out, partNameLookup, isBone);
         return out.toByteArray();
     }
 
     private void write(AnimationClip clip, java.io.OutputStream out,
-                       java.util.function.Function<String, String> partNameLookup) throws IOException {
+                       java.util.function.Function<String, String> partNameLookup,
+                       java.util.function.Predicate<String> isBone) throws IOException {
         try (ZipOutputStream zos = new ZipOutputStream(out)) {
             List<TrackRef> trackRefs = new ArrayList<>();
             for (Track track : clip.tracks().values()) {
                 String filename = OMAFormat.trackFilename(track.partId());
                 String partName = partNameLookup != null ? partNameLookup.apply(track.partId()) : null;
                 if (partName == null) partName = track.partNameHint();
-                trackRefs.add(new TrackRef(track.partId(), partName, filename));
+                TrackRef ref = new TrackRef(track.partId(), partName, filename);
+                if (isBone != null && isBone.test(track.partId())) ref.targetType = TARGET_BONE;
+                trackRefs.add(ref);
                 writeTrack(zos, filename, track);
             }
             writeManifest(zos, clip, trackRefs);
@@ -195,10 +215,16 @@ public final class OMASerializer {
         }
     }
 
+    /** {@link TrackRef#targetType} of a track that keys a bone. */
+    public static final String TARGET_BONE = "bone";
+
     public static class TrackRef {
         public String partId;
         public String partName;   // optional, used as a fallback rebind hint on load
         public String dataFile;
+        /** Optional joint kind hint: "bone" for bone tracks, omitted for parts (readers ignore it). */
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        public String targetType;
 
         public TrackRef() {}
 

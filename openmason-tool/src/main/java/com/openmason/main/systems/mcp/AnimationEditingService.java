@@ -49,17 +49,37 @@ public final class AnimationEditingService {
         }));
     }
 
+    /**
+     * Opens the animation editor bound to the model the viewport holds — what Tools → Animation Editor
+     * does — so the keyframe tools can resolve the model's parts and bones. Already open: re-binds only
+     * if the viewport now holds another model (the preview's rest snapshot is kept otherwise).
+     *
+     * @throws IllegalStateException when the editor or the viewport does not exist, or no model is loaded
+     */
+    public AnimationInfo openEditor() {
+        return await(MainThreadExecutor.submit(() -> {
+            AnimationEditorImGui editor = editorServices.getAnimationEditor();
+            if (editor == null) throw new IllegalStateException("Animation editor not initialized");
+            var viewport = editorServices.getViewport3D();
+            ModelPartManager parts = viewport != null ? viewport.getPartManager() : null;
+            if (parts == null) {
+                throw new IllegalStateException("No model is open in the viewport; open or create a model first");
+            }
+            editor.openFor(parts);
+            return describeOnThread(editor.getController());
+        }));
+    }
+
     public List<TrackView> listTracks() {
         return await(MainThreadExecutor.submit(() -> {
             AnimationEditorController c = requireController();
-            ModelPartManager pm = c.partManager();
+            var joints = c.joints();
             AnimationClip clip = c.state().clip();
             List<TrackView> out = new ArrayList<>(clip.tracks().size());
             for (Map.Entry<String, Track> e : clip.tracks().entrySet()) {
                 String partId = e.getKey();
-                String partName = (pm != null)
-                        ? pm.getPartById(partId).map(ModelPartDescriptor::name).orElse(e.getValue().partNameHint())
-                        : e.getValue().partNameHint();
+                String name = joints.nameOf(partId);
+                String partName = name != null ? name : e.getValue().partNameHint();
                 out.add(new TrackView(partId, partName, e.getValue().size()));
             }
             return out;
@@ -126,14 +146,11 @@ public final class AnimationEditingService {
         return runAndDescribe(c -> {
             List<String> names = new ArrayList<>();
             if (maskParts != null) {
-                ModelPartManager pm = c.partManager();
+                var joints = c.joints();
                 for (String entry : maskParts) {
                     if (entry == null || entry.isBlank()) continue;
-                    String name = entry;
-                    if (pm != null) {
-                        name = pm.getPartById(entry).map(ModelPartDescriptor::name).orElse(entry);
-                    }
-                    names.add(name);
+                    String jointName = joints.nameOf(entry); // an id (part or bone) → its name
+                    names.add(jointName != null ? jointName : entry);
                 }
             }
             c.setMaskParts(names);
@@ -213,6 +230,11 @@ public final class AnimationEditingService {
                     if (pos == null) pos = new Vector3f(p.get().transform().position());
                     if (rot == null) rot = new Vector3f(p.get().transform().rotation());
                     if (scl == null) scl = new Vector3f(p.get().transform().scale());
+                } else if (c.boneStore() != null && c.boneStore().getById(partId) != null) {
+                    // A bone: its current (posed or rest) local pose; bones have unit scale.
+                    if (pos == null) pos = c.boneStore().getLocalPosition(partId);
+                    if (rot == null) rot = c.boneStore().getLocalRotation(partId);
+                    if (scl == null) scl = new Vector3f(1, 1, 1);
                 }
             }
             if (pos == null) pos = new Vector3f();
@@ -316,20 +338,29 @@ public final class AnimationEditingService {
         return editor != null ? editor.getController() : null;
     }
 
+    /** The error every model-dependent tool gives while the editor is not bound to a model. */
+    static final String NOT_BOUND = "The animation editor is not open on the model, so its parts and bones "
+            + "cannot be resolved; call anim_open_editor first";
+
     private AnimationEditorController requireController() {
         AnimationEditorController c = optController();
         if (c == null) throw new IllegalStateException("Animation editor not initialized");
         return c;
     }
 
-    private String resolvePartId(AnimationEditorController c, String partIdOrName) {
+    /**
+     * A track key from a joint id or name: a part or a bone of the bound model (id, then exact name,
+     * then case-insensitive name — the runtime binding order), else an existing track's key (orphans).
+     */
+    static String resolvePartId(AnimationEditorController c, String partIdOrName) {
         if (partIdOrName == null || partIdOrName.isBlank()) return null;
-        ModelPartManager pm = c.partManager();
-        if (pm == null) return c.state().clip().tracks().containsKey(partIdOrName) ? partIdOrName : null;
-        Optional<ModelPartDescriptor> p = pm.getPartById(partIdOrName);
-        if (p.isPresent()) return p.get().id();
-        return pm.getPartByName(partIdOrName).map(ModelPartDescriptor::id)
-                .orElseGet(() -> c.state().clip().tracks().containsKey(partIdOrName) ? partIdOrName : null);
+        if (c.partManager() == null && !c.state().clip().tracks().containsKey(partIdOrName)) {
+            // Not bound to a model: nothing can resolve. Say so instead of a silent null.
+            throw new IllegalStateException(NOT_BOUND);
+        }
+        String joint = c.partManager() != null ? c.joints().resolve(partIdOrName) : null;
+        if (joint != null) return joint;
+        return c.state().clip().tracks().containsKey(partIdOrName) ? partIdOrName : null;
     }
 
     private static int indexAtTime(Track track, float time) {

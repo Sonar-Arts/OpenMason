@@ -5,6 +5,8 @@ import com.openmason.engine.modeling.parts.ModelPartDescriptor;
 import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.engine.modeling.parts.PartMeshRebuilder;
 import com.openmason.engine.modeling.parts.PartTransform;
+import com.openmason.engine.rig.Rig;
+import com.openmason.engine.rig.RigModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,23 +30,12 @@ public final class OmoPartRestorer {
         int[] allTriToFace = meshData.triangleToFaceId();
 
         // Hierarchy support (v1.5+): the saved combined buffer has each part's
-        // *effective* (parent-chain * local) transform baked into its vertices.
-        // Build effective matrices from the saved entries and inverse-apply the effective
-        // matrix to recover local-space vertices.
-        Map<String, OMOFormat.PartEntry> entryById = new HashMap<>();
-        for (OMOFormat.PartEntry e : entries) {
-            entryById.put(e.id(), e);
-        }
-        Map<String, OMOFormat.BoneEntry> bonesById = new HashMap<>();
-        if (boneEntries != null) {
-            for (OMOFormat.BoneEntry b : boneEntries) {
-                if (b != null) bonesById.put(b.id(), b);
-            }
-        }
-        Map<String, org.joml.Matrix4f> effectiveBySavedId = new HashMap<>();
-        for (OMOFormat.PartEntry e : entries) {
-            effectiveBySavedId.put(e.id(), computeEffectiveMatrix(e, entryById, bonesById, new HashSet<>()));
-        }
+        // *effective* (parent-chain * local) transform baked into its vertices — parent
+        // parts' world matrices and parent bones' TAIL frames (the unified parts+bones
+        // hierarchy, OMO 1.8). The effective matrices come from the native rig over the
+        // saved parts and bones (the runtime's own joint rules, cenda/rig.h); inverse-applying
+        // them recovers local-space vertices.
+        Map<String, org.joml.Matrix4f> effectiveBySavedId = restWorldMatrices(entries, boneEntries);
         List<ModelPartDescriptor> restored = new ArrayList<>();
         Map<String, PartMeshRebuilder.PartGeometry> geometry = new LinkedHashMap<>();
 
@@ -174,97 +165,36 @@ public final class OmoPartRestorer {
     }
 
     /**
-     * Compute the effective (parent-chain composed) world matrix for a saved part entry.
-     * Walks {@code parentId} upward through {@code entryById} and {@code bonesById} —
-     * the unified hierarchy allows parts to be parented to bones and vice-versa, so the
-     * walk crosses between the two maps as needed. Cycle-defended via {@code visiting}.
-     *
-     * <p>The matrix this returns must match the runtime engine's view exactly so the
-     * load-time inverse-bake recovers true local vertices. The runtime engine has
-     * children inherit from the parent bone's <b>tail</b> frame (see
-     * {@link com.openmason.main.systems.skeleton.BoneStore#getTailWorldTransform}),
-     * so the bone walk here also returns the tail matrix.
+     * The rest world matrix of every saved part (keyed by saved id) through the native rig: part
+     * {@code i} is joint {@code i}, the bones follow; a part under a bone inherits the bone's tail.
+     * Parent cycles are cut natively. The first entry wins for a duplicated id (the caller rejects
+     * duplicates afterwards).
      */
-    private static org.joml.Matrix4f computeEffectiveMatrix(OMOFormat.PartEntry entry,
-                                                     Map<String, OMOFormat.PartEntry> entryById,
-                                                     Map<String, OMOFormat.BoneEntry> bonesById,
-                                                     Set<String> visiting) {
-        org.joml.Matrix4f local = new PartTransform(
-                new org.joml.Vector3f(entry.originX(), entry.originY(), entry.originZ()),
-                new org.joml.Vector3f(entry.posX(), entry.posY(), entry.posZ()),
-                new org.joml.Vector3f(entry.rotX(), entry.rotY(), entry.rotZ()),
-                new org.joml.Vector3f(entry.scaleX(), entry.scaleY(), entry.scaleZ())
-        ).toMatrix();
-
-        String parentId = entry.parentId();
-        if (parentId == null) return local;
-        if (!visiting.add(entry.id())) {
-            logger.warn("Cycle in saved hierarchy at {} — treating as root", entry.id());
-            return local;
+    static Map<String, org.joml.Matrix4f> restWorldMatrices(List<OMOFormat.PartEntry> entries,
+                                                            List<OMOFormat.BoneEntry> boneEntries) {
+        Map<String, org.joml.Matrix4f> out = new HashMap<>();
+        if (entries.isEmpty()) return out;
+        List<RigModel.PartSpec> specs = new ArrayList<>(entries.size());
+        for (OMOFormat.PartEntry e : entries) {
+            specs.add(new RigModel.PartSpec(e.id(), e.name(), e.parentId(), true,
+                    new org.joml.Vector3f(e.originX(), e.originY(), e.originZ()),
+                    new org.joml.Vector3f(e.posX(), e.posY(), e.posZ()),
+                    new org.joml.Vector3f(e.rotX(), e.rotY(), e.rotZ()),
+                    new org.joml.Vector3f(e.scaleX(), e.scaleY(), e.scaleZ())));
         }
-        org.joml.Matrix4f parentMatrix = parentFrameMatrix(parentId, entryById, bonesById, visiting);
-        visiting.remove(entry.id());
-        return new org.joml.Matrix4f(parentMatrix).mul(local);
-    }
-
-    /**
-     * Compute the bone's <b>head</b> world matrix. The head is at
-     * {@code parent_tail × T(origin) × T(pos) × R(rot)}. Used as the base for the
-     * bone's own tail and (transitively) for any walk that needs its frame.
-     */
-    private static org.joml.Matrix4f computeBoneHeadMatrix(OMOFormat.BoneEntry bone,
-                                                     Map<String, OMOFormat.PartEntry> entryById,
-                                                     Map<String, OMOFormat.BoneEntry> bonesById,
-                                                     Set<String> visiting) {
-        org.joml.Matrix4f local = new org.joml.Matrix4f()
-                .translate(bone.originX(), bone.originY(), bone.originZ())
-                .translate(bone.posX(), bone.posY(), bone.posZ())
-                .rotateXYZ(
-                        (float) Math.toRadians(bone.rotX()),
-                        (float) Math.toRadians(bone.rotY()),
-                        (float) Math.toRadians(bone.rotZ())
-                );
-
-        String parentId = bone.parentBoneId();
-        if (parentId == null) return local;
-        if (!visiting.add(bone.id())) {
-            logger.warn("Cycle in saved hierarchy at bone {} — treating as root", bone.id());
-            return local;
+        List<OMOFormat.BoneEntry> bones = new ArrayList<>();
+        if (boneEntries != null) {
+            for (OMOFormat.BoneEntry b : boneEntries) if (b != null) bones.add(b);
         }
-        org.joml.Matrix4f parentMatrix = parentFrameMatrix(parentId, entryById, bonesById, visiting);
-        visiting.remove(bone.id());
-        return new org.joml.Matrix4f(parentMatrix).mul(local);
-    }
-
-    /**
-     * Compute the bone's <b>tail</b> world matrix — head matrix translated by the
-     * bone-local-space endpoint. This is the frame children of this bone inherit
-     * from, matching {@code BoneStore.getTailWorldTransform} at runtime.
-     */
-    private static org.joml.Matrix4f computeBoneTailMatrix(OMOFormat.BoneEntry bone,
-                                                     Map<String, OMOFormat.PartEntry> entryById,
-                                                     Map<String, OMOFormat.BoneEntry> bonesById,
-                                                     Set<String> visiting) {
-        org.joml.Matrix4f head = computeBoneHeadMatrix(bone, entryById, bonesById, visiting);
-        return new org.joml.Matrix4f(head)
-                .translate(bone.endpointX(), bone.endpointY(), bone.endpointZ());
-    }
-
-    /**
-     * Resolve the frame that a node with parent {@code parentId} inherits from —
-     * part parent → part's effective matrix; bone parent → bone's tail matrix.
-     */
-    private static org.joml.Matrix4f parentFrameMatrix(String parentId,
-                                                 Map<String, OMOFormat.PartEntry> entryById,
-                                                 Map<String, OMOFormat.BoneEntry> bonesById,
-                                                 Set<String> visiting) {
-        if (entryById.containsKey(parentId)) {
-            return computeEffectiveMatrix(entryById.get(parentId), entryById, bonesById, visiting);
+        RigModel model = RigModel.build(specs, bones, null, null, null);
+        org.joml.Matrix4f[] world = new org.joml.Matrix4f[model.jointCount()];
+        try (Rig rig = model.rig()) {
+            rig.restWorld(world, null);
         }
-        if (bonesById != null && bonesById.containsKey(parentId)) {
-            return computeBoneTailMatrix(bonesById.get(parentId), entryById, bonesById, visiting);
+        for (int i = 0; i < entries.size(); i++) {
+            out.putIfAbsent(entries.get(i).id(), world[i]);
         }
-        return new org.joml.Matrix4f();
+        return out;
     }
 
     private static boolean isIdentityMatrix(org.joml.Matrix4f m) {

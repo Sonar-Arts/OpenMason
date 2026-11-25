@@ -48,10 +48,12 @@ class McpToolsListSnapshotTest {
      * export + editor tools) — measured ~74k at the raise. Raised 80k -> 88k
      * for the 162-tool surface (2026-10-06, #324: 20 ui_* UI Editor tools,
      * 10.4k of the payload; the edits are one compact ui_ops batch tool rather
-     * than per-op tools) — measured 85.2k at the raise; growing past the
+     * than per-op tools) — measured 85.2k at the raise. Raised 88k -> 92k for
+     * the 9 skin_* tools (2026-11-24, rig revamp: per-vertex skin weights,
+     * ~2.9k compact) on a surface already at ~88.0k; growing past the
      * budget must stay a conscious decision, not drift.
      */
-    private static final int TOOLS_LIST_BYTE_BUDGET = 88_000;
+    private static final int TOOLS_LIST_BYTE_BUDGET = 92_000;
 
     private static McpToolRegistry buildRealRegistry() {
         ObjectMapper mapper = new ObjectMapper();

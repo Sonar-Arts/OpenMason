@@ -47,6 +47,16 @@ public final class LiveModelDocument implements ModelDocument {
     }
 
     @Override
+    public com.openmason.main.systems.skeleton.BoneStore bones() {
+        return viewport.getBoneStore();
+    }
+
+    @Override
+    public com.openmason.main.systems.skeleton.SkinStore skins() {
+        return viewport.getSkinStore();
+    }
+
+    @Override
     public FacePixelStore pixels() {
         if (pixelStore == null) {
             EditableModel gmr = viewport.getModelRenderer();

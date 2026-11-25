@@ -124,9 +124,10 @@ public final class AnimationCompatibility {
     }
 
     /**
-     * Probe an OMO file for its part IDs. Reads the top-level {@code parts}
-     * array in {@code manifest.json}; returns an empty list when the model has
-     * no explicit part list (single implicit root part, pre-v1.3 OMOs).
+     * Probe an OMO file for its joint IDs: the top-level {@code parts} array in
+     * {@code manifest.json}, then its {@code bones} (OMO 1.8: clip tracks may key
+     * bones). Returns an empty list when the model has no explicit part list and
+     * no bones (single implicit root part, pre-v1.3 OMOs).
      */
     public static List<String> readOMOPartIds(Path omo) throws IOException {
         try (InputStream in = new FileInputStream(omo.toFile())) {
@@ -139,6 +140,14 @@ public final class AnimationCompatibility {
             if (parts != null && parts.isArray()) {
                 for (JsonNode part : parts) {
                     JsonNode id = part.get("id");
+                    if (id != null && !id.isNull()) ids.add(id.asText());
+                }
+            }
+            // OMO 1.8: bones are joints too — clips may key them.
+            JsonNode bones = root.get("bones");
+            if (bones != null && bones.isArray()) {
+                for (JsonNode bone : bones) {
+                    JsonNode id = bone.get("id");
                     if (id != null && !id.isNull()) ids.add(id.asText());
                 }
             }

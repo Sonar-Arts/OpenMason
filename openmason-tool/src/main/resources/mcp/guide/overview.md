@@ -2,7 +2,8 @@
 
 Open Mason edits voxel-game models (.omo): named **parts** (primitive shapes with
 transforms, optionally parented into a hierarchy) whose faces carry per-face
-textures. Optional **bones** (animation skeleton) and **attachment sockets**
+textures. Optional **bones** (the skeleton: they pose parts parented to them
+and skinned vertices), per-vertex **skin weights**, and **attachment sockets**
 (mount points for other models).
 
 ## Conventions
@@ -28,10 +29,10 @@ textures. Optional **bones** (animation skeleton) and **attachment sockets**
 ## Undo domains
 `undo` / `redo` take a `domain`: model (default — parts, geometry, face
 textures; a whole script run is one step), texture (texture editor), bone,
-attach (sockets), anim. The five histories are separate.
+skin (weights), attach (sockets), anim. The six histories are separate.
 
 ## Topics
-`parts`, `face_textures`, `bones`, `attachments`, `animation`, `scripting`,
+`parts`, `face_textures`, `bones`, `skinning`, `attachments`, `animation`, `scripting`,
 `texture_editor` (summon/drive the layered editor; text pixel art via
 `tex_describe`/`tex_paint_grid` for vision-less reading), `recipes`,
 `particles` (FX systems / particle effects: `fx_*` tools, .omfx v2)

@@ -11,7 +11,10 @@ import org.joml.Vector3f;
 /**
  * Gizmo transform target for the currently-selected bone in a {@link BoneStore}.
  *
- * <p>Treats the bone's local {@code pos} / {@code rot} fields as the editable values.
+ * <p>Treats the bone's local {@code pos} / {@code rot} fields as the editable values — the posed
+ * values while the animation preview poses the skeleton (an edit then goes through
+ * {@link BoneStore#editLocal}, whose pose-edit handler poses / auto-keys it), the rest values
+ * otherwise.
  * Bone {@code origin} is the rest pivot in parent space and stays untouched — drags
  * adjust the {@code pos} offset so the joint visibly moves while the rest pose is
  * preserved. Scale is intentionally a no-op since bones are pure transform nodes
@@ -36,14 +39,14 @@ public class BoneTransformTarget implements ITransformTarget {
     public Vector3f getPosition() {
         OMOFormat.BoneEntry b = selected();
         if (b == null) return new Vector3f();
-        return new Vector3f(b.posX(), b.posY(), b.posZ());
+        return boneStore.getLocalPosition(b.id());
     }
 
     @Override
     public Vector3f getRotation() {
         OMOFormat.BoneEntry b = selected();
         if (b == null) return new Vector3f();
-        return new Vector3f(b.rotX(), b.rotY(), b.rotZ());
+        return boneStore.getLocalRotation(b.id());
     }
 
     @Override
@@ -55,13 +58,7 @@ public class BoneTransformTarget implements ITransformTarget {
     public void setPosition(float x, float y, float z) {
         OMOFormat.BoneEntry b = selected();
         if (b == null) return;
-        boneStore.put(new OMOFormat.BoneEntry(
-                b.id(), b.name(), b.parentBoneId(),
-                b.originX(), b.originY(), b.originZ(),
-                x, y, z,
-                b.rotX(), b.rotY(), b.rotZ(),
-                b.endpointX(), b.endpointY(), b.endpointZ()
-        ));
+        boneStore.editLocal(b.id(), new Vector3f(x, y, z), null);
     }
 
     @Override
@@ -78,13 +75,7 @@ public class BoneTransformTarget implements ITransformTarget {
     public void setRotation(float x, float y, float z) {
         OMOFormat.BoneEntry b = selected();
         if (b == null) return;
-        boneStore.put(new OMOFormat.BoneEntry(
-                b.id(), b.name(), b.parentBoneId(),
-                b.originX(), b.originY(), b.originZ(),
-                b.posX(), b.posY(), b.posZ(),
-                x, y, z,
-                b.endpointX(), b.endpointY(), b.endpointZ()
-        ));
+        boneStore.editLocal(b.id(), null, new Vector3f(x, y, z));
     }
 
     @Override

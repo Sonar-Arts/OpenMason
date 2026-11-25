@@ -8,6 +8,8 @@ import com.openmason.engine.modeling.parts.ModelPartManager;
 import com.openmason.engine.modeling.parts.PartTransform;
 import com.openmason.main.systems.menus.animationEditor.data.AnimationClip;
 import com.openmason.main.systems.menus.animationEditor.data.Track;
+import com.openmason.engine.format.omo.OMOFormat;
+import com.openmason.main.systems.skeleton.BoneStore;
 import org.joml.Vector3f;
 
 import java.util.HashMap;
@@ -36,6 +38,12 @@ import java.util.function.BiPredicate;
  * <p>{@link #restoreRestPose()} writes the rest pose back while keeping the
  * snapshot — the hook the model save path uses so an animated preview pose
  * is never baked into the .omo.
+ *
+ * <p><b>Bones</b> (rig revamp): with a {@link BoneStore} attached, bone tracks
+ * are sampled too and written into the store's POSE layer (never into the
+ * rest bones), together with this pipeline's part rest snapshot — so parts
+ * under bones follow and the skinned preview binds against the rest pose.
+ * Returning to rest clears the pose layer.
  */
 public final class AnimationPreviewPipeline implements IPartChangeListener {
 
@@ -62,12 +70,27 @@ public final class AnimationPreviewPipeline implements IPartChangeListener {
 
     private BiPredicate<String, PartTransform> externalEditListener;
 
+    /** The skeleton posed alongside the parts, or null (parts-only preview). */
+    private final BoneStore boneStore;
+    /** Bones whose current pose comes from the clip. */
+    private final Set<String> animatedBones = new HashSet<>();
+
     public AnimationPreviewPipeline(ModelPartManager partManager) {
+        this(partManager, null);
+    }
+
+    public AnimationPreviewPipeline(ModelPartManager partManager, BoneStore boneStore) {
         if (partManager == null) {
             throw new IllegalArgumentException("partManager required");
         }
         this.partManager = partManager;
+        this.boneStore = boneStore;
         partManager.addPartChangeListener(this);
+    }
+
+    /** The skeleton this preview poses, or null. */
+    public BoneStore boneStore() {
+        return boneStore;
     }
 
     /**
@@ -92,6 +115,7 @@ public final class AnimationPreviewPipeline implements IPartChangeListener {
         captured = true;
         atRest = true;
         animatedParts.clear();
+        animatedBones.clear();
         freshParts.clear();
         // release()/abandon() detach; a re-opened session must listen again.
         partManager.removePartChangeListener(this);
@@ -136,27 +160,8 @@ public final class AnimationPreviewPipeline implements IPartChangeListener {
         Set<String> animated = new HashSet<>();
         for (ModelPartDescriptor part : partManager.getAllParts()) {
             PartTransform rest = restPose.getOrDefault(part.id(), part.transform());
-            Track.Sample pose = null;
-
-            if (layered) {
-                Track baseTrack = base.trackFor(part.id());
-                if (baseTrack == null) baseTrack = trackByName(base, part.name());
-                Track.Sample basePose = baseTrack != null ? baseTrack.sample(baseTime) : null;
-                Track.Sample overlayPose = null;
-                if (masksPart(clip, part.id(), part.name())) {
-                    Track track = clip.trackFor(part.id());
-                    overlayPose = track != null ? track.sample(time) : null;
-                }
-                if (overlayPose != null && overlayWeight > 0f) {
-                    Track.Sample from = basePose != null ? basePose : restSample(rest);
-                    pose = lerp(from, overlayPose, overlayWeight);
-                } else {
-                    pose = basePose;
-                }
-            } else {
-                Track track = clip.trackFor(part.id());
-                pose = track != null ? track.sample(time) : null;
-            }
+            Track.Sample pose = sampleJoint(clip, time, base, baseTime, layered, overlayWeight,
+                    part.id(), part.name(), restSample(rest));
 
             PartTransform target = pose == null ? rest : new PartTransform(
                     new Vector3f(part.transform().origin()),
@@ -164,11 +169,59 @@ public final class AnimationPreviewPipeline implements IPartChangeListener {
             if (pose != null) animated.add(part.id());
             updates.put(part.id(), target);
         }
-        writeBatch(updates);
+
+        // Bones: sampled the same way, posed into the skeleton's pose layer.
+        Map<String, BoneStore.BonePose> bonePoses = new HashMap<>();
+        Set<String> bonesAnimated = new HashSet<>();
+        if (boneStore != null) {
+            for (OMOFormat.BoneEntry bone : boneStore.getBones()) {
+                Track.Sample rest = new Track.Sample(new Vector3f(bone.posX(), bone.posY(), bone.posZ()),
+                        new Vector3f(bone.rotX(), bone.rotY(), bone.rotZ()), new Vector3f(1f, 1f, 1f));
+                Track.Sample pose = sampleJoint(clip, time, base, baseTime, layered, overlayWeight,
+                        bone.id(), bone.name(), rest);
+                if (pose == null) continue;
+                bonePoses.put(bone.id(), new BoneStore.BonePose(pose.position(), pose.rotation()));
+                bonesAnimated.add(bone.id());
+            }
+        }
+        writeRig(updates, bonePoses);
         animatedParts.clear();
         animatedParts.addAll(animated);
+        animatedBones.clear();
+        animatedBones.addAll(bonesAnimated);
         freshParts.clear();
         atRest = false;
+    }
+
+    /**
+     * One joint's pose at {@code time}: the clip's track (by id, else by name hint for a layered
+     * base), with an OVERLAY blended over its base by mask and fade. Null = no track drives it.
+     */
+    private static Track.Sample sampleJoint(AnimationClip clip, float time, AnimationClip base, float baseTime,
+                                            boolean layered, float overlayWeight,
+                                            String id, String name, Track.Sample rest) {
+        if (!layered) {
+            Track track = clip.trackFor(id);
+            return track != null ? track.sample(time) : null;
+        }
+        Track baseTrack = base.trackFor(id);
+        if (baseTrack == null) baseTrack = trackByName(base, name);
+        Track.Sample basePose = baseTrack != null ? baseTrack.sample(baseTime) : null;
+        Track.Sample overlayPose = null;
+        if (masksPart(clip, id, name)) {
+            Track track = clip.trackFor(id);
+            overlayPose = track != null ? track.sample(time) : null;
+        }
+        if (overlayPose != null && overlayWeight > 0f) {
+            Track.Sample from = basePose != null ? basePose : rest;
+            return lerp(from, overlayPose, overlayWeight);
+        }
+        return basePose;
+    }
+
+    /** Whether the bone's current pose comes from the clip rather than its rest values. */
+    public boolean isAnimatedBone(String boneId) {
+        return animatedBones.contains(boneId);
     }
 
     /** Whether the part's viewport transform currently comes from the clip rather than rest. */
@@ -183,8 +236,9 @@ public final class AnimationPreviewPipeline implements IPartChangeListener {
      */
     public void restoreRestPose() {
         if (!captured || atRest) return;
-        writeBatch(new HashMap<>(restPose));
+        writeRest(new HashMap<>(restPose));
         animatedParts.clear();
+        animatedBones.clear();
         atRest = true;
     }
 
@@ -202,6 +256,8 @@ public final class AnimationPreviewPipeline implements IPartChangeListener {
     public void abandon() {
         restPose.clear();
         animatedParts.clear();
+        animatedBones.clear();
+        if (boneStore != null) boneStore.clearPose();
         captured = false;
         atRest = true;
         partManager.removePartChangeListener(this);
@@ -212,11 +268,14 @@ public final class AnimationPreviewPipeline implements IPartChangeListener {
      */
     public void release() {
         if (captured) {
-            writeBatch(new HashMap<>(restPose));
+            writeRest(new HashMap<>(restPose));
             restPose.clear();
             captured = false;
+        } else if (boneStore != null) {
+            boneStore.clearPose();
         }
         animatedParts.clear();
+        animatedBones.clear();
         atRest = true;
         partManager.removePartChangeListener(this);
     }
@@ -279,13 +338,31 @@ public final class AnimationPreviewPipeline implements IPartChangeListener {
 
     // ====================== helpers ======================
 
-    private void writeBatch(Map<String, PartTransform> updates) {
+    private boolean writeBatch(Map<String, PartTransform> updates) {
         applying = true;
         try {
-            partManager.setPartTransformsBatch(updates);
+            return partManager.setPartTransformsBatch(updates);
         } finally {
             applying = false;
         }
+    }
+
+    /**
+     * Pose parts and bones with ONE mesh rebuild: the bone pose layer is set silently first (so the
+     * part rebuild already sees it), and when no part changed but the skeleton did, the part manager
+     * re-bakes once.
+     */
+    private void writeRig(Map<String, PartTransform> partUpdates, Map<String, BoneStore.BonePose> bonePoses) {
+        boolean bonesChanged = boneStore != null && boneStore.setPose(bonePoses, restPose::get, false);
+        boolean partsChanged = writeBatch(partUpdates);
+        if (bonesChanged && !partsChanged) partManager.notifyExternalHierarchyChanged();
+    }
+
+    /** Back to rest: parts to the snapshot, the bone pose layer cleared — one rebuild. */
+    private void writeRest(Map<String, PartTransform> rest) {
+        boolean bonesChanged = boneStore != null && boneStore.clearPose(false);
+        boolean partsChanged = writeBatch(rest);
+        if (bonesChanged && !partsChanged) partManager.notifyExternalHierarchyChanged();
     }
 
     /** Mirror of {@code AnimLayering.clipWeight} over the editor clip type. */

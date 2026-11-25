@@ -9,6 +9,7 @@ import com.openmason.main.systems.menus.animationEditor.commands.CompositeComman
 import com.openmason.main.systems.menus.animationEditor.commands.KeyframeCommands;
 import com.openmason.main.systems.menus.animationEditor.data.AnimationClip;
 import com.openmason.main.systems.menus.animationEditor.data.Easing;
+import com.openmason.main.systems.menus.animationEditor.data.Joints;
 import com.openmason.main.systems.menus.animationEditor.data.Keyframe;
 import com.openmason.main.systems.menus.animationEditor.data.Track;
 import com.openmason.main.systems.menus.animationEditor.io.OMAClipIO;
@@ -19,6 +20,8 @@ import com.openmason.main.systems.menus.animationEditor.state.KeyframeClipboard;
 import com.openmason.main.systems.menus.animationEditor.state.KeyframeSelection;
 import com.openmason.main.systems.menus.textureCreator.commands.Command;
 import com.openmason.main.systems.menus.textureCreator.commands.CommandHistory;
+import com.openmason.main.systems.skeleton.BoneStore;
+import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,6 +53,9 @@ public final class AnimationEditorController {
 
     private ModelPartManager partManager;
     private AnimationPreviewPipeline preview;
+    /** Where the bound model's skeleton comes from (the viewport's bone store); null = parts only. */
+    private Supplier<BoneStore> boneStoreSupplier = () -> null;
+    private BoneStore boneStore;
     /** Where the clip's {@code modelRef} comes from at save time (model file path or name). */
     private Supplier<String> modelRefSupplier = () -> null;
 
@@ -71,6 +77,24 @@ public final class AnimationEditorController {
     }
 
     /**
+     * Where the bound model's skeleton comes from (rig revamp: bones are timeline rows, keyed and
+     * previewed like parts). Read whenever the viewport is (re)bound.
+     */
+    public void setBoneStoreSupplier(Supplier<BoneStore> supplier) {
+        this.boneStoreSupplier = supplier != null ? supplier : () -> null;
+    }
+
+    /** The bound model's skeleton, or null. */
+    public BoneStore boneStore() {
+        return boneStore;
+    }
+
+    /** The bound model's animatable joints (parts and bones). */
+    public Joints joints() {
+        return Joints.of(partManager, boneStore);
+    }
+
+    /**
      * Handle the active model changing while the editor stays open. The old
      * preview snapshot is abandoned (its parts no longer exist — writing it
      * back would corrupt the new model), tracks are re-resolved against the
@@ -86,12 +110,12 @@ public final class AnimationEditorController {
 
         if (newPartManager == null) return;
 
-        OMAClipIO.rebindTracksByName(state.clip(), newPartManager);
+        OMAClipIO.rebindTracksByName(state.clip(), joints());
         if (state.basePreviewClip() != null) {
-            OMAClipIO.rebindTracksByName(state.basePreviewClip(), newPartManager);
+            OMAClipIO.rebindTracksByName(state.basePreviewClip(), joints());
         }
         String selected = state.selectedPartId();
-        if (selected != null && newPartManager.getPartById(selected).isEmpty()
+        if (selected != null && !joints().exists(selected)
                 && state.clip().trackFor(selected) == null) {
             state.setSelectedPartId(null);
         }
@@ -105,11 +129,18 @@ public final class AnimationEditorController {
     }
 
     private AnimationPreviewPipeline newPreview(ModelPartManager pm) {
+        if (boneStore != null && boneStore.getPoseEditHandler() == poseEditHandler) {
+            boneStore.setPoseEditHandler(null);
+        }
+        boneStore = pm == null ? null : boneStoreSupplier.get();
         if (pm == null) return null;
-        AnimationPreviewPipeline p = new AnimationPreviewPipeline(pm);
+        AnimationPreviewPipeline p = new AnimationPreviewPipeline(pm, boneStore);
         p.setExternalEditListener(this::onExternalPartEdit);
+        if (boneStore != null) boneStore.setPoseEditHandler(poseEditHandler);
         return p;
     }
+
+    private final BoneStore.PoseEditHandler poseEditHandler = this::onBonePoseEdit;
 
     public AnimationEditorState state() { return state; }
     public CommandHistory history() { return history; }
@@ -207,6 +238,36 @@ public final class AnimationEditorController {
         return true;
     }
 
+    /**
+     * A bone was edited with the gizmo while the editor is open (rig revamp). With auto-key on the
+     * edited local pose is keyed at the playhead (a drag amends one history entry) and shown through
+     * the pose layer. Off: an animated bone shows the edit in the pose layer until the next scrub
+     * (the UI hints that it is unkeyed); a bone no track drives takes it as a REST edit.
+     *
+     * @return true when the edit was consumed as animation (not a rest edit)
+     */
+    private boolean onBonePoseEdit(String boneId, Vector3f position, Vector3f rotation) {
+        if (preview == null || !preview.hasCapturedRestPose() || boneStore == null) return false;
+        if (!state.autoKey()) {
+            if (!preview.isAnimatedBone(boneId)) return false;
+            boneStore.setBonePose(boneId, position, rotation);
+            state.setUnkeyedPartId(boneId);
+            return true;
+        }
+        float t = state.playhead();
+        Keyframe kf = new Keyframe(t, new Vector3f(position), new Vector3f(rotation),
+                new Vector3f(1f, 1f, 1f), currentEasingFor(boneId, t));
+        if (history.peekUndo() instanceof AutoKeyCommand top && top.matches(boneId, t)) {
+            top.amend(kf);
+            refreshDirty();
+            applyCurrentPose();
+        } else {
+            execute(new AutoKeyCommand(state.clip(), boneId, kf));
+        }
+        state.setUnkeyedPartId(null);
+        return true;
+    }
+
     /** Easing of an existing key at {@code t} on the track, else LINEAR. */
     private Easing currentEasingFor(String partId, float t) {
         int idx = indexAtTime(partId, t);
@@ -238,15 +299,20 @@ public final class AnimationEditorController {
     public void insertKeyframeAt(String partId, float time) {
         if (partManager == null) return;
         ModelPartDescriptor part = partManager.getPartById(partId).orElse(null);
-        if (part == null) {
-            logger.warn("Insert keyframe: unknown part {}", partId);
+        boolean bone = part == null && boneStore != null && boneStore.getById(partId) != null;
+        if (part == null && !bone) {
+            logger.warn("Insert keyframe: unknown part or bone {}", partId);
             return;
         }
         time = Math.min(Math.max(time, 0f), state.clip().duration());
         Track track = state.clip().trackFor(partId);
         Keyframe kf;
         if (Math.abs(time - state.playhead()) < KeyframeSelection.TIME_EPS || track == null) {
-            kf = Keyframe.fromPartTransform(time, part.transform(), Easing.LINEAR);
+            // The joint's current viewport pose: a part's transform, a bone's posed (or rest) local.
+            kf = part != null
+                    ? Keyframe.fromPartTransform(time, part.transform(), Easing.LINEAR)
+                    : new Keyframe(time, boneStore.getLocalPosition(partId), boneStore.getLocalRotation(partId),
+                            new Vector3f(1f, 1f, 1f), Easing.LINEAR);
         } else {
             Track.Sample s = track.sample(time);
             kf = new Keyframe(time, s.position(), s.rotation(), s.scale(), Easing.LINEAR);
@@ -296,21 +362,22 @@ public final class AnimationEditorController {
      */
     public List<Track> orphanTracks() {
         List<Track> out = new ArrayList<>();
+        Joints joints = joints();
         for (Track t : state.clip().tracks().values()) {
-            if (partManager == null || partManager.getPartById(t.partId()).isEmpty()) {
+            if (partManager == null || !joints.exists(t.partId())) {
                 out.add(t);
             }
         }
         return out;
     }
 
-    /** Re-key an orphan track under a real part (merging into an existing track). */
+    /** Re-key an orphan track under a real part or bone (merging into an existing track). */
     public boolean rebindTrack(String fromPartId, String toPartId) {
         if (partManager == null || state.clip().trackFor(fromPartId) == null) return false;
-        ModelPartDescriptor target = partManager.getPartById(toPartId).orElse(null);
-        if (target == null) return false;
+        String targetName = joints().nameOf(toPartId);
+        if (targetName == null) return false;
         if (fromPartId.equals(state.selectedPartId())) state.setSelectedPartId(toPartId);
-        execute(KeyframeCommands.rebindTrack(state.clip(), fromPartId, toPartId, target.name()));
+        execute(KeyframeCommands.rebindTrack(state.clip(), fromPartId, toPartId, targetName));
         return true;
     }
 
@@ -607,7 +674,7 @@ public final class AnimationEditorController {
      * @return false if the file failed to parse
      */
     public boolean loadBasePreviewClip(String filePath) {
-        AnimationClip base = io.load(filePath, partManager);
+        AnimationClip base = io.load(filePath, joints());
         if (base == null) return false;
         state.setBasePreviewClip(base, filePath);
         applyCurrentPose();
@@ -666,7 +733,7 @@ public final class AnimationEditorController {
     public boolean save() {
         if (state.filePath() == null) return false;
         stampModelRef();
-        boolean ok = io.save(state.clip(), state.filePath(), partManager);
+        boolean ok = io.save(state.clip(), state.filePath(), joints());
         if (ok) markSaved();
         return ok;
     }
@@ -677,7 +744,7 @@ public final class AnimationEditorController {
         // it — the stored path must match the file that actually exists.
         String resolved = OMAFormat.ensureExtension(filePath);
         stampModelRef();
-        boolean ok = io.save(state.clip(), resolved, partManager);
+        boolean ok = io.save(state.clip(), resolved, joints());
         if (ok) {
             state.setFilePath(resolved);
             markSaved();
@@ -686,7 +753,7 @@ public final class AnimationEditorController {
     }
 
     public boolean load(String filePath) {
-        AnimationClip loaded = io.load(filePath, partManager);
+        AnimationClip loaded = io.load(filePath, joints());
         if (loaded == null) return false;
         state.setClip(loaded);
         state.setFilePath(filePath);
@@ -702,7 +769,7 @@ public final class AnimationEditorController {
      */
     public byte[] exportClipBytes() {
         stampModelRef();
-        return io.toBytes(state.clip(), partManager);
+        return io.toBytes(state.clip(), joints());
     }
 
     /**
@@ -713,7 +780,7 @@ public final class AnimationEditorController {
      * @return false if the bytes failed to parse
      */
     public boolean importClipBytes(byte[] omaBytes, String sourceLabel) {
-        AnimationClip loaded = io.fromBytes(omaBytes, sourceLabel, partManager);
+        AnimationClip loaded = io.fromBytes(omaBytes, sourceLabel, joints());
         if (loaded == null) return false;
         state.setClip(loaded);
         state.setFilePath(null);

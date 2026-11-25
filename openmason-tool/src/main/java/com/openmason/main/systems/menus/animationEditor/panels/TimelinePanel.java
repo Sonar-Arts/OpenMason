@@ -83,7 +83,7 @@ public final class TimelinePanel {
         ImGui.separator();
 
         AnimationClip clip = controller.state().clip();
-        List<PartRows.Row> rows = PartRows.build(pm, controller.orphanTracks());
+        List<PartRows.Row> rows = PartRows.build(pm, controller.boneStore(), controller.orphanTracks());
 
         ImGui.beginChild("##timelineBody");
 
@@ -587,6 +587,15 @@ public final class TimelinePanel {
                                 controller.rebindTrack(contextRow.id(), part.id());
                             }
                         }
+                        var bones = controller.boneStore();
+                        if (bones != null && !bones.isEmpty()) {
+                            ImGui.separator();
+                            for (var bone : bones.getBones()) {
+                                if (ImGui.menuItem(bone.name() + " (bone)##" + bone.id())) {
+                                    controller.rebindTrack(contextRow.id(), bone.id());
+                                }
+                            }
+                        }
                         ImGui.endMenu();
                     }
                 }
@@ -602,26 +611,27 @@ public final class TimelinePanel {
 
     private void renderInsertButton(ModelPartManager pm) {
         String selected = controller.state().selectedPartId();
-        boolean canInsert = selected != null && pm.getPartById(selected).isPresent();
+        var joints = controller.joints();
+        boolean canInsert = selected != null && joints.exists(selected);
         AnimUI.beginDisabled(!canInsert);
         if (ImGui.button("+ Keyframe @ Playhead")) {
             controller.insertKeyframeAtPlayhead(selected);
         }
         AnimUI.endDisabled(!canInsert);
         AnimUI.tooltip(canInsert
-                ? "Insert a keyframe on the selected part at the current playhead (K)."
-                : "Select a part in the left panel first.");
+                ? "Insert a keyframe on the selected part or bone at the current playhead (K)."
+                : "Select a part or bone in the left panel first.");
 
         ImGui.sameLine();
         ImGui.textDisabled(canInsert
-                ? "target: " + pm.getPartById(selected).map(ModelPartDescriptor::name).orElse(selected)
+                ? "target: " + java.util.Objects.requireNonNullElse(joints.nameOf(selected), selected)
                 : "(no part selected)");
 
         // A part was posed in the viewport but not keyed: it snaps back on the
         // next scrub unless keyed (or auto-key is on).
         String unkeyed = controller.state().unkeyedPartId();
         if (unkeyed != null) {
-            String name = pm.getPartById(unkeyed).map(ModelPartDescriptor::name).orElse(unkeyed);
+            String name = java.util.Objects.requireNonNullElse(joints.nameOf(unkeyed), unkeyed);
             ImGui.sameLine();
             ThemedWidgets.statusText(ThemeColors.Tone.WARNING, "'" + name + "' moved but not keyed");
             AnimUI.tooltip("The viewport pose of '" + name + "' is not in the clip and will be "

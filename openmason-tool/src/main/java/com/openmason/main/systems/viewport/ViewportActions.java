@@ -35,6 +35,11 @@ public class ViewportActions {
      * Undo the last model editing operation (Ctrl+Z).
      */
     public void undo() {
+        // In weight paint mode Ctrl+Z steps the skin history (brush strokes, weight operations).
+        if (viewport != null && viewport.getWeightPaintState().isActive()) {
+            viewport.getSkinHistory().undo();
+            return;
+        }
         ModelCommandHistory history = viewport.getCommandHistory();
         if (history != null && history.canUndo()) {
             history.undo();
@@ -45,6 +50,10 @@ public class ViewportActions {
      * Redo the last undone model editing operation (Ctrl+Y).
      */
     public void redo() {
+        if (viewport != null && viewport.getWeightPaintState().isActive()) {
+            viewport.getSkinHistory().redo();
+            return;
+        }
         ModelCommandHistory history = viewport.getCommandHistory();
         if (history != null && history.canRedo()) {
             history.redo();
@@ -291,6 +300,15 @@ public class ViewportActions {
             return;
         }
         viewport.toggleKnifeTool();
+    }
+
+    // ========== Weight Paint (Ctrl+Shift+P) ==========
+
+    /** Toggle weight paint mode (the rigging pane's Skin section shows the brush controls). */
+    public void toggleWeightPaint() {
+        if (viewport == null) return;
+        viewport.getWeightPaintState().toggle();
+        logger.debug("Weight paint {}", viewport.getWeightPaintState().isActive() ? "on" : "off");
     }
 
     // ========== Grab Mode (G Key) ==========

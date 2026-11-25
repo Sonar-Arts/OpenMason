@@ -33,6 +33,32 @@ class PartRowsTest {
     }
 
     @Test
+    void bonesAreRowsInTheUnifiedHierarchy() {
+        ModelPartManager pm = AnimTestModels.model("body", "hand", "head");
+        com.openmason.main.systems.skeleton.BoneStore bones = new com.openmason.main.systems.skeleton.BoneStore();
+        // spine under the body PART, arm under spine; the hand PART hangs under the arm BONE.
+        bones.setBones(List.of(
+                bone("arm", "Arm", "spine"),
+                bone("spine", "Spine", idOf(pm, "body")),
+                bone("root", "Root", null)));
+        assertTrue(pm.setPartParent(idOf(pm, "hand"), "arm"));
+        assertTrue(pm.setPartParent(idOf(pm, "head"), idOf(pm, "body")));
+
+        List<PartRows.Row> rows = PartRows.build(pm, bones, List.of());
+        assertEquals(List.of("body", "head", "Spine", "Arm", "hand", "Root"),
+                rows.stream().map(PartRows.Row::label).toList());
+        assertEquals(List.of(0, 1, 1, 2, 3, 0), rows.stream().map(PartRows.Row::depth).toList());
+        assertTrue(rows.get(2).isBone());
+        assertTrue(!rows.get(2).isOrphan());
+        assertTrue(rows.get(4).part() != null);
+    }
+
+    private static com.openmason.engine.format.omo.OMOFormat.BoneEntry bone(String id, String name, String parent) {
+        return new com.openmason.engine.format.omo.OMOFormat.BoneEntry(id, name, parent,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0);
+    }
+
+    @Test
     void orphanWithoutHintShowsShortenedId() {
         List<PartRows.Row> rows = PartRows.build(null, List.of(new Track("0123456789abcdef")));
         assertEquals("01234567…", rows.get(0).label());

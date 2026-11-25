@@ -3,48 +3,37 @@ package com.openmason.engine.rendering.model.draw;
 import com.openmason.engine.entity.model.EntityAttachmentPoint;
 import com.openmason.engine.entity.model.EntityGeometry;
 import com.openmason.engine.entity.model.EntityPart;
-import com.openmason.engine.format.oma.AnimLayering;
-import com.openmason.engine.format.oma.AnimSampler;
-import com.openmason.engine.format.oma.ParsedAnimClip;
-import com.openmason.engine.format.oma.ParsedAnimTrack;
 import com.openmason.engine.rendering.RenderOrigin;
+import com.openmason.engine.rig.JointPalette;
+import com.openmason.engine.rig.Rig;
+import com.openmason.engine.rig.RigJoint;
+import com.openmason.engine.rig.RigModel;
+import com.openmason.engine.rig.RigPoser;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 
 /**
- * GL-free pose math for part-based models: per-part world matrices from a base
- * transform, the rest pose and a {@link ClipLayers} frame, and the world frame of
- * named attachment points (sockets). The single source of the per-part transform
- * pipeline — every {@link ModelRenderer} pass draws with these matrices, and
- * attachments mount at {@link #socketWorldMatrix} so they follow the animation.
+ * Pose adapter for part/bone models over the native rig ({@code cenda/rig.h}, {@link RigPoser}): the
+ * per-joint SKIN matrices {@code K(j) = base·W_pose(j)·W_rest(j)⁻¹} of a {@link ClipLayers} frame, and
+ * the world frame of named attachment points (sockets). The pose math (clip sampling, layering, the
+ * part/bone hierarchy, head tracking) is native; this class only marshals.
  *
- * <p>Transform pipeline (rest-pose model space → world):
+ * <p>Joint {@code i} of a model is its part {@code i}; bones follow the parts. A rigid part's vertices
+ * draw with its own skin matrix — what {@link #forEachPartMatrix} hands out per part — and skinned
+ * vertices blend the matrices of their joints ({@link #pose} → {@link JointPalette}).
+ *
  * <pre>
- *   base       = T(position) · Ry(yaw) · S(scale)
- *   partMatrix = base · W_pose(part) · W_rest(part)⁻¹
- *   W(part)    = W(parent) · M(part)
- *   M(pos,rot,scale,origin) = T(pos) · T(origin) · R_xyz(rot) · S(scale) · T(-origin)
+ *   base        = T(position) · Ry(yaw) · S(scale)
+ *   K(joint)    = base · W_pose(joint) · W_rest(joint)⁻¹
+ *   socketWorld = K(host joint) · T(localPos) · R_xyz(localRotDeg) · S(localScale)
  * </pre>
- * Head tracking inserts {@code Ry(yaw) · Rx(pitch)} before the head's local pose
- * rotation, so its descendants inherit the turn about the animated neck. Socket
- * positions/rotations/scales are authored in rest-pose model space, so
- * <pre>
- *   socketWorld = partMatrix(host part) · T(localPos) · R_xyz(localRotDeg) · S(localScale)
- * </pre>
- * and the returned matrix is used directly as the attached model's base transform.
+ * Head tracking inserts {@code Ry(yaw) · Rx(pitch)} before the head joint's local pose rotation, so its
+ * descendants inherit the turn about the animated neck ({@link Rig#headJoint()}).
  */
 public final class ModelPoseSolver {
-
-    private static final Logger logger = LoggerFactory.getLogger(ModelPoseSolver.class);
 
     /** Receives the computed world matrix for one part. The matrix is reused after the call. */
     @FunctionalInterface
@@ -53,15 +42,17 @@ public final class ModelPoseSolver {
     }
 
     /**
-     * Code-driven rotation for named parts, layered on top of whatever the clip (or
-     * rest pose) gives them — how gameplay drives a part no clip can know about.
-     * Rotates about the part's own origin, so children follow.
+     * Code-driven rotation for named joints (parts or bones), layered on top of whatever the clip (or
+     * rest pose) gives them — how gameplay drives a joint no clip can know about. Rotates about the
+     * joint's own pivot, so children follow.
      */
     @FunctionalInterface
     public interface PartOverrides {
         /** Euler degrees added to {@code partName}'s rotation, or null to leave it alone. */
         Vector3f extraRotationDeg(String partName);
     }
+
+    private static final ThreadLocal<JointPalette> SCRATCH = ThreadLocal.withInitial(JointPalette::new);
 
     private ModelPoseSolver() {
         throw new UnsupportedOperationException("Utility class");
@@ -82,26 +73,60 @@ public final class ModelPoseSolver {
     }
 
     /**
-     * Walks the geometry's parts in order, computing each part's world matrix from
-     * the base transform plus its hierarchy-propagated pose delta. Un-animated
-     * children inherit their parent's delta. With overlays, the per-part pose is
-     * composed via {@link AnimLayering#blendPart}. {@code headYawDeg}/
-     * {@code headPitchDeg} rotate the head (first part whose name contains "head")
-     * and its descendants about its neck pivot.
+     * Poses every joint of {@code geometry}'s rig into {@code out} (skin + world matrices).
      *
-     * @param overrides code-driven part rotations, or null
+     * @param overrides code-driven joint rotations, or null
+     */
+    public static JointPalette pose(EntityGeometry geometry, ClipLayers layers, Matrix4f base,
+                                    float headYawDeg, float headPitchDeg, PartOverrides overrides,
+                                    JointPalette out) {
+        RigModel model = geometry.rig();
+        Rig rig = model.rig();
+        RigPoser poser = RigPoser.local().clearExtras();
+        int head = (headYawDeg != 0f || headPitchDeg != 0f) ? rig.headJoint() : -1;
+        boolean headDone = false;
+        if (overrides != null) {
+            List<RigJoint> joints = model.joints();
+            for (int j = 0; j < joints.size(); j++) {
+                Vector3f extra = overrides.extraRotationDeg(joints.get(j).name());
+                boolean isHead = j == head;
+                if (extra == null && !isHead) continue;
+                poser.extra(j, isHead ? headYawDeg : 0f, isHead ? headPitchDeg : 0f,
+                        extra != null ? extra.x : 0f, extra != null ? extra.y : 0f, extra != null ? extra.z : 0f);
+                headDone |= isHead;
+            }
+        }
+        if (head >= 0 && !headDone) {
+            poser.extra(head, headYawDeg, headPitchDeg, 0f, 0f, 0f);
+        }
+        ClipLayers l = layers != null ? layers : ClipLayers.REST;
+        List<RigPoser.Overlay> overlays = List.of();
+        if (!l.overlays().isEmpty()) {
+            overlays = new ArrayList<>(l.overlays().size());
+            for (ClipLayers.Overlay o : l.overlays()) {
+                overlays.add(new RigPoser.Overlay(o.clip(), o.time(), o.weight()));
+            }
+        }
+        poser.pose(rig, l.baseClip(), l.baseTime(), overlays, base, out);
+        poser.clearExtras();
+        return out;
+    }
+
+    /**
+     * Walks the geometry's parts in order, handing each part's skin matrix (its rigid draw matrix) to
+     * {@code consumer}. {@code headYawDeg}/{@code headPitchDeg} turn the head joint and its descendants
+     * about its pivot.
+     *
+     * @param overrides code-driven joint rotations, or null
      */
     public static void forEachPartMatrix(EntityGeometry geometry, ClipLayers layers, Matrix4f base,
                                          float headYawDeg, float headPitchDeg,
                                          PartOverrides overrides, PartConsumer consumer) {
-        ResolvedAnim resolved = resolve(layers);
+        JointPalette palette = pose(geometry, layers, base, headYawDeg, headPitchDeg, overrides, SCRATCH.get());
         Matrix4f partMatrix = new Matrix4f();
-        HierarchyFrame frame = new HierarchyFrame(geometry, resolved, headYawDeg, headPitchDeg, overrides);
         List<EntityPart> parts = geometry.parts();
         for (int i = 0; i < parts.size(); i++) {
-            EntityPart part = parts.get(i);
-            computePartMatrix(partMatrix, frame, part, base);
-            consumer.accept(i, part, partMatrix);
+            consumer.accept(i, parts.get(i), palette.skinMatrix(i, partMatrix));
         }
     }
 
@@ -115,32 +140,55 @@ public final class ModelPoseSolver {
     /**
      * World matrix of the named socket (case-insensitive) at the given pose, written
      * into {@code dest} and returned — or {@code null} when the socket is unknown, or
-     * names a host part that no longer exists (id and name fallback both miss), so
+     * names a host joint that no longer exists (id and name fallback both miss), so
      * callers skip rendering rather than mount at the model origin.
      */
     public static Matrix4f socketWorldMatrix(EntityGeometry geometry, ClipLayers layers, Matrix4f base,
                                              float headYawDeg, float headPitchDeg,
                                              String socketName, Matrix4f dest) {
         if (geometry == null || socketName == null) return null;
-
-        EntityAttachmentPoint socket = null;
-        for (EntityAttachmentPoint candidate : geometry.attachmentPoints()) {
-            if (socketName.equalsIgnoreCase(candidate.name())) {
-                socket = candidate;
-                break;
-            }
-        }
+        EntityAttachmentPoint socket = findSocket(geometry, socketName);
         if (socket == null) return null;
-
         if (socket.isModelRoot()) {
             dest.set(base);
         } else {
-            EntityPart host = resolveHostPart(geometry, socket);
-            if (host == null) return null;
-            computePartMatrix(dest, new HierarchyFrame(geometry, resolve(layers), headYawDeg, headPitchDeg, null),
-                    host, base);
+            int host = hostJoint(geometry, socket);
+            if (host < 0) return null;
+            JointPalette palette = pose(geometry, layers, base, headYawDeg, headPitchDeg, null, SCRATCH.get());
+            palette.skinMatrix(host, dest);
         }
+        return applySocketLocal(socket, dest);
+    }
 
+    /**
+     * Socket frame from an already-posed palette (no second pose): {@code K(host)·T·R·S}, the base for
+     * a model-root socket. Null when the socket or its host is unknown.
+     */
+    public static Matrix4f socketWorldMatrix(EntityGeometry geometry, JointPalette palette, Matrix4f base,
+                                             String socketName, Matrix4f dest) {
+        if (geometry == null || socketName == null) return null;
+        EntityAttachmentPoint socket = findSocket(geometry, socketName);
+        if (socket == null) return null;
+        if (socket.isModelRoot()) {
+            dest.set(base);
+        } else {
+            int host = hostJoint(geometry, socket);
+            if (host < 0 || host >= palette.count()) return null;
+            palette.skinMatrix(host, dest);
+        }
+        return applySocketLocal(socket, dest);
+    }
+
+    private static EntityAttachmentPoint findSocket(EntityGeometry geometry, String socketName) {
+        for (EntityAttachmentPoint candidate : geometry.attachmentPoints()) {
+            if (socketName.equalsIgnoreCase(candidate.name())) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static Matrix4f applySocketLocal(EntityAttachmentPoint socket, Matrix4f dest) {
         Vector3f pos = socket.localPos();
         Vector3f rot = socket.localRotDeg();
         Vector3f scl = socket.localScale();
@@ -152,246 +200,19 @@ public final class ModelPoseSolver {
                 .scale(scl);
     }
 
-    /** Host part by id, falling back to name; null when both miss. */
-    private static EntityPart resolveHostPart(EntityGeometry geometry, EntityAttachmentPoint socket) {
+    /** Host joint (part or bone) by id, falling back to exact name; -1 when both miss. */
+    public static int hostJoint(EntityGeometry geometry, EntityAttachmentPoint socket) {
+        RigModel model = geometry.rig();
         if (socket.parentPartId() != null && !socket.parentPartId().isBlank()) {
-            for (EntityPart part : geometry.parts()) {
-                if (socket.parentPartId().equals(part.id())) {
-                    return part;
-                }
-            }
+            int j = model.jointOf(socket.parentPartId());
+            if (j >= 0) return j;
         }
         if (socket.parentPartName() != null && !socket.parentPartName().isBlank()) {
-            for (EntityPart part : geometry.parts()) {
-                if (socket.parentPartName().equals(part.name())) {
-                    return part;
-                }
+            List<RigJoint> joints = model.joints();
+            for (int j = 0; j < joints.size(); j++) {
+                if (socket.parentPartName().equals(joints.get(j).name())) return j;
             }
         }
-        return null;
-    }
-
-    /** One part's world matrix into {@code dest}: {@code base · D(part)}. */
-    private static void computePartMatrix(Matrix4f dest, HierarchyFrame frame, EntityPart part, Matrix4f base) {
-        Matrix4f delta = frame.delta(part);
-        if (delta == null) {
-            dest.set(base);
-        } else {
-            dest.set(base).mul(delta);
-        }
-    }
-
-    /** A part's own local pose for the frame; {@code null} when nothing animates it. */
-    private static AnimSampler.PartPose samplePartPose(EntityPart part, ResolvedAnim resolved) {
-        ParsedAnimTrack track = resolved.baseTracks().get(part.id());
-        if (track == null) {
-            track = trackByName(resolved.baseClip(), part.name());
-        }
-        if (!resolved.overlays().isEmpty()) {
-            // Rest pose references the part's own vectors — no copies. blendPart
-            // returns this same instance when nothing animates the part.
-            AnimSampler.PartPose restPose = new AnimSampler.PartPose(
-                    part.restPos(), part.restRot(), part.restScale());
-            AnimSampler.PartPose pose = AnimLayering.blendPart(restPose, track, resolved.baseTime(),
-                    resolved.overlays(), part.id(), part.name());
-            return (pose == restPose && track == null) ? null : pose;
-        }
-        return track != null ? AnimSampler.sample(track, resolved.baseTime()) : null;
-    }
-
-    /**
-     * Per-frame pose deltas with the part hierarchy propagated.
-     *
-     * <p>Mesh vertices are baked in model space at the rest pose, and a part's
-     * rest/animated transforms are LOCAL to its parent. A part's model-space delta is
-     * <pre>
-     *   D(p) = W_anim(p) · W_rest(p)⁻¹
-     *        = D(parent) · W_rest(parent) · L_anim(p) · L_rest(p)⁻¹ · W_rest(parent)⁻¹
-     * </pre>
-     * A part nothing animates inherits its parent's delta, so a child stays attached
-     * when only the parent is keyed. Cycles / unknown parents count as root-level.
-     */
-    private static final class HierarchyFrame {
-        private final ResolvedAnim resolved;
-        private final String headPartId;
-        private final float headYawRad;
-        private final float headPitchRad;
-        private final PartOverrides overrides;
-        private final Map<String, EntityPart> byId;
-        private final Map<String, Matrix4f> deltas = new HashMap<>();
-        private final Map<String, Matrix4f> restWorld = new HashMap<>();
-        /** Sentinel for "no delta" (identity) so the memo can record it. */
-        private static final Matrix4f IDENTITY = new Matrix4f();
-        private static final int MAX_DEPTH = 32;
-
-        HierarchyFrame(EntityGeometry geometry, ResolvedAnim resolved,
-                       float headYawDeg, float headPitchDeg, PartOverrides overrides) {
-            this.resolved = resolved;
-            this.overrides = overrides;
-            this.headPartId = (headYawDeg != 0f || headPitchDeg != 0f) ? headPartId(geometry) : null;
-            this.headYawRad = (float) Math.toRadians(headYawDeg);
-            this.headPitchRad = (float) Math.toRadians(headPitchDeg);
-            this.byId = new HashMap<>(geometry.parts().size() * 2);
-            for (EntityPart p : geometry.parts()) {
-                if (p.id() != null) byId.put(p.id(), p);
-            }
-        }
-
-        private EntityPart parentOf(EntityPart part) {
-            String pid = part.parentId();
-            if (pid == null || pid.isBlank()) return null;
-            EntityPart parent = byId.get(pid);
-            return parent == part ? null : parent;
-        }
-
-        Matrix4f delta(EntityPart part) {
-            return delta(part, 0);
-        }
-
-        private Matrix4f delta(EntityPart part, int depth) {
-            Matrix4f cached = deltas.get(part.id());
-            if (cached != null) return cached == IDENTITY ? null : cached;
-
-            AnimSampler.PartPose pose = samplePartPose(part, resolved);
-            boolean trackedHead = headPartId != null && headPartId.equals(part.id());
-            Vector3f extraRot = overrides != null ? overrides.extraRotationDeg(part.name()) : null;
-            EntityPart parent = depth < MAX_DEPTH ? parentOf(part) : null;
-            Matrix4f parentDelta = parent != null ? delta(parent, depth + 1) : null;
-
-            Matrix4f result;
-            if (pose == null && !trackedHead && extraRot == null) {
-                // L_anim == L_rest: inherit the parent's delta verbatim.
-                result = parentDelta;
-            } else {
-                Vector3f origin = part.restOrigin();
-                Vector3f rotDeg = pose != null ? pose.rotationDeg() : part.restRot();
-                if (extraRot != null) {
-                    rotDeg = new Vector3f(rotDeg).add(extraRot);
-                }
-                // Tracking belongs in the local pose, so facial children and their
-                // sockets inherit it along with any animated ancestors.
-                Matrix4f local = partTransform(new Matrix4f(),
-                        pose != null ? pose.position() : part.restPos(),
-                        rotDeg,
-                        pose != null ? pose.scale() : part.restScale(), origin,
-                        trackedHead ? headYawRad : 0f, trackedHead ? headPitchRad : 0f);
-                Matrix4f restInverse = partTransform(new Matrix4f(),
-                        part.restPos(), part.restRot(), part.restScale(), origin, 0f, 0f).invert();
-                local.mul(restInverse); // L_anim · L_rest⁻¹
-                if (parent == null) {
-                    result = local;
-                } else {
-                    Matrix4f wr = restWorld(parent, depth + 1);
-                    result = new Matrix4f();
-                    if (parentDelta != null) result.set(parentDelta);
-                    result.mul(wr).mul(local).mul(wr.invert(new Matrix4f()));
-                }
-            }
-            deltas.put(part.id(), result == null ? IDENTITY : result);
-            return result;
-        }
-
-        /** Rest transform of a part chained from the root (model space). */
-        private Matrix4f restWorld(EntityPart part, int depth) {
-            Matrix4f cached = restWorld.get(part.id());
-            if (cached != null) return cached;
-            Matrix4f m = new Matrix4f();
-            EntityPart parent = depth < MAX_DEPTH ? parentOf(part) : null;
-            if (parent != null) m.set(restWorld(parent, depth + 1));
-            partTransform(m, part.restPos(), part.restRot(), part.restScale(), part.restOrigin(), 0f, 0f);
-            restWorld.put(part.id(), m);
-            return m;
-        }
-    }
-
-    /** A render-ready frame: base clip with wrapped time + track lookup, and live overlays. */
-    private record ResolvedAnim(ParsedAnimClip baseClip, float baseTime,
-                                Map<String, ParsedAnimTrack> baseTracks,
-                                List<AnimLayering.OverlayFrame> overlays) {}
-
-    private static final ResolvedAnim REST = new ResolvedAnim(null, 0f, Collections.emptyMap(), List.of());
-
-    /**
-     * Wraps clip times and combines each overlay's envelope with the clip's own
-     * fade ({@link AnimLayering#clipWeight}); zero-weight or clip-less overlays are
-     * dropped so the per-part loop stays on its fast path.
-     */
-    private static ResolvedAnim resolve(ClipLayers layers) {
-        if (layers == null) return REST;
-        ParsedAnimClip baseClip = layers.baseClip();
-        float baseTime = 0f;
-        Map<String, ParsedAnimTrack> baseTracks = Collections.emptyMap();
-        if (baseClip != null) {
-            baseTime = AnimSampler.wrapTime(layers.baseTime(), baseClip.duration(), baseClip.loop());
-            baseTracks = baseClip.trackByPartId();
-        }
-
-        List<AnimLayering.OverlayFrame> overlays = List.of();
-        if (!layers.overlays().isEmpty()) {
-            overlays = new ArrayList<>(layers.overlays().size());
-            for (ClipLayers.Overlay overlay : layers.overlays()) {
-                ParsedAnimClip clip = overlay.clip();
-                if (clip == null) continue;
-                float weight = overlay.weight() * AnimLayering.clipWeight(clip, overlay.time());
-                if (weight <= 0f) continue;
-                float wrapped = AnimSampler.wrapTime(overlay.time(), clip.duration(), clip.loop());
-                overlays.add(new AnimLayering.OverlayFrame(clip, wrapped, weight));
-            }
-        }
-        return new ResolvedAnim(baseClip, baseTime, baseTracks, overlays);
-    }
-
-    /** One-time diagnostic guard so the head-part lookup logs at most once. */
-    private static volatile boolean headLookupLogged = false;
-
-    /** Part id of the first part whose name contains "head" (case-insensitive), or null. */
-    private static String headPartId(EntityGeometry geometry) {
-        String found = null;
-        for (EntityPart part : geometry.parts()) {
-            String n = part.name();
-            if (n != null && n.toLowerCase(Locale.ROOT).contains("head")) {
-                found = part.id();
-                break;
-            }
-        }
-        if (!headLookupLogged) {
-            headLookupLogged = true;
-            StringBuilder names = new StringBuilder();
-            for (EntityPart part : geometry.parts()) {
-                names.append(part.name()).append(' ');
-            }
-            logger.debug("Head-tracking part lookup: head={} parts=[{}]", found, names.toString().trim());
-        }
-        return found;
-    }
-
-    /**
-     * Post-multiplies a part's local TRS transform onto {@code dest}:
-     * {@code T(pos) · T(origin) · Ry(headYaw) · Rx(headPitch) · R(rot) · S(scale) · T(-origin)}.
-     */
-    private static Matrix4f partTransform(Matrix4f dest, Vector3f pos, Vector3f rotDeg,
-                                          Vector3f scale, Vector3f origin,
-                                          float headYawRad, float headPitchRad) {
-        return dest
-                .translate(pos)
-                .translate(origin)
-                .rotateY(headYawRad)
-                .rotateX(headPitchRad)
-                .rotateXYZ((float) Math.toRadians(rotDeg.x),
-                        (float) Math.toRadians(rotDeg.y),
-                        (float) Math.toRadians(rotDeg.z))
-                .scale(scale)
-                .translate(-origin.x, -origin.y, -origin.z);
-    }
-
-    /** Fallback track lookup by part name when the part id does not match. */
-    private static ParsedAnimTrack trackByName(ParsedAnimClip clip, String partName) {
-        if (clip == null || partName == null) return null;
-        for (ParsedAnimTrack track : clip.tracks()) {
-            if (partName.equals(track.partName())) {
-                return track;
-            }
-        }
-        return null;
+        return -1;
     }
 }

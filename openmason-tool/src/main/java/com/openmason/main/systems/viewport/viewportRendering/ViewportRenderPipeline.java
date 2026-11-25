@@ -106,6 +106,13 @@ public class ViewportRenderPipeline implements ViewerPass {
             new com.openmason.main.systems.viewport.viewportRendering.attachments.AttachmentPreviewRenderer();
     private com.openmason.main.systems.skeleton.AttachmentPreviewStore attachmentPreviewStore;
 
+    // Weight paint overlay (heat map of the target joint + brush circle), drawn while paint mode is on
+    private final com.openmason.main.systems.viewport.viewportRendering.bones.WeightHeatRenderer weightHeatRenderer =
+            new com.openmason.main.systems.viewport.viewportRendering.bones.WeightHeatRenderer();
+    private com.openmason.main.systems.skeleton.WeightPaintState weightPaintState;
+    private Supplier<com.openmason.main.systems.skeleton.SkinAuthoring> skinAuthoring;
+    private boolean skinListenerInstalled;
+
     // Diagnostic throttling
     private long lastDiagnosticLogTime = 0;
     private static final long DIAGNOSTIC_LOG_INTERVAL_MS = 2000;
@@ -189,6 +196,13 @@ public class ViewportRenderPipeline implements ViewerPass {
         this.attachmentPreviewStore = store;
     }
 
+    /** Inject the weight-paint state and skin authoring facade; the heat map draws while paint mode is on. */
+    public void setWeightPaint(com.openmason.main.systems.skeleton.WeightPaintState state,
+                               Supplier<com.openmason.main.systems.skeleton.SkinAuthoring> authoring) {
+        this.weightPaintState = state;
+        this.skinAuthoring = authoring;
+    }
+
     public void invalidateMeshData() {
         vertexDataNeedsUpdate = true;
         edgeDataNeedsUpdate = true;
@@ -235,6 +249,12 @@ public class ViewportRenderPipeline implements ViewerPass {
             if (editMode == EditMode.NONE || editMode == EditMode.FACE) {
                 renderFaces(renderingState, transformState);  // Render face overlays LAST for proper blending
             }
+        }
+
+        // PASS 3.5: Weight paint heat map + brush cursor (over the model, under the gizmo)
+        if (weightPaintState != null && weightPaintState.isActive() && skinAuthoring != null
+                && renderingState.getMode() == RenderingMode.BLOCK_MODEL) {
+            renderWeightHeat(transformState);
         }
 
         // PASS 4: Render gizmo (after content, always in fill mode)
@@ -405,6 +425,19 @@ public class ViewportRenderPipeline implements ViewerPass {
         } catch (Exception e) {
             logger.error("Error rendering bone gizmos", e);
         }
+    }
+
+    /** The weight-paint overlay; rebuilt from the skins whenever they change. */
+    private void renderWeightHeat(TransformState transformState) {
+        var authoring = skinAuthoring.get();
+        if (authoring == null) return;
+        if (!skinListenerInstalled) {
+            authoring.skins().addListener(weightHeatRenderer::markDirty);
+            skinListenerInstalled = true;
+        }
+        weightHeatRenderer.render(authoring, weightPaintState,
+                context.getCamera().getViewMatrix(), context.getCamera().getProjectionMatrix(),
+                transformState.getTransformMatrix());
     }
 
     /**
@@ -779,6 +812,7 @@ public class ViewportRenderPipeline implements ViewerPass {
             attachmentGizmoRenderer.cleanup();
             attachmentPreviewRenderer.cleanup();
         }
+        weightHeatRenderer.cleanup();
         logger.debug("ViewportRenderPipeline cleanup complete");
     }
 }

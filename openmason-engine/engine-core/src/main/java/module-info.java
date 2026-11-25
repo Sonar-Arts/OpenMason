@@ -78,6 +78,7 @@ module openmason.engine.core {
     exports com.openmason.engine.rendering.shaders;
     exports com.openmason.engine.rendering.shadow;
     exports com.openmason.engine.rendering.sky;
+    exports com.openmason.engine.rig;
     exports com.openmason.engine.rendering.sprite;
     exports com.openmason.engine.util;
     exports com.openmason.engine.util.easing;

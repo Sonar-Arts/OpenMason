@@ -19,11 +19,16 @@ public final class HeadlessModelDocument implements ModelDocument {
 
     private final ModelPartManager partManager = new ModelPartManager();
     private final FaceTextureManager faceTextureManager = new FaceTextureManager();
+    private final com.openmason.main.systems.skeleton.BoneStore boneStore =
+            new com.openmason.main.systems.skeleton.BoneStore();
+    private final com.openmason.main.systems.skeleton.SkinStore skinStore =
+            new com.openmason.main.systems.skeleton.SkinStore();
 
     private PartMeshRebuilder.RebuildResult lastRebuild;
 
     public HeadlessModelDocument() {
         partManager.setMeshConsumer(this::onPartMeshRebuilt);
+        com.openmason.main.systems.skeleton.RigWiring.connect(partManager, boneStore, skinStore);
     }
 
     private void onPartMeshRebuilt(PartMeshRebuilder.RebuildResult result) {
@@ -36,6 +41,16 @@ public final class HeadlessModelDocument implements ModelDocument {
     @Override
     public ModelPartManager parts() {
         return partManager;
+    }
+
+    @Override
+    public com.openmason.main.systems.skeleton.BoneStore bones() {
+        return boneStore;
+    }
+
+    @Override
+    public com.openmason.main.systems.skeleton.SkinStore skins() {
+        return skinStore;
     }
 
     @Override

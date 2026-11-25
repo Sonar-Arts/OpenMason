@@ -109,7 +109,9 @@ add_library(cenda_kernels SHARED
         src/physics/physics_world.cpp
         src/nav/nav_search.cpp
         src/nav/nav_world.cpp
-        src/nav/nav_agents.cpp)
+        src/nav/nav_agents.cpp
+        src/rig/rig.cpp
+        src/rig/skin.cpp)
 
 target_include_directories(cenda_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cenda_kernels

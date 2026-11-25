@@ -11,8 +11,8 @@ import static com.openmason.main.systems.mcp.McpArgs.optString;
  * self-description ({@code describe_api}), and domain-routed {@code undo} /
  * {@code redo}.
  *
- * <p>Honesty note on undo: this merges tool NAMES, not timelines — the five
- * histories (model+face-textures, texture editor, bones, sockets, animation)
+ * <p>Honesty note on undo: this merges tool NAMES, not timelines — the six
+ * histories (model+face-textures, texture editor, bones, skin weights, sockets, animation)
  * remain separate; {@code domain} picks which one to step.
  */
 public final class MetaToolDefinitions {
@@ -21,6 +21,7 @@ public final class MetaToolDefinitions {
     private final ModelEditingService model;
     private final TextureEditingService texture;
     private final BoneEditingService bones;
+    private final SkinEditingService skin;
     private final AttachmentEditingService attachments;
     private final AnimationEditingService animation;
     private final ObjectMapper mapper;
@@ -30,6 +31,7 @@ public final class MetaToolDefinitions {
                                ModelEditingService model,
                                TextureEditingService texture,
                                BoneEditingService bones,
+                               SkinEditingService skin,
                                AttachmentEditingService attachments,
                                AnimationEditingService animation,
                                ObjectMapper mapper,
@@ -38,6 +40,7 @@ public final class MetaToolDefinitions {
         this.model = model;
         this.texture = texture;
         this.bones = bones;
+        this.skin = skin;
         this.attachments = attachments;
         this.animation = animation;
         this.mapper = mapper;
@@ -48,7 +51,7 @@ public final class MetaToolDefinitions {
         registry.register(new McpTool(
                 "model_summary",
                 "One-call orientation digest of the open model: totals, world bbox, per-part "
-                        + "rows {name, verts, faces, bbox, parent}, bones, attachment sockets, and "
+                        + "rows {name, verts, faces, bbox, parent}, bones, skin weights, sockets, and "
                         + "the current selection. Call this first instead of separate "
                         + "list/info/selection calls.",
                 McpSchema.of(mapper).build(),
@@ -58,7 +61,7 @@ public final class MetaToolDefinitions {
                 "describe_api",
                 "Compact modeling guide (markdown). Topics: overview (default — conventions: "
                         + "Y-up, degrees, part origins, id-or-name addressing, undo domains), parts, "
-                        + "face_textures, bones, attachments, animation, scripting (the Python om "
+                        + "face_textures, bones, skinning, attachments, animation, scripting (the Python om "
                         + "cheatsheet), texture_editor (summoning the editor, layers, noise, "
                         + "tex_describe/tex_paint_grid text pixel art), recipes (workflows like "
                         + "'build a quadruped mob'), assets, saving, ui_editor (UI documents: keys, "
@@ -76,7 +79,7 @@ public final class MetaToolDefinitions {
                 "undo",
                 "Undo the most recent mutation in a domain: model (parts/geometry/face textures — "
                         + "the default; a whole script run is one step), texture (texture editor), "
-                        + "bone, attach (sockets), anim. The five histories are separate.",
+                        + "bone, skin (weights), attach (sockets), anim. The six histories are separate.",
                 domainSchema(),
                 args -> stepHistory(optString(args, "domain"), true)));
 
@@ -90,7 +93,7 @@ public final class MetaToolDefinitions {
     private com.fasterxml.jackson.databind.JsonNode domainSchema() {
         return McpSchema.of(mapper)
                 .enumStr("domain", "Which history to step (default model)",
-                        "model", "texture", "bone", "attach", "anim")
+                        "model", "texture", "bone", "skin", "attach", "anim")
                 .build();
     }
 
@@ -100,10 +103,11 @@ public final class MetaToolDefinitions {
             case "model" -> undo ? model.undo() : model.redo();
             case "texture" -> undo ? texture.undo() : texture.redo();
             case "bone" -> undo ? bones.undo() : bones.redo();
+            case "skin" -> undo ? skin.undo() : skin.redo();
             case "attach" -> undo ? attachments.undo() : attachments.redo();
             case "anim" -> undo ? animation.undo() : animation.redo();
             default -> throw McpErrors.invalidEnum("domain", d,
-                    java.util.List.of("model", "texture", "bone", "attach", "anim"));
+                    java.util.List.of("model", "texture", "bone", "skin", "attach", "anim"));
         };
     }
 

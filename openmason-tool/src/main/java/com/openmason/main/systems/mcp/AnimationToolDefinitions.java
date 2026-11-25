@@ -44,6 +44,13 @@ public final class AnimationToolDefinitions {
                 args -> editor.getAnimationInfo()));
 
         registry.register(new McpTool(
+                "anim_open_editor",
+                "Open the animation editor on the viewport's model (Tools > Animation Editor). The keyframe "
+                        + "tools resolve parts and bones only while it is open; returns the clip info.",
+                schema().build(),
+                args -> editor.openEditor()));
+
+        registry.register(new McpTool(
                 "anim_list_tracks",
                 "List every per-part track in the current clip with part id, resolved part name, and keyframe count.",
                 schema().build(),

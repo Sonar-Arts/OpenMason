@@ -39,6 +39,7 @@ public class ViewportKeybindActions {
     public static final String REDO = "viewport.redo";
     public static final String OPEN_MODEL = "viewport.open_model";
     public static final String SAVE_MODEL = "viewport.save_model";
+    public static final String TOGGLE_WEIGHT_PAINT = "viewport.toggle_weight_paint";
 
     /**
      * Private constructor to prevent instantiation.
@@ -248,7 +249,16 @@ public class ViewportKeybindActions {
                 actions::startExtrudeMode
         ));
 
-        logger.info("Registered {} viewport keybind actions", 18);
+        // Ctrl+Shift+P: Weight Paint mode (rigging pane Skin section brush)
+        registry.registerAction(new KeybindAction(
+                TOGGLE_WEIGHT_PAINT,
+                "Weight Paint Mode",
+                EDITING,
+                ShortcutKey.ctrlShift(GLFW.GLFW_KEY_P),
+                actions::toggleWeightPaint
+        ));
+
+        logger.info("Registered {} viewport keybind actions", 19);
     }
 
     /**

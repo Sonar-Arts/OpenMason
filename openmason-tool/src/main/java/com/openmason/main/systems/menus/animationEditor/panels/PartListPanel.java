@@ -52,7 +52,7 @@ public final class PartListPanel implements AutoCloseable {
             ImGui.textDisabled("No model bound.");
             return;
         }
-        List<PartRows.Row> rows = PartRows.build(pm, controller.orphanTracks());
+        List<PartRows.Row> rows = PartRows.build(pm, controller.boneStore(), controller.orphanTracks());
         if (rows.isEmpty()) {
             ImGui.textDisabled("Model has no parts.");
             return;
@@ -88,7 +88,7 @@ public final class PartListPanel implements AutoCloseable {
 
             MortarListRow row = new MortarListRow(
                     r.isOrphan() ? "? " + r.label() : r.label(),
-                    r.isOrphan() ? "unbound track" : null, trailing);
+                    r.isOrphan() ? "unbound track" : (r.isBone() ? "bone" : null), trailing);
             // Non-masked overlay rows and orphans get a background wash.
             boolean wash = !masked || r.isOrphan();
             region.add(r.id(), x, y, rowWidth - x, ROW_HEIGHT,
@@ -132,7 +132,8 @@ public final class PartListPanel implements AutoCloseable {
             boolean isSel = r.id().equals(selected);
             Track track = clip.trackFor(r.id());
             int kfCount = track != null ? track.size() : 0;
-            String base = r.isOrphan() ? "? " + r.label() + " (unbound)" : r.label();
+            String base = r.isOrphan() ? "? " + r.label() + " (unbound)"
+                    : (r.isBone() ? r.label() + " (bone)" : r.label());
             String label = kfCount > 0
                     ? String.format("%s  (%d kf)", base, kfCount)
                     : base;

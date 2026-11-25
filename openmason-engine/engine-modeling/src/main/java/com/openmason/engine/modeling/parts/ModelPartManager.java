@@ -47,6 +47,16 @@ public class ModelPartManager implements IModelPartManager {
         this.combinedVertexResolver = resolver != null ? resolver : (i -> new int[]{i});
     }
 
+    /**
+     * The combined-soup vertex indices a LIVE render-mesh vertex (corner) stands for — the
+     * space {@link MeshRange} describes. Identity without an installed resolver. Empty array =
+     * unknown vertex. Used by exporters that write the render mesh but key data by part-local
+     * soup vertices (skin weights).
+     */
+    public int[] resolveCombinedVertex(int liveVertexIndex) {
+        return combinedVertexResolver.apply(liveVertexIndex);
+    }
+
     private static final Logger logger = LoggerFactory.getLogger(ModelPartManager.class);
 
     // Part storage (insertion-ordered)
@@ -66,6 +76,9 @@ public class ModelPartManager implements IModelPartManager {
 
     // Mesh consumer callback (set by EditableModel or similar)
     private MeshConsumer meshConsumer;
+
+    // Optional post-bake step (skinned preview) run before the consumer sees a rebuild
+    private CombinedMeshDeformer combinedMeshDeformer;
 
     // Counter for generating unique part names
     private int partNameCounter = 0;
@@ -112,6 +125,24 @@ public class ModelPartManager implements IModelPartManager {
      */
     public void setMeshConsumer(MeshConsumer consumer) {
         this.meshConsumer = consumer;
+    }
+
+    /**
+     * A thin post-bake step over a freshly rebuilt combined mesh, run after every part's
+     * effective matrix was baked into {@link PartMeshRebuilder.RebuildResult#combinedVertices()}
+     * and before the {@link MeshConsumer} sees the result. It may rewrite vertex positions in
+     * place (the array is owned by this rebuild); it must not change counts, indices or ranges.
+     * The editor's skinned animation preview deforms weighted vertices here (the math is the
+     * native rig's, {@code com.openmason.engine.rig}).
+     */
+    @FunctionalInterface
+    public interface CombinedMeshDeformer {
+        void deform(PartMeshRebuilder.RebuildResult result);
+    }
+
+    /** Install (or clear, with null) the post-bake deformer. Takes effect on the next rebuild. */
+    public void setCombinedMeshDeformer(CombinedMeshDeformer deformer) {
+        this.combinedMeshDeformer = deformer;
     }
 
     // ========== Query ==========
@@ -453,9 +484,10 @@ public class ModelPartManager implements IModelPartManager {
      * rebuild.
      *
      * @param updates Map of partId → new transform
+     * @return true when at least one part changed (and the mesh was rebuilt)
      */
-    public void setPartTransformsBatch(Map<String, PartTransform> updates) {
-        if (updates == null || updates.isEmpty()) return;
+    public boolean setPartTransformsBatch(Map<String, PartTransform> updates) {
+        if (updates == null || updates.isEmpty()) return false;
 
         boolean anyChanged = false;
         List<String> changedIds = new ArrayList<>();
@@ -470,13 +502,14 @@ public class ModelPartManager implements IModelPartManager {
             changedTransforms.add(target);
             anyChanged = true;
         }
-        if (!anyChanged) return;
+        if (!anyChanged) return false;
 
         invalidateEffectiveMatrixCache();
         rebuildCombinedMesh();
         for (int i = 0; i < changedIds.size(); i++) {
             notifyTransformChanged(changedIds.get(i), changedTransforms.get(i));
         }
+        return true;
     }
 
     @Override
@@ -1002,6 +1035,15 @@ public class ModelPartManager implements IModelPartManager {
                 int fc = geo != null ? geo.faceCount() : 0;
                 parts.put(part.id(), parts.get(part.id()).withMeshRange(
                         new MeshRange(0, 0, 0, 0, stableOffset != null ? stableOffset : 0, fc)));
+            }
+        }
+
+        // Post-bake step (skinned preview) — positions only, in place
+        if (combinedMeshDeformer != null && result.totalVertexCount() > 0) {
+            try {
+                combinedMeshDeformer.deform(result);
+            } catch (RuntimeException e) {
+                logger.warn("Combined-mesh deformer failed; showing the rigid bake", e);
             }
         }
 

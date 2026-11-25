@@ -1,3 +1,4 @@
+bone_bind_part
 bone_clear
 bone_create
 bone_delete

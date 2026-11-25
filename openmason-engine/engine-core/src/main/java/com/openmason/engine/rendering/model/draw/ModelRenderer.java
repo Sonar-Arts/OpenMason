@@ -3,6 +3,7 @@ package com.openmason.engine.rendering.model.draw;
 import com.openmason.engine.rendering.model.IndexedDrawBatch;
 import com.openmason.engine.rendering.shaders.ShaderProgram;
 import com.openmason.engine.rendering.shadow.ShadowUniforms;
+import com.openmason.engine.rig.JointPalette;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
@@ -21,8 +22,10 @@ import java.util.function.Consumer;
  * looks the same in the editor as in game.
  *
  * <p>Inputs are neutral: a {@link ModelGpuMesh}, its {@link ModelDrawPlan}, a
- * {@link MaterialTextures} resolver, the per-part matrices ({@link PartMatrices})
- * and a {@link ModelLighting}. Passes:
+ * {@link MaterialTextures} resolver, the pose — either per-part rigid matrices
+ * ({@link PartMatrices}) or a native rig's {@link JointPalette} (GPU skinning through
+ * {@link ModelSkinGlsl} when the mesh carries skin attributes) — and a
+ * {@link ModelLighting}. Passes:
  * <ul>
  *   <li>{@link #drawLit} — textured, flat-normal lighting with CSM shadows, fog,
  *       self-glow and the host's {@link ModelShaderExtension} extra light.</li>
@@ -44,6 +47,8 @@ public final class ModelRenderer {
 
     private boolean currentUseTexture;
     private final Vector3f scratch = new Vector3f();
+    private final JointPaletteTexture paletteTexture = new JointPaletteTexture();
+    private static final Matrix4f IDENTITY = new Matrix4f();
 
     public ModelRenderer() {
         this(ModelShaderExtension.NONE);
@@ -60,7 +65,7 @@ public final class ModelRenderer {
         flatShader = build(ModelShaderSource.FLAT_VERTEX, ModelShaderSource.FLAT_FRAGMENT, "flat");
         if (litShader != null) {
             for (String u : new String[]{"model", "view", "projection", "textureSampler", "u_cameraPos",
-                    "u_fogDensity", "u_fogColor"}) {
+                    "u_fogDensity", "u_fogColor", "u_jointPalette", "u_skinned"}) {
                 litShader.createUniform(u);
             }
             // Fully lit until the first draw sets the real environment.
@@ -69,14 +74,20 @@ public final class ModelRenderer {
             litShader.setVec3("u_keyDirection", new Vector3f(0.4f, 0.8f, 0.4f).normalize());
             litShader.setFloat("u_skyLight", 1.0f);
             litShader.setBool("u_useTexture", true);
+            litShader.setUniform("u_jointPalette", JointPaletteTexture.DEFAULT_UNIT);
+            litShader.setUniform("u_skinned", false);
             currentUseTexture = true;
             ShadowUniforms.applyDisabled(litShader, extension.shadowTextureUnit());
             litShader.unbind();
         }
         if (flatShader != null) {
-            for (String u : new String[]{"model", "view", "projection", "color"}) {
+            for (String u : new String[]{"model", "view", "projection", "color", "u_jointPalette", "u_skinned"}) {
                 flatShader.createUniform(u);
             }
+            flatShader.bind();
+            flatShader.setUniform("u_jointPalette", JointPaletteTexture.DEFAULT_UNIT);
+            flatShader.setUniform("u_skinned", false);
+            flatShader.unbind();
         }
         initialized = true;
     }
@@ -120,6 +131,26 @@ public final class ModelRenderer {
     public void drawLit(ModelGpuMesh mesh, ModelDrawPlan plan, MaterialTextures textures,
                         PartMatrices parts, Matrix4f view, Matrix4f projection,
                         ModelLighting lighting, Consumer<ShaderProgram> stateHook) {
+        drawLit(mesh, plan, textures, parts, null, view, projection, lighting, stateHook);
+    }
+
+    /**
+     * Lit pass posed by a native rig's palette: GPU-skinned when the mesh carries skin attributes,
+     * otherwise each part draws rigidly with its joint's skin matrix (part i = joint i).
+     */
+    public void drawLit(ModelGpuMesh mesh, ModelDrawPlan plan, MaterialTextures textures,
+                        JointPalette palette, Matrix4f view, Matrix4f projection,
+                        ModelLighting lighting, Consumer<ShaderProgram> stateHook) {
+        if (mesh != null && mesh.hasSkin()) {
+            drawLit(mesh, plan, textures, everyPart(plan), palette, view, projection, lighting, stateHook);
+        } else {
+            drawLit(mesh, plan, textures, rigidParts(plan, palette), null, view, projection, lighting, stateHook);
+        }
+    }
+
+    private void drawLit(ModelGpuMesh mesh, ModelDrawPlan plan, MaterialTextures textures,
+                         PartMatrices parts, JointPalette skinPalette, Matrix4f view, Matrix4f projection,
+                         ModelLighting lighting, Consumer<ShaderProgram> stateHook) {
         if (!initialized || litShader == null || !drawable(mesh, plan)) return;
 
         int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -150,6 +181,7 @@ public final class ModelRenderer {
             ShadowUniforms.applyDisabled(shader, extension.shadowTextureUnit());
         }
 
+        beginSkin(shader, skinPalette);
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL30.glBindVertexArray(mesh.vao());
 
@@ -167,6 +199,7 @@ public final class ModelRenderer {
             }
         });
         setUseTexture(shader, true);
+        endSkin(shader, skinPalette);
 
         GL30.glBindVertexArray(0);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
@@ -193,6 +226,21 @@ public final class ModelRenderer {
      */
     public void drawFlat(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts,
                          Matrix4f view, Matrix4f projection, Vector4f color) {
+        drawFlat(mesh, plan, parts, null, view, projection, color);
+    }
+
+    /** Flat-colour pass posed by a native rig's palette (see the lit overload). */
+    public void drawFlat(ModelGpuMesh mesh, ModelDrawPlan plan, JointPalette palette,
+                         Matrix4f view, Matrix4f projection, Vector4f color) {
+        if (mesh != null && mesh.hasSkin()) {
+            drawFlat(mesh, plan, everyPart(plan), palette, view, projection, color);
+        } else {
+            drawFlat(mesh, plan, rigidParts(plan, palette), null, view, projection, color);
+        }
+    }
+
+    private void drawFlat(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts, JointPalette skinPalette,
+                          Matrix4f view, Matrix4f projection, Vector4f color) {
         if (!initialized || flatShader == null || !drawable(mesh, plan)) return;
 
         int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -203,7 +251,7 @@ public final class ModelRenderer {
         GL11.glDepthFunc(GL11.GL_LESS);
         GL11.glDisable(GL11.GL_CULL_FACE);
 
-        drawUntextured(mesh, plan, parts, view, projection, color);
+        drawUntextured(mesh, plan, parts, skinPalette, view, projection, color);
 
         if (wasCullFaceEnabled) {
             GL11.glEnable(GL11.GL_CULL_FACE);
@@ -218,6 +266,21 @@ public final class ModelRenderer {
      */
     public void drawWireframe(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts,
                               Matrix4f view, Matrix4f projection, Vector4f color) {
+        drawWireframe(mesh, plan, parts, null, view, projection, color);
+    }
+
+    /** Wireframe overlay posed by a native rig's palette (see the lit overload). */
+    public void drawWireframe(ModelGpuMesh mesh, ModelDrawPlan plan, JointPalette palette,
+                              Matrix4f view, Matrix4f projection, Vector4f color) {
+        if (mesh != null && mesh.hasSkin()) {
+            drawWireframe(mesh, plan, everyPart(plan), palette, view, projection, color);
+        } else {
+            drawWireframe(mesh, plan, rigidParts(plan, palette), null, view, projection, color);
+        }
+    }
+
+    private void drawWireframe(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts, JointPalette skinPalette,
+                               Matrix4f view, Matrix4f projection, Vector4f color) {
         if (!initialized || flatShader == null || !drawable(mesh, plan)) return;
 
         int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -233,7 +296,7 @@ public final class ModelRenderer {
         GL11.glPolygonMode(GL11.GL_FRONT_AND_BACK, GL11.GL_LINE);
         GL11.glLineWidth(1.5f);
 
-        drawUntextured(mesh, plan, parts, view, projection, color);
+        drawUntextured(mesh, plan, parts, skinPalette, view, projection, color);
 
         GL11.glPolygonMode(GL11.GL_FRONT_AND_BACK, previousPolygonMode[0]);
         GL11.glLineWidth(previousLineWidth);
@@ -247,13 +310,14 @@ public final class ModelRenderer {
         GL30.glBindVertexArray(previousVertexArray);
     }
 
-    private void drawUntextured(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts,
+    private void drawUntextured(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts, JointPalette skinPalette,
                                 Matrix4f view, Matrix4f projection, Vector4f color) {
         ShaderProgram shader = flatShader;
         shader.bind();
         shader.setUniform("view", view);
         shader.setUniform("projection", projection);
         shader.setUniform("color", color);
+        beginSkin(shader, skinPalette);
 
         GL30.glBindVertexArray(mesh.vao());
         parts.forEachPart((partIndex, partMatrix) -> {
@@ -263,8 +327,38 @@ public final class ModelRenderer {
                         GL11.GL_UNSIGNED_INT, batch.byteOffset());
             }
         });
+        endSkin(shader, skinPalette);
         GL30.glBindVertexArray(0);
         shader.unbind();
+    }
+
+    private void beginSkin(ShaderProgram shader, JointPalette skinPalette) {
+        if (skinPalette == null) return;
+        paletteTexture.upload(skinPalette);
+        paletteTexture.bind(JointPaletteTexture.DEFAULT_UNIT);
+        shader.setUniform("u_skinned", true);
+    }
+
+    private static void endSkin(ShaderProgram shader, JointPalette skinPalette) {
+        if (skinPalette == null) return;
+        shader.setUniform("u_skinned", false);
+        JointPaletteTexture.unbind(JointPaletteTexture.DEFAULT_UNIT);
+    }
+
+    /** Every part of the plan drawn once with the identity (the palette moves the vertices). */
+    private static PartMatrices everyPart(ModelDrawPlan plan) {
+        return consumer -> {
+            for (int i = 0; i < plan.partCount(); i++) consumer.accept(i, IDENTITY);
+        };
+    }
+
+    /** Each part rigid with its joint's skin matrix (part i = joint i). */
+    private static PartMatrices rigidParts(ModelDrawPlan plan, JointPalette palette) {
+        return consumer -> {
+            Matrix4f m = new Matrix4f();
+            int n = Math.min(plan.partCount(), palette.count());
+            for (int i = 0; i < n; i++) consumer.accept(i, palette.skinMatrix(i, m));
+        };
     }
 
     private static boolean drawable(ModelGpuMesh mesh, ModelDrawPlan plan) {
@@ -274,6 +368,7 @@ public final class ModelRenderer {
     /** Release the shaders (meshes are owned by their callers). */
     public void cleanup() {
         if (!initialized) return;
+        paletteTexture.close();
         if (litShader != null) litShader.cleanup();
         if (flatShader != null) flatShader.cleanup();
         litShader = null;

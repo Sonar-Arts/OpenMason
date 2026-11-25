@@ -1,0 +1,9 @@
+skin_auto_weights
+skin_clear
+skin_get_weights
+skin_info
+skin_mirror
+skin_normalize
+skin_paint
+skin_prune
+skin_set_weights

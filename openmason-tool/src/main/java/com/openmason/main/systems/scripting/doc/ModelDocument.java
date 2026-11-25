@@ -37,4 +37,14 @@ public interface ModelDocument {
     default FacePixelStore pixels() {
         return null;
     }
+
+    /** The model's skeleton (rest bones), or {@code null} when the document has none. */
+    default com.openmason.main.systems.skeleton.BoneStore bones() {
+        return null;
+    }
+
+    /** The model's skin weights, or {@code null} when the document has none. */
+    default com.openmason.main.systems.skeleton.SkinStore skins() {
+        return null;
+    }
 }

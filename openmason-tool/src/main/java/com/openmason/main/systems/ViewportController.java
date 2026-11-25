@@ -74,6 +74,12 @@ public class ViewportController {
     private final com.openmason.main.systems.skeleton.BoneStore boneStore =
             new com.openmason.main.systems.skeleton.BoneStore();
 
+    // ========== Skin weights (per-part native skins, cenda/rig.h) ==========
+    private final com.openmason.main.systems.skeleton.SkinStore skinStore =
+            new com.openmason.main.systems.skeleton.SkinStore();
+    private final com.openmason.main.systems.skeleton.SkinCommandHistory skinHistory =
+            new com.openmason.main.systems.skeleton.SkinCommandHistory(skinStore);
+
     // ========== Attachment points (sockets) ==========
     private final com.openmason.main.systems.skeleton.AttachmentStore attachmentStore =
             new com.openmason.main.systems.skeleton.AttachmentStore();
@@ -219,25 +225,11 @@ public class ViewportController {
                 }
         );
 
-        // Resolve cross-type bone parents (bone parented to a part) by consulting the
-        // part manager's effective world matrix cache.
-        boneStore.setExternalParentResolver(
-                nodeId -> modelRenderer.getPartManager().getPartById(nodeId).isPresent()
-                        ? modelRenderer.getPartManager().getEffectiveWorldMatrix(nodeId)
-                        : null
-        );
-
-        // Reverse direction: parts can be parented to bones. The part manager consults
-        // BoneStore for the parent's TAIL world matrix when its parentId isn't a known
-        // part — children attach at the bone's tail so rotating the bone rotates them.
-        // The skeleton notifies the part manager whenever bone data changes so the
-        // baked vertex buffer rebuilds.
-        modelRenderer.getPartManager().setExternalParentResolver(
-                nodeId -> boneStore.getById(nodeId) != null
-                        ? boneStore.getTailWorldTransform(nodeId)
-                        : null
-        );
-        boneStore.setOnChange(modelRenderer.getPartManager()::notifyExternalHierarchyChanged);
+        // One joint hierarchy (rig revamp): bones parented to parts inherit the part's effective
+        // matrix, parts parented to bones inherit the bone's TAIL frame, skeleton changes (rest or
+        // preview pose) rebuild the baked mesh, and weighted vertices skin while posing.
+        com.openmason.main.systems.skeleton.RigWiring.connect(
+                modelRenderer.getPartManager(), boneStore, skinStore);
 
         // Load display mode from preferences
         com.openmason.main.systems.menus.preferences.PreferencesManager prefs =
@@ -293,6 +285,8 @@ public class ViewportController {
             this.viewportRenderPipeline.setBoneStore(boneStore);
             this.viewportRenderPipeline.setAttachmentStore(attachmentStore);
             this.viewportRenderPipeline.setAttachmentPreviewStore(attachmentPreviewStore);
+            this.viewportRenderPipeline.setWeightPaint(weightPaintState, this::getSkinAuthoring);
+            inputHandler.setWeightPaint(weightPaintState, this::getSkinAuthoring, skinHistory, transformState);
 
             // Initialize EdgeOperationService after ViewportRenderPipeline is ready
             this.edgeOperationService = new com.openmason.main.systems.services.EdgeOperationService(
@@ -790,6 +784,29 @@ public class ViewportController {
 
     /** Session-level skeleton owned by this viewport. */
     public com.openmason.main.systems.skeleton.BoneStore getBoneStore() { return boneStore; }
+
+    /** Session-level skin weights (one native skin per part) owned by this viewport. */
+    public com.openmason.main.systems.skeleton.SkinStore getSkinStore() { return skinStore; }
+
+    /** Undo history of {@link #getSkinStore()} (brush strokes, weight operations). */
+    public com.openmason.main.systems.skeleton.SkinCommandHistory getSkinHistory() { return skinHistory; }
+
+    // ========== Skin authoring + weight paint (rigging pane Skin section, MCP skin tools) ==========
+    private final com.openmason.main.systems.skeleton.WeightPaintState weightPaintState =
+            new com.openmason.main.systems.skeleton.WeightPaintState();
+    private com.openmason.main.systems.skeleton.SkinAuthoring skinAuthoring;
+
+    /** Marshalling between this viewport's parts/bones/skins and the native skin ops (one per viewport). */
+    public com.openmason.main.systems.skeleton.SkinAuthoring getSkinAuthoring() {
+        if (skinAuthoring == null) {
+            skinAuthoring = new com.openmason.main.systems.skeleton.SkinAuthoring(
+                    modelRenderer.getPartManager(), boneStore, skinStore);
+        }
+        return skinAuthoring;
+    }
+
+    /** Weight-paint mode settings (brush, target joint, cursor). */
+    public com.openmason.main.systems.skeleton.WeightPaintState getWeightPaintState() { return weightPaintState; }
 
     /** Session-level attachment points (sockets) owned by this viewport. */
     public com.openmason.main.systems.skeleton.AttachmentStore getAttachmentStore() { return attachmentStore; }

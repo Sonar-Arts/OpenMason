@@ -11,11 +11,12 @@ public final class ModelShaderSource {
 
     private ModelShaderSource() {}
 
-    /** Vertex stage of the lit pass. */
+    /** Vertex stage of the lit pass ({@code model · skinPosition(aPos)}, see {@link ModelSkinGlsl}). */
     public static final String LIT_VERTEX = """
             #version 330 core
             layout (location = 0) in vec3 aPos;
             layout (location = 1) in vec2 aTexCoord;
+            """ + ModelSkinGlsl.VERTEX + """
 
             uniform mat4 model;
             uniform mat4 view;
@@ -26,7 +27,7 @@ public final class ModelShaderSource {
             out float ViewDepth;
 
             void main() {
-                vec4 worldPos = model * vec4(aPos, 1.0);
+                vec4 worldPos = model * skinPosition(aPos);
                 FragWorldPos = worldPos.xyz;
                 ViewDepth = -(view * worldPos).z;
                 gl_Position = projection * view * worldPos;
@@ -109,13 +110,14 @@ public final class ModelShaderSource {
     public static final String FLAT_VERTEX = """
             #version 330 core
             layout (location = 0) in vec3 aPos;
+            """ + ModelSkinGlsl.VERTEX + """
 
             uniform mat4 model;
             uniform mat4 view;
             uniform mat4 projection;
 
             void main() {
-                gl_Position = projection * view * model * vec4(aPos, 1.0);
+                gl_Position = projection * view * model * skinPosition(aPos);
             }
             """;
 

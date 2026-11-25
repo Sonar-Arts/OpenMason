@@ -39,6 +39,7 @@ public final class UploadedModel implements AutoCloseable, MaterialTextures {
         ModelDrawPlan plan = ModelDrawPlan.of(geometry);
         ModelGpuMesh mesh = new ModelGpuMesh(false, GpuMemoryTracker.Category.ENTITY_MESH);
         mesh.upload(geometry.vertices(), geometry.texCoords(), geometry.indices());
+        mesh.updateSkin(geometry.rig().packed());
         UploadedModel model = new UploadedModel(mesh, plan);
         for (int materialId : plan.materialIds()) {
             model.textures.put(materialId, model.uploadTexture(geometry.materials().get(materialId)));

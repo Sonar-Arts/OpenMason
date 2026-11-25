@@ -16,12 +16,15 @@ import java.util.Objects;
  *   <li>1.5 - Added optional part hierarchy (parentId on PartEntry)</li>
  *   <li>1.6 - Added optional bone skeleton (BoneEntry list, boneId on PartEntry)</li>
  *   <li>1.7 - Added optional attachment points (AttachmentPointEntry list)</li>
+ *   <li>1.8 - Rig revamp: parts and bones form one joint hierarchy (a part's {@code parentId} may name a
+ *       bone, a bone's {@code parentBoneId} may name a part), clip tracks may key bones, and optional
+ *       per-vertex skin weights ({@link SkinData}). Read by the native rig ({@code cenda/rig.h}).</li>
  * </ul>
  */
 public final class OMOFormat {
 
     /** Current format version */
-    public static final String FORMAT_VERSION = "1.7";
+    public static final String FORMAT_VERSION = "1.8";
 
     /** Minimum supported format version for reading */
     public static final String MIN_SUPPORTED_VERSION = "1.0";
@@ -599,6 +602,76 @@ public final class OMOFormat {
                     Objects.equals(textureFile, that.textureFile) &&
                     Objects.equals(mesh, that.mesh) &&
                     Objects.equals(faceTextures, that.faceTextures);
+        }
+    }
+
+    /**
+     * Per-vertex skin weights (v1.8+). Weights are stored per PART, indexed by the vertex's position
+     * inside that part's geometry (so hiding, reordering or editing other parts never shifts them);
+     * a vertex not listed follows its part rigidly. Joints are named by id (part or bone ids) through
+     * {@link #jointIds()}, the influence lists index into it. At most 4 influences per vertex.
+     *
+     * @param jointIds the joints the weights refer to (bone or part ids)
+     * @param parts    weighted vertices per part
+     */
+    public record SkinData(List<String> jointIds, List<PartSkin> parts) {
+        public SkinData {
+            jointIds = jointIds == null ? List.of() : List.copyOf(jointIds);
+            parts = parts == null ? List.of() : List.copyOf(parts);
+        }
+
+        /** True when no vertex carries weights. */
+        public boolean isEmpty() {
+            for (PartSkin p : parts) {
+                if (!p.vertices().isEmpty()) return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * The weighted vertices of one part.
+     *
+     * @param partId   the part
+     * @param vertices weighted vertices, by part-local vertex index
+     */
+    public record PartSkin(String partId, List<SkinVertex> vertices) {
+        public PartSkin {
+            vertices = vertices == null ? List.of() : List.copyOf(vertices);
+        }
+    }
+
+    /**
+     * One weighted vertex. In the manifest: {@code [localVertex, joint0, weight0, joint1, weight1, ...]}.
+     *
+     * @param localVertex vertex index inside its part
+     * @param joints      indices into {@link SkinData#jointIds()}
+     * @param weights     one weight per joint (normalized on load)
+     */
+    public record SkinVertex(int localVertex, int[] joints, float[] weights) {
+        public SkinVertex {
+            joints = joints == null ? new int[0] : joints.clone();
+            weights = weights == null ? new float[0] : weights.clone();
+            if (joints.length != weights.length) {
+                throw new IllegalArgumentException("joints/weights length mismatch");
+            }
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof SkinVertex v && v.localVertex == localVertex
+                    && java.util.Arrays.equals(v.joints, joints) && java.util.Arrays.equals(v.weights, weights);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * (31 * localVertex + java.util.Arrays.hashCode(joints)) + java.util.Arrays.hashCode(weights);
+        }
+
+        @Override
+        public String toString() {
+            return "SkinVertex[" + localVertex + ", " + java.util.Arrays.toString(joints) + ", "
+                    + java.util.Arrays.toString(weights) + "]";
         }
     }
 }

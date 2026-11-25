@@ -46,6 +46,7 @@ public class ViewportInputHandler {
     private final ScaleToolController scaleController;
     private final BoxSelectController boxSelectController;
     private final FaceModalToolController faceModalController;
+    private final WeightPaintController weightPaintController = new WeightPaintController();
 
     // Translation coordinator for mutual exclusion
     private TranslationCoordinator translationCoordinator;
@@ -234,6 +235,22 @@ public class ViewportInputHandler {
     }
 
     /**
+     * Wire the weight-paint brush (rigging pane Skin section / Ctrl+Shift+P) to its state, the skin
+     * authoring facade, the skin undo history and the model transform.
+     */
+    public void setWeightPaint(com.openmason.main.systems.skeleton.WeightPaintState state,
+                               java.util.function.Supplier<com.openmason.main.systems.skeleton.SkinAuthoring> authoring,
+                               com.openmason.main.systems.skeleton.SkinCommandHistory history,
+                               TransformState transformState) {
+        weightPaintController.wire(state, authoring, history, transformState);
+    }
+
+    /** True while weight paint mode is on. */
+    public boolean isWeightPaintActive() {
+        return weightPaintController.isActive();
+    }
+
+    /**
      * Toggle the knife tool on/off.
      * Delegates to KnifeToolController.
      */
@@ -410,7 +427,16 @@ public class ViewportInputHandler {
             return; // Camera drag in progress, block all other controllers
         }
 
-        // Priority 0: Knife tool (highest when active — modal tool consumes all input)
+        // Priority 0: Weight paint (modal while on): a press on the mesh paints; anything else
+        // (press off the mesh, Alt+drag, wheel) goes straight to the camera, never to selection.
+        if (weightPaintController.isActive() || weightPaintController.isStroking()) {
+            if (!weightPaintController.handleInput(context)) {
+                cameraController.handleInput(context);
+            }
+            return;
+        }
+
+        // Priority 0a: Knife tool (highest when active — modal tool consumes all input)
         if (knifeController.handleInput(context)) {
             return; // Knife tool handled input, block all lower-priority controllers
         }

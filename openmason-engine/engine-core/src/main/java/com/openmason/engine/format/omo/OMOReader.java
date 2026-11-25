@@ -37,8 +37,25 @@ public class OMOReader {
             List<ParsedMaterialData> materials,
             byte[] defaultTextureBytes,
             List<OMOFormat.PartEntry> parts,
-            List<OMOFormat.AttachmentPointEntry> attachmentPoints
-    ) {}
+            List<OMOFormat.AttachmentPointEntry> attachmentPoints,
+            List<OMOFormat.BoneEntry> bones,
+            OMOFormat.SkinData skin
+    ) {
+        public ReadResult {
+            parts = parts == null ? List.of() : parts;
+            attachmentPoints = attachmentPoints == null ? List.of() : attachmentPoints;
+            bones = bones == null ? List.of() : List.copyOf(bones);
+        }
+
+        /** A result without a skeleton or skin (pre-1.6 data, tests). */
+        public ReadResult(OMOFormat.Document document, ParsedMeshData meshData,
+                          List<ParsedFaceMapping> faceMappings, List<ParsedMaterialData> materials,
+                          byte[] defaultTextureBytes, List<OMOFormat.PartEntry> parts,
+                          List<OMOFormat.AttachmentPointEntry> attachmentPoints) {
+            this(document, meshData, faceMappings, materials, defaultTextureBytes, parts, attachmentPoints,
+                    List.of(), null);
+        }
+    }
 
     /**
      * Read an OMO file from a stream (e.g. extracted from an SBO ZIP).
@@ -54,6 +71,8 @@ public class OMOReader {
         List<OMOFormat.MaterialEntry> materialEntries = new ArrayList<>();
         List<OMOFormat.PartEntry> parts = new ArrayList<>();
         List<OMOFormat.AttachmentPointEntry> attachmentPoints = new ArrayList<>();
+        List<OMOFormat.BoneEntry> bones = new ArrayList<>();
+        OMOFormat.SkinData skin = null;
         Map<String, byte[]> materialTextures = new HashMap<>();
         byte[] defaultTextureBytes = null;
 
@@ -71,6 +90,8 @@ public class OMOReader {
                     materialEntries = result.materialEntries;
                     parts = result.parts;
                     attachmentPoints = result.attachmentPoints;
+                    bones = result.bones;
+                    skin = result.skin;
 
                 } else if (OMOFormat.DEFAULT_TEXTURE_FILENAME.equals(entryName)) {
                     defaultTextureBytes = readBytes(zis);
@@ -98,7 +119,7 @@ public class OMOReader {
         }
 
         return new ReadResult(document, meshData, faceMappings, materials, defaultTextureBytes, parts,
-                attachmentPoints);
+                attachmentPoints, bones, skin);
     }
 
     private record ManifestResult(
@@ -107,7 +128,9 @@ public class OMOReader {
             List<ParsedFaceMapping> faceMappings,
             List<OMOFormat.MaterialEntry> materialEntries,
             List<OMOFormat.PartEntry> parts,
-            List<OMOFormat.AttachmentPointEntry> attachmentPoints
+            List<OMOFormat.AttachmentPointEntry> attachmentPoints,
+            List<OMOFormat.BoneEntry> bones,
+            OMOFormat.SkinData skin
     ) {}
 
     private ManifestResult parseManifest(byte[] jsonBytes) throws IOException {
@@ -235,19 +258,78 @@ public class OMOReader {
             }
         }
 
-        return new ManifestResult(document, meshData, faceMappings, materialEntries, parts, attachmentPoints);
+        return new ManifestResult(document, meshData, faceMappings, materialEntries, parts, attachmentPoints,
+                parseBones(root.get("bones")), parseSkin(root.get("skin")));
     }
 
-    private static float floatOrZero(JsonNode parent, String field) {
+    /** Bones (v1.6+). A missing endpoint reads as a zero-length bone. */
+    public static List<OMOFormat.BoneEntry> parseBones(JsonNode bonesNode) {
+        List<OMOFormat.BoneEntry> bones = new ArrayList<>();
+        if (bonesNode == null || !bonesNode.isArray()) return bones;
+        for (JsonNode b : bonesNode) {
+            JsonNode id = b.get("id");
+            if (id == null || id.isNull()) continue;
+            String name = textOrNull(b, "name");
+            bones.add(new OMOFormat.BoneEntry(
+                    id.asText(), name == null ? id.asText() : name, textOrNull(b, "parentBoneId"),
+                    floatOrZero(b, "originX"), floatOrZero(b, "originY"), floatOrZero(b, "originZ"),
+                    floatOrZero(b, "posX"), floatOrZero(b, "posY"), floatOrZero(b, "posZ"),
+                    floatOrZero(b, "rotX"), floatOrZero(b, "rotY"), floatOrZero(b, "rotZ"),
+                    floatOrZero(b, "endpointX"), floatOrZero(b, "endpointY"), floatOrZero(b, "endpointZ")));
+        }
+        return bones;
+    }
+
+    /**
+     * Skin weights (v1.8+): {@code {"joints": [ids], "parts": [{"partId": id, "vertices": [[v, j, w, ...]]}]}}.
+     * Malformed vertex rows are skipped.
+     */
+    public static OMOFormat.SkinData parseSkin(JsonNode skinNode) {
+        if (skinNode == null || !skinNode.isObject()) return null;
+        List<String> jointIds = new ArrayList<>();
+        JsonNode joints = skinNode.get("joints");
+        if (joints != null && joints.isArray()) {
+            for (JsonNode j : joints) jointIds.add(j.asText());
+        }
+        List<OMOFormat.PartSkin> parts = new ArrayList<>();
+        JsonNode partsNode = skinNode.get("parts");
+        if (partsNode != null && partsNode.isArray()) {
+            for (JsonNode p : partsNode) {
+                String partId = textOrNull(p, "partId");
+                if (partId == null) continue;
+                List<OMOFormat.SkinVertex> vertices = new ArrayList<>();
+                JsonNode rows = p.get("vertices");
+                if (rows != null && rows.isArray()) {
+                    for (JsonNode row : rows) {
+                        if (!row.isArray() || row.size() < 3 || row.size() % 2 == 0) continue;
+                        int count = (row.size() - 1) / 2;
+                        int[] js = new int[count];
+                        float[] ws = new float[count];
+                        boolean ok = true;
+                        for (int k = 0; k < count; k++) {
+                            js[k] = row.get(1 + 2 * k).asInt();
+                            ws[k] = (float) row.get(2 + 2 * k).asDouble();
+                            if (js[k] < 0 || js[k] >= jointIds.size()) ok = false;
+                        }
+                        if (ok) vertices.add(new OMOFormat.SkinVertex(row.get(0).asInt(), js, ws));
+                    }
+                }
+                parts.add(new OMOFormat.PartSkin(partId, vertices));
+            }
+        }
+        return new OMOFormat.SkinData(jointIds, parts);
+    }
+
+    static float floatOrZero(JsonNode parent, String field) {
         return floatOr(parent, field, 0f);
     }
 
-    private static float floatOr(JsonNode parent, String field, float fallback) {
+    static float floatOr(JsonNode parent, String field, float fallback) {
         JsonNode node = parent.get(field);
         return node == null || node.isNull() ? fallback : (float) node.asDouble();
     }
 
-    private static String textOrNull(JsonNode parent, String field) {
+    static String textOrNull(JsonNode parent, String field) {
         JsonNode node = parent.get(field);
         if (node == null || node.isNull()) return null;
         return node.asText();

@@ -1,0 +1,224 @@
+package com.openmason.engine.rig;
+
+import com.openmason.engine.cenda.CendaKernels;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.lang.foreign.AddressLayout;
+import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SymbolLookup;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
+import java.nio.file.Path;
+
+/**
+ * FFM symbols of the Cenda rig ({@code cr_*} in {@code libcenda_kernels}, contract in
+ * {@code cenda/native/kernels/include/cenda/rig.h}): skeletons, clips, posing, skinning and skin-weight
+ * authoring. Only the library handshake and the method handles live here; {@link Rig}, {@link RigClip},
+ * {@link RigPoser} and {@link Skin} are the API.
+ *
+ * <p>No Java fallback: when the library is missing or fails the {@code cr_abi_version} handshake,
+ * {@link #isAvailable()} is false, {@link #unavailableReason()} says why, and creating a rig throws.
+ */
+public final class CendaRig {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(CendaRig.class);
+
+    /** Must equal {@code CR_ABI_VERSION} in rig.h (build-kernels.sh checks both sides). */
+    static final int EXPECTED_ABI = 1;
+
+    static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
+    static final ValueLayout.OfFloat F32 = ValueLayout.JAVA_FLOAT;
+    static final AddressLayout ADDR = ValueLayout.ADDRESS;
+
+    /** {@code cr_joint_desc}. */
+    static final long JOINT_BYTES = 80;
+    /** {@code cr_key}. */
+    static final long KEY_BYTES = 48;
+    /** {@code cr_track_desc}. */
+    static final long TRACK_BYTES = 8;
+    /** {@code cr_clip_desc}. */
+    static final long CLIP_DESC_BYTES = 24;
+    /** {@code cr_layer}: pointer + two floats. */
+    static final long LAYER_BYTES = 16;
+    /** {@code cr_joint_extra}. */
+    static final long EXTRA_BYTES = 24;
+    /** {@code cr_skin_entry}. */
+    static final long SKIN_ENTRY_BYTES = 40;
+
+    static final int OK = 0;
+
+    private static final String FAILURE;
+    static final MethodHandle LAST_ERROR;
+    static final MethodHandle RIG_CREATE;
+    static final MethodHandle RIG_DESTROY;
+    static final MethodHandle RIG_FLAGS;
+    static final MethodHandle RIG_FIND;
+    static final MethodHandle RIG_FIND_HEAD;
+    static final MethodHandle RIG_REST_WORLD;
+    static final MethodHandle CLIP_CREATE;
+    static final MethodHandle CLIP_DESTROY;
+    static final MethodHandle WRAP_TIME;
+    static final MethodHandle CLIP_WEIGHT;
+    static final MethodHandle CLIP_SAMPLE_TRACK;
+    static final MethodHandle CLIP_TRACK_FOR;
+    static final MethodHandle RIG_POSE;
+    static final MethodHandle RIG_POSE_LOCALS;
+    static final MethodHandle RIG_LOCAL_POSE;
+    static final MethodHandle SKIN_CREATE;
+    static final MethodHandle SKIN_DESTROY;
+    static final MethodHandle SKIN_CLONE;
+    static final MethodHandle SKIN_VERTEX_COUNT;
+    static final MethodHandle SKIN_WEIGHTED_COUNT;
+    static final MethodHandle SKIN_SET;
+    static final MethodHandle SKIN_GET;
+    static final MethodHandle SKIN_JOINT_WEIGHTS;
+    static final MethodHandle SKIN_IMPORT;
+    static final MethodHandle SKIN_EXPORT;
+    static final MethodHandle SKIN_PACK;
+    static final MethodHandle SKIN_AUTO_WEIGHTS;
+    static final MethodHandle SKIN_PAINT;
+    static final MethodHandle SKIN_NORMALIZE;
+    static final MethodHandle SKIN_PRUNE;
+    static final MethodHandle SKIN_REMOVE_JOINT;
+    static final MethodHandle SKIN_REMAP_JOINTS;
+    static final MethodHandle SKIN_MIRROR;
+    static final MethodHandle SKIN_TRANSFER;
+    static final MethodHandle SKIN_DEFORM;
+
+    static {
+        String failure = null;
+        SymbolLookup lookup = null;
+        try {
+            Path lib = CendaKernels.libraryPath().orElse(null);
+            if (lib == null) {
+                failure = "Cenda library not found (searched -Dcenda.kernels.path, CENDA_KERNELS_PATH, the build "
+                    + "folders and the copy packaged in engine-core); build it with openmason-engine/cenda/build-kernels.sh";
+            } else {
+                lookup = SymbolLookup.libraryLookup(lib, Arena.global());
+                MethodHandle abi = Linker.nativeLinker().downcallHandle(
+                    lookup.find("cr_abi_version").orElseThrow(
+                        () -> new IllegalStateException("library has no rig (cr_abi_version missing)")),
+                    FunctionDescriptor.of(I32));
+                int have = (int) abi.invokeExact();
+                if (have != EXPECTED_ABI) {
+                    failure = "Cenda rig at " + lib + " has ABI " + have + " (expected " + EXPECTED_ABI
+                        + "); rebuild with openmason-engine/cenda/build-kernels.sh";
+                    lookup = null;
+                } else {
+                    LOGGER.info("Cenda rig (ABI {}) loaded from {}", have, lib);
+                }
+            }
+        } catch (Throwable t) {
+            failure = "Cenda rig failed to load: " + t;
+            lookup = null;
+        }
+        if (failure != null) {
+            LOGGER.error("Rig unavailable: {}", failure);
+        }
+        FAILURE = failure;
+        // No call reaches back into Java, and none runs long enough to stall a GC (pose: microseconds;
+        // skin ops are editor actions), but keep the heavy authoring calls non-critical.
+        Linker.Option critical = Linker.Option.critical(false);
+        LAST_ERROR = handle(lookup, "cr_last_error", FunctionDescriptor.of(ADDR));
+        RIG_CREATE = handle(lookup, "cr_rig_create", FunctionDescriptor.of(ADDR, ADDR, I32, ADDR, ADDR));
+        RIG_DESTROY = handle(lookup, "cr_rig_destroy", FunctionDescriptor.ofVoid(ADDR));
+        RIG_FLAGS = handle(lookup, "cr_rig_flags", FunctionDescriptor.of(I32, ADDR), critical);
+        RIG_FIND = handle(lookup, "cr_rig_find", FunctionDescriptor.of(I32, ADDR, ADDR));
+        RIG_FIND_HEAD = handle(lookup, "cr_rig_find_head", FunctionDescriptor.of(I32, ADDR), critical);
+        RIG_REST_WORLD = handle(lookup, "cr_rig_rest_world", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        CLIP_CREATE = handle(lookup, "cr_clip_create",
+            FunctionDescriptor.of(ADDR, ADDR, ADDR, I32, ADDR, I32, ADDR, ADDR, ADDR, I32));
+        CLIP_DESTROY = handle(lookup, "cr_clip_destroy", FunctionDescriptor.ofVoid(ADDR));
+        WRAP_TIME = handle(lookup, "cr_wrap_time", FunctionDescriptor.of(F32, F32, F32, I32), critical);
+        CLIP_WEIGHT = handle(lookup, "cr_clip_weight", FunctionDescriptor.of(F32, ADDR, F32), critical);
+        CLIP_SAMPLE_TRACK = handle(lookup, "cr_clip_sample_track",
+            FunctionDescriptor.of(I32, ADDR, I32, F32, ADDR, ADDR, ADDR));
+        CLIP_TRACK_FOR = handle(lookup, "cr_clip_track_for", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
+        RIG_POSE = handle(lookup, "cr_rig_pose",
+            FunctionDescriptor.of(I32, ADDR, ADDR, F32, ADDR, I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
+        RIG_POSE_LOCALS = handle(lookup, "cr_rig_pose_locals",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
+        RIG_LOCAL_POSE = handle(lookup, "cr_rig_local_pose",
+            FunctionDescriptor.of(I32, ADDR, ADDR, F32, ADDR, I32, ADDR));
+        SKIN_CREATE = handle(lookup, "cr_skin_create", FunctionDescriptor.of(ADDR, I32));
+        SKIN_DESTROY = handle(lookup, "cr_skin_destroy", FunctionDescriptor.ofVoid(ADDR));
+        SKIN_CLONE = handle(lookup, "cr_skin_clone", FunctionDescriptor.of(ADDR, ADDR));
+        SKIN_VERTEX_COUNT = handle(lookup, "cr_skin_vertex_count", FunctionDescriptor.of(I32, ADDR), critical);
+        SKIN_WEIGHTED_COUNT = handle(lookup, "cr_skin_weighted_count", FunctionDescriptor.of(I32, ADDR));
+        SKIN_SET = handle(lookup, "cr_skin_set", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, I32));
+        SKIN_GET = handle(lookup, "cr_skin_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
+        SKIN_JOINT_WEIGHTS = handle(lookup, "cr_skin_joint_weights", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
+        SKIN_IMPORT = handle(lookup, "cr_skin_import", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
+        SKIN_EXPORT = handle(lookup, "cr_skin_export", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
+        SKIN_PACK = handle(lookup, "cr_skin_pack", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR));
+        SKIN_AUTO_WEIGHTS = handle(lookup, "cr_skin_auto_weights",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, I32, ADDR, I32, F32, F32));
+        SKIN_PAINT = handle(lookup, "cr_skin_paint",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, I32, ADDR, ADDR, F32, I32, I32, F32));
+        SKIN_NORMALIZE = handle(lookup, "cr_skin_normalize", FunctionDescriptor.of(I32, ADDR));
+        SKIN_PRUNE = handle(lookup, "cr_skin_prune", FunctionDescriptor.of(I32, ADDR, F32));
+        SKIN_REMOVE_JOINT = handle(lookup, "cr_skin_remove_joint", FunctionDescriptor.of(I32, ADDR, I32));
+        SKIN_REMAP_JOINTS = handle(lookup, "cr_skin_remap_joints", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
+        SKIN_MIRROR = handle(lookup, "cr_skin_mirror",
+            FunctionDescriptor.of(I32, ADDR, ADDR, I32, I32, F32, ADDR, I32));
+        SKIN_TRANSFER = handle(lookup, "cr_skin_transfer", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR, I32));
+        SKIN_DEFORM = handle(lookup, "cr_skin_deform",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, ADDR, I32, ADDR));
+    }
+
+    private CendaRig() {
+    }
+
+    private static MethodHandle handle(SymbolLookup lookup, String name, FunctionDescriptor fd, Linker.Option... options) {
+        if (lookup == null) return null;
+        return lookup.find(name)
+            .map(symbol -> Linker.nativeLinker().downcallHandle(symbol, fd, options))
+            .orElseThrow(() -> new IllegalStateException("Cenda rig symbol missing: " + name));
+    }
+
+    /** True when the native rig loaded and passed its handshake. */
+    public static boolean isAvailable() {
+        return FAILURE == null;
+    }
+
+    /** Why the native rig is unavailable, or null when it is available. */
+    public static String unavailableReason() {
+        return FAILURE;
+    }
+
+    static void requireAvailable() {
+        if (FAILURE != null) {
+            throw new IllegalStateException("Cenda rig unavailable: " + FAILURE);
+        }
+    }
+
+    static String lastError() {
+        try {
+            MemorySegment text = (MemorySegment) LAST_ERROR.invokeExact();
+            return text.reinterpret(1024).getString(0);
+        } catch (Throwable t) {
+            return "unknown error";
+        }
+    }
+
+    static RuntimeException rethrow(Throwable t) {
+        if (t instanceof RuntimeException r) return r;
+        if (t instanceof Error e) throw e;
+        return new IllegalStateException(t);
+    }
+
+    /** Marshals a list of strings as a {@code const char* const*} array (null entries stay null). */
+    static MemorySegment strings(Arena arena, java.util.List<String> values) {
+        if (values == null || values.isEmpty()) return MemorySegment.NULL;
+        MemorySegment array = arena.allocate(ADDR, values.size());
+        for (int i = 0; i < values.size(); i++) {
+            String v = values.get(i);
+            array.setAtIndex(ADDR, i, v == null ? MemorySegment.NULL : arena.allocateFrom(v));
+        }
+        return array;
+    }
+}

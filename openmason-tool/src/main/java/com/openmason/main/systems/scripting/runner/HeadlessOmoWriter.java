@@ -20,7 +20,8 @@ import java.util.Map;
  * disk; {@link BlankModelFactory#createBlankCube()} supplies a valid temp
  * texture. Material texture PNGs are not written (reading pixels back is a
  * GPU operation); data-level face mappings and material definitions serialize
- * normally and pixels can be authored later in the live tool.
+ * normally and pixels can be authored later in the live tool. The skeleton
+ * (bones) and skin weights of the document are written like the live save.
  */
 public final class HeadlessOmoWriter {
 
@@ -57,10 +58,23 @@ public final class HeadlessOmoWriter {
             serializer.setFaceTextureData(faceTextureData, Map.of());
         }
 
+        // Skin weights (OMO 1.8) are keyed by part id + part-local vertex in the written layout,
+        // so a weighted model always writes its part entries.
+        com.openmason.main.systems.skeleton.SkinStore skins = doc.skins();
+        boolean weighted = skins != null && !skins.isEmpty();
         List<OMOFormat.PartEntry> partEntries =
-                OmoExportAssembler.extractPartEntries(doc.parts(), meshData);
+                OmoExportAssembler.extractPartEntries(doc.parts(), meshData, weighted);
         if (partEntries != null && !partEntries.isEmpty()) {
             serializer.setPartEntries(partEntries);
+        }
+
+        com.openmason.main.systems.skeleton.BoneStore bones = doc.bones();
+        if (bones != null && !bones.isEmpty()) {
+            serializer.setBoneEntries(bones.getBones());
+        }
+        if (weighted) {
+            serializer.setSkinData(com.openmason.main.systems.rendering.model.io.omo.OmoSkinExport
+                    .toSavedLayout(skins, doc.parts(), bones, partEntries));
         }
 
         if (!serializer.save(model, filePath, meshData)) {

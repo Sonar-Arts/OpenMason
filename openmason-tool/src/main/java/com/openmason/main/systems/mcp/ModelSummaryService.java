@@ -31,7 +31,10 @@ public final class ModelSummaryService {
         this.editorServices = editorServices;
     }
 
-    /** {@code {loaded}} or the full digest; nulls (empty sections) are omitted by the mapper. */
+    /**
+     * {@code {loaded}} or the full digest; nulls (empty sections) are omitted by the mapper. {@code skin}
+     * appears only when some vertex carries skin weights.
+     */
     public record Summary(
             boolean loaded,
             ModelSummary.Totals totals,
@@ -39,6 +42,7 @@ public final class ModelSummaryService {
             List<ModelSummary.PartRow> parts,
             List<Map<String, String>> bones,
             List<Map<String, String>> sockets,
+            Map<String, Object> skin,
             List<String> selection) {
     }
 
@@ -47,7 +51,7 @@ public final class ModelSummaryService {
             ViewportController vp = editorServices.getViewport3D();
             ModelPartManager pm = vp != null ? vp.getPartManager() : null;
             if (vp == null || pm == null || pm.getPartCount() == 0) {
-                return new Summary(false, null, null, null, null, null, null);
+                return new Summary(false, null, null, null, null, null, null, null);
             }
 
             EditableModel gmr = vp.getModelRenderer();
@@ -85,8 +89,30 @@ public final class ModelSummaryService {
             }
 
             return new Summary(true, model.totals(), model.bbox(), model.parts(),
-                    bones, sockets, selection);
+                    bones, sockets, skinDigest(vp), selection);
         }));
+    }
+
+    /**
+     * {weighted, parts:[names of parts with weights]} when any vertex carries skin weights; null
+     * (omitted) for a rigid model. skin_info has the per-part detail.
+     */
+    private static Map<String, Object> skinDigest(ViewportController vp) {
+        if (vp.getSkinStore() == null) return null;
+        var authoring = vp.getSkinAuthoring();
+        int weighted = 0;
+        List<String> partNames = new ArrayList<>();
+        for (String partId : authoring.partIds()) {
+            int n = authoring.weightedCount(partId);
+            if (n == 0) continue;
+            weighted += n;
+            partNames.add(authoring.jointName(partId));
+        }
+        if (weighted == 0) return null;
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("weighted", weighted);
+        out.put("parts", partNames);
+        return out;
     }
 
     private static String hostPartName(ModelPartManager pm, OMOFormat.AttachmentPointEntry point) {

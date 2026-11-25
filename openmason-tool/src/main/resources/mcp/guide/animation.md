@@ -1,11 +1,18 @@
 # Animation (.omanim clips)
 
-The animation editor edits one clip at a time: per-part tracks of keyframes
+The animation editor edits one clip at a time: per-joint tracks of keyframes
 (position/rotation/scale + easing), clip metadata (name/fps/duration/loop), and
-layer metadata for mixing (BASE/OVERLAY + part mask + fades + priority).
+layer metadata for mixing (BASE/OVERLAY + joint mask + fades + priority).
+A track keys a joint: a part OR a bone (the runtime binds by id, then name), so
+a skinned mesh animates by keying its bones (topics `bones`, `skinning`).
 
 Easing per keyframe: LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT, STEP (hold the
 pose, snap at the next key — blinks, gear ticks).
+
+## Opening
+`anim_open_editor` opens the editor on the viewport's model (like Tools >
+Animation Editor). Keyframe tools resolve parts/bones only while it is open;
+otherwise they fail with "call anim_open_editor first".
 
 ## Reading
 `anim_get_info`, `anim_list_tracks`, `anim_list_keyframes {part_id_or_name}`.
@@ -16,7 +23,8 @@ pose, snap at the next key — blinks, gear ticks).
 - `anim_edit_keyframe` / `anim_delete_keyframe` / `anim_delete_track`.
 - Clip meta: `anim_set_clip {name?, fps?, duration?, loop?}`.
 - Layers: `anim_set_layer {type?, mask_parts?, fade_in_seconds?,
-  fade_out_seconds?, priority?}` — BASE drives all parts, OVERLAY only its mask.
+  fade_out_seconds?, priority?}` — BASE drives all joints, OVERLAY only its mask
+  (part or bone names).
 
 ## Transport & files
 `anim_transport {action: play|pause|stop|seek, time?}`, `anim_apply_pose` (pose the

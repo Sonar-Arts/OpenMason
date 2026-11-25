@@ -137,6 +137,8 @@ public class ModelOperationService {
             // Load into viewport if available
             if (viewport != null) {
                 viewport.getBoneStore().clear();
+                viewport.getSkinStore().clear();
+                viewport.getSkinHistory().clear();
                 viewport.getAttachmentStore().clear();
                 viewport.getAttachmentPreviewStore().clearAll();
                 viewport.loadModel(currentEditableModel);
@@ -295,13 +297,25 @@ public class ModelOperationService {
                 }
             }
 
-            // Extract and set part entries (v1.3+)
+            // Extract and set part entries (v1.3+) and skin weights (v1.8+). Weights are keyed
+            // by part id and by the part's local vertex in the WRITTEN layout, so a weighted
+            // model always writes its part entries.
             if (viewport != null) {
+                com.openmason.main.systems.skeleton.SkinStore skinStore = viewport.getSkinStore();
+                boolean weighted = skinStore != null && !skinStore.isEmpty();
                 List<OMOFormat.PartEntry> partEntries =
-                        OmoExportAssembler.extractPartEntries(viewport.getPartManager(), meshData);
+                        OmoExportAssembler.extractPartEntries(viewport.getPartManager(), meshData, weighted);
                 if (partEntries != null && !partEntries.isEmpty()) {
                     omoSerializer.setPartEntries(partEntries);
                     logger.info("Saving {} model parts", partEntries.size());
+                }
+                if (weighted) {
+                    OMOFormat.SkinData skin = com.openmason.main.systems.rendering.model.io.omo.OmoSkinExport
+                            .toSavedLayout(skinStore, viewport.getPartManager(), viewport.getBoneStore(), partEntries);
+                    omoSerializer.setSkinData(skin);
+                    if (skin != null) {
+                        logger.info("Saving skin weights for {} part(s)", skin.parts().size());
+                    }
                 }
             }
 
@@ -550,6 +564,22 @@ public class ModelOperationService {
                     viewport.getBoneStore().setBones(boneEntries);
                     if (boneEntries != null && !boneEntries.isEmpty()) {
                         logger.info("Loaded {} bone entries", boneEntries.size());
+                    }
+                }
+
+                // Restore skin weights (v1.8+) AFTER the parts: weights index each part's restored
+                // (saved-layout) vertices. Absent = no weights; always resets the session skin.
+                if (viewport != null) {
+                    OMOFormat.SkinData skin = omoDeserializer.getLastLoadedSkinData();
+                    com.openmason.engine.modeling.parts.ModelPartManager pm = viewport.getPartManager();
+                    viewport.getSkinStore().load(skin, id -> {
+                        com.openmason.engine.modeling.parts.PartMeshRebuilder.PartGeometry g =
+                                pm.getPartGeometry(id);
+                        return g != null ? g.vertexCount() : 0;
+                    });
+                    viewport.getSkinHistory().clear();
+                    if (skin != null) {
+                        logger.info("Loaded skin weights for {} part(s)", skin.parts().size());
                     }
                 }
 

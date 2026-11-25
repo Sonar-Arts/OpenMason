@@ -48,13 +48,16 @@ capture plain to judge the silhouette, then `grid:true` to read exact texel coor
 Canvas edits land in the texture editor's own history (`undo` domain:"texture").
 
 ## Rig + idle animation
-1. Bones: `bone_create {name:"root"}`, then per limb with parent "root"
-   (names matching parts).
-2. Sockets if needed: `attach_create {name:"Hatzone", parent_part:"head"}`.
-3. Clip: `anim_new_clip` → `anim_set_clip {name, duration, fps, loop}` →
-   keyframes at t=0 and t=duration for a breathing bob
+1. Bones: `bone_create {name:"root"}`, then a chain per limb with parent "root"
+   (`arm_l`, `forearm_l`, ...; `_l`/`_r` suffixes).
+2. Bind: rigid limbs = `bone_bind_part {part, bone}` (the part follows the
+   bone's tail); bending meshes = `skin_auto_weights` (topic
+   `skinning`), then `skin_mirror {axis:"x", source_sign:1}`.
+3. Sockets if needed: `attach_create {name:"Hatzone", parent_part:"head"}`.
+4. Clip: `anim_new_clip` → `anim_set_clip {name, duration, fps, loop}` →
+   keyframes on bones or parts at t=0 and t=duration for a breathing bob
    (`anim_insert_keyframe {part_id_or_name:"body", time:0, position:[0,0,0]}` ...).
-4. Check: `anim_transport {action:"seek", time}` + `anim_apply_pose` + `viewport_capture`.
+5. Check: `anim_transport {action:"seek", time}` + `anim_apply_pose` + `viewport_capture`.
 
 ## Refine an existing model
 `model_summary` → `viewport_capture` → small script (`om.part("body").faces(

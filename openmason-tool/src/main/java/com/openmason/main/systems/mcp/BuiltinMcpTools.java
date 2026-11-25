@@ -34,6 +34,10 @@ public final class BuiltinMcpTools {
     public static final McpToolContribution BONES = new McpToolContribution("core.bones",
             c -> new BoneToolDefinitions(McpSharedServices.of(c).bones(), c.mapper()).registerAll(c.registry()));
 
+    /** Skin weights (rig revamp): info, get/set, auto weights, clean-up, mirror, brush dabs. */
+    public static final McpToolContribution SKIN = new McpToolContribution("core.skin",
+            c -> new SkinToolDefinitions(McpSharedServices.of(c).skin(), c.mapper()).registerAll(c.registry()));
+
     public static final McpToolContribution ATTACHMENTS = new McpToolContribution("core.attachments",
             c -> new AttachmentToolDefinitions(McpSharedServices.of(c).attachments(), c.mapper()).registerAll(c.registry()));
 
@@ -56,7 +60,7 @@ public final class BuiltinMcpTools {
     public static final McpToolContribution META = new McpToolContribution("core.meta", c -> {
         McpSharedServices s = McpSharedServices.of(c);
         new MetaToolDefinitions(new ModelSummaryService(s.editor()), s.model(), s.texture(), s.bones(),
-                s.attachments(), s.animation(), c.mapper(), c.services().require(McpGuide.class))
+                s.skin(), s.attachments(), s.animation(), c.mapper(), c.services().require(McpGuide.class))
                 .registerAll(c.registry());
     });
 
@@ -106,7 +110,7 @@ public final class BuiltinMcpTools {
 
     /** Every built-in group, in the order the built-in plugins register them. */
     public static List<McpToolContribution> all() {
-        return List.of(SAVE, MODEL_FILES, MODEL, BONES, ATTACHMENTS, VIEWPORT, SCENE, INSPECTION, KNOWLEDGE, META,
+        return List.of(SAVE, MODEL_FILES, MODEL, BONES, SKIN, ATTACHMENTS, VIEWPORT, SCENE, INSPECTION, KNOWLEDGE, META,
                 TEXTURE, FACE_TEXTURES, ANIMATION, UI, SCRIPTING, SCRIPT_LIBRARY, PARTICLES);
     }
 }

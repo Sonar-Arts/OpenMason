@@ -43,10 +43,22 @@ public final class OmoExportAssembler {
      */
     public static List<OMOFormat.PartEntry> extractPartEntries(ModelPartManager partManager,
                                                                OMOFormat.MeshData meshData) {
+        return extractPartEntries(partManager, meshData, false);
+    }
+
+    /**
+     * {@link #extractPartEntries(ModelPartManager, OMOFormat.MeshData)}, but with
+     * {@code alwaysWrite} the entries are produced even for a lone default part — skin weights
+     * (OMO 1.8) are keyed by part id, which partless synthesis would not preserve.
+     */
+    public static List<OMOFormat.PartEntry> extractPartEntries(ModelPartManager partManager,
+                                                               OMOFormat.MeshData meshData,
+                                                               boolean alwaysWrite) {
         if (partManager == null || meshData == null) {
             return null;
         }
-        if (partManager.getPartCount() <= 1 && !hasNonDefaultTransform(partManager.getAllParts())) {
+        if (!alwaysWrite && partManager.getPartCount() <= 1
+                && !hasNonDefaultTransform(partManager.getAllParts())) {
             return null; // Single default-transform part: partless synthesis on load covers it
         }
 

@@ -140,11 +140,12 @@ public final class CoreFeatures {
         }));
 
         for (var tools : List.of(BuiltinMcpTools.SAVE, BuiltinMcpTools.MODEL_FILES, BuiltinMcpTools.MODEL,
-                BuiltinMcpTools.BONES, BuiltinMcpTools.ATTACHMENTS, BuiltinMcpTools.VIEWPORT, BuiltinMcpTools.SCENE,
+                BuiltinMcpTools.BONES, BuiltinMcpTools.SKIN, BuiltinMcpTools.ATTACHMENTS, BuiltinMcpTools.VIEWPORT, BuiltinMcpTools.SCENE,
                 BuiltinMcpTools.INSPECTION, BuiltinMcpTools.KNOWLEDGE, BuiltinMcpTools.META)) {
             context.mcpTools().register(tools);
         }
-        for (String topic : List.of("overview", "parts", "face_textures", "bones", "attachments", "recipes", "saving")) {
+        for (String topic : List.of("overview", "parts", "face_textures", "bones", "skinning", "attachments", "recipes",
+                "saving")) {
             context.guideTopics().register(BuiltinKnowledge.topic(topic));
         }
         for (String pack : KnowledgeBase.BUILTIN_PACKS) {

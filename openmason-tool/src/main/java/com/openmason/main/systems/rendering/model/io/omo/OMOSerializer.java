@@ -78,6 +78,9 @@ public class OMOSerializer {
     // Optional attachment point (socket) entries (v1.7+)
     private List<OMOFormat.AttachmentPointEntry> pendingAttachmentPoints;
 
+    // Optional per-vertex skin weights (v1.8+), by part-local vertex in the WRITTEN layout
+    private OMOFormat.SkinData pendingSkin;
+
     /**
      * Creates a new .OMO serializer with JSON support.
      */
@@ -154,6 +157,15 @@ public class OMOSerializer {
     }
 
     /**
+     * Set the skin weights to be saved with the next model (v1.8+). Each part's local vertex indices
+     * must be positions inside that part's written vertex span ({@code vertexStart} of its part
+     * entry) — see {@code OmoSkinExport}. Null or empty writes no {@code skin}.
+     */
+    public void setSkinData(OMOFormat.SkinData skin) {
+        this.pendingSkin = skin;
+    }
+
+    /**
      * Saves a BlockModel to a .OMO file with mesh data.
      * Convenience method that sets mesh data and saves in one call.
      *
@@ -226,6 +238,7 @@ public class OMOSerializer {
             pendingModelTransform = null;
             pendingBones = null;
             pendingAttachmentPoints = null;
+            pendingSkin = null;
 
             // Move temp file to final location (atomic on most filesystems)
             Path finalPath = Path.of(filePath);
@@ -263,7 +276,7 @@ public class OMOSerializer {
         // Serialize to JSON (pass pending data explicitly since DTO is static)
         String json = objectMapper.writeValueAsString(
                 new ExtendedManifestDTO(document, pendingParts, pendingModelTransform, pendingBones,
-                        pendingAttachmentPoints));
+                        pendingAttachmentPoints, pendingSkin));
         byte[] jsonBytes = json.getBytes(StandardCharsets.UTF_8);
 
         // Write JSON to ZIP
@@ -366,12 +379,14 @@ public class OMOSerializer {
         public ModelTransformDTO modelTransform; // Optional, null for identity (v1.4+)
         public List<BoneEntryDTO> bones; // Optional, null or empty for files without a skeleton (v1.6+)
         public List<AttachmentPointEntryDTO> attachmentPoints; // Optional, null or empty for files without sockets (v1.7+)
+        public SkinDTO skin; // Optional, null for unweighted models (v1.8+)
 
         public ExtendedManifestDTO(OMOFormat.ExtendedDocument document,
                                    List<OMOFormat.PartEntry> partEntries,
                                    OMOFormat.ModelTransform modelTransform,
                                    List<OMOFormat.BoneEntry> boneEntries,
-                                   List<OMOFormat.AttachmentPointEntry> attachmentPointEntries) {
+                                   List<OMOFormat.AttachmentPointEntry> attachmentPointEntries,
+                                   OMOFormat.SkinData skinData) {
             this.version = document.version();
             this.objectName = document.objectName();
             this.modelType = document.modelType();
@@ -388,6 +403,7 @@ public class OMOSerializer {
                     ? boneEntries.stream().map(BoneEntryDTO::new).toList() : null;
             this.attachmentPoints = attachmentPointEntries != null && !attachmentPointEntries.isEmpty()
                     ? attachmentPointEntries.stream().map(AttachmentPointEntryDTO::new).toList() : null;
+            this.skin = skinData != null && !skinData.isEmpty() ? new SkinDTO(skinData) : null;
         }
     }
 
@@ -628,6 +644,40 @@ public class OMOSerializer {
             this.scaleX = entry.scaleX();
             this.scaleY = entry.scaleY();
             this.scaleZ = entry.scaleZ();
+        }
+    }
+
+    /**
+     * DTO for skin weights (v1.8+):
+     * {@code {"joints": [jointId...], "parts": [{"partId": id, "vertices": [[localVertex, j0, w0, ...]]}]}}.
+     */
+    private static class SkinDTO {
+        public List<String> joints;
+        public List<PartSkinDTO> parts;
+
+        SkinDTO(OMOFormat.SkinData data) {
+            this.joints = data.jointIds();
+            this.parts = data.parts().stream()
+                    .filter(p -> !p.vertices().isEmpty())
+                    .map(PartSkinDTO::new).toList();
+        }
+    }
+
+    private static class PartSkinDTO {
+        public String partId;
+        public List<List<Number>> vertices;
+
+        PartSkinDTO(OMOFormat.PartSkin part) {
+            this.partId = part.partId();
+            this.vertices = part.vertices().stream().map(v -> {
+                List<Number> row = new java.util.ArrayList<>(1 + 2 * v.joints().length);
+                row.add(v.localVertex());
+                for (int k = 0; k < v.joints().length; k++) {
+                    row.add(v.joints()[k]);
+                    row.add(v.weights()[k]);
+                }
+                return row;
+            }).toList();
         }
     }
 }

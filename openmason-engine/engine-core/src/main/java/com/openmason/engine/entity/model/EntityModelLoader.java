@@ -1,5 +1,7 @@
 package com.openmason.engine.entity.model;
 
+import com.openmason.engine.rig.RigModel;
+
 import com.openmason.engine.format.mesh.ParsedFaceMapping;
 import com.openmason.engine.format.mesh.ParsedMaterialData;
 import com.openmason.engine.format.mesh.ParsedMeshData;
@@ -221,8 +223,9 @@ public final class EntityModelLoader {
     private static List<String> partIds(EntityGeometry geometry) {
         List<String> ids = new ArrayList<>();
         if (geometry != null) {
-            for (EntityPart part : geometry.parts()) {
-                ids.add(part.id());
+            // Clips may key any joint: parts and bones.
+            for (var joint : geometry.rig().joints()) {
+                ids.add(joint.id());
             }
         }
         return ids;
@@ -320,6 +323,13 @@ public final class EntityModelLoader {
         float[] texCoords = mesh.texCoords() != null ? mesh.texCoords() : new float[0];
         int[]   indices   = mesh.indices()   != null ? mesh.indices()   : new int[0];
 
+        // A vertex is bound to ONE joint; a vertex two parts both index (none of the shipped models
+        // has one) is duplicated so each part keeps moving its own copy, as the per-part draw did.
+        SplitMesh split = splitSharedVertices(parts, vertices, texCoords, indices);
+        vertices = split.vertices();
+        texCoords = split.texCoords();
+        indices = split.indices();
+
         // Attachment points (OMO v1.7+)
         List<EntityAttachmentPoint> attachmentPoints = new ArrayList<>();
         for (OMOFormat.AttachmentPointEntry ap : omo.attachmentPoints()) {
@@ -330,8 +340,65 @@ public final class EntityModelLoader {
                     new Vector3f(ap.scaleX(), ap.scaleY(), ap.scaleZ())));
         }
 
+        // The rig: parts (joint i = part i), then the skeleton, plus skin weights (OMO 1.8).
+        int[] partJointOfVertex = EntityGeometry.partJointOfVertex(parts, indices, vertices);
+        int[] partVertexStart = new int[parts.size()];
+        for (int i = 0; i < parts.size() && i < omo.parts().size(); i++) {
+            partVertexStart[i] = omo.parts().get(i).vertexStart();
+        }
+        RigModel rig = RigModel.build(EntityGeometry.partSpecs(parts), omo.bones(), omo.skin(),
+                partVertexStart, partJointOfVertex);
+
         return new EntityGeometry(vertices, texCoords, indices, parts, materials,
-                computeRestMinY(vertices, indices), attachmentPoints);
+                computeRestMinY(vertices, indices), attachmentPoints, rig);
+    }
+
+    private record SplitMesh(float[] vertices, float[] texCoords, int[] indices) {}
+
+    /** Duplicates every vertex indexed by more than one part's faces (appended; indices rewritten). */
+    private static SplitMesh splitSharedVertices(List<EntityPart> parts, float[] vertices, float[] texCoords,
+                                                 int[] indices) {
+        int vertexCount = vertices.length / 3;
+        int[] owner = new int[vertexCount];
+        java.util.Arrays.fill(owner, -1);
+        int[] rewritten = null;
+        List<Integer> extraSources = new ArrayList<>();
+        Map<Long, Integer> copies = new HashMap<>();
+        for (int p = 0; p < parts.size(); p++) {
+            for (EntityFace f : parts.get(p).faces()) {
+                int end = Math.min(indices.length, f.indexStart() + f.indexCount());
+                for (int i = Math.max(0, f.indexStart()); i < end; i++) {
+                    int v = indices[i];
+                    if (v < 0 || v >= vertexCount) continue;
+                    if (owner[v] < 0) {
+                        owner[v] = p;
+                    } else if (owner[v] != p) {
+                        if (rewritten == null) rewritten = indices.clone();
+                        long key = ((long) v << 32) | p;
+                        Integer copy = copies.get(key);
+                        if (copy == null) {
+                            copy = vertexCount + extraSources.size();
+                            extraSources.add(v);
+                            copies.put(key, copy);
+                        }
+                        rewritten[i] = copy;
+                    }
+                }
+            }
+        }
+        if (rewritten == null) return new SplitMesh(vertices, texCoords, indices);
+        logger.debug("Split {} vertices shared between parts", extraSources.size());
+        int total = vertexCount + extraSources.size();
+        float[] v2 = java.util.Arrays.copyOf(vertices, total * 3);
+        boolean hasUv = texCoords.length >= vertexCount * 2;
+        float[] t2 = hasUv ? java.util.Arrays.copyOf(texCoords, total * 2) : texCoords;
+        for (int k = 0; k < extraSources.size(); k++) {
+            int src = extraSources.get(k);
+            int dst = vertexCount + k;
+            System.arraycopy(vertices, src * 3, v2, dst * 3, 3);
+            if (hasUv) System.arraycopy(texCoords, src * 2, t2, dst * 2, 2);
+        }
+        return new SplitMesh(v2, t2, rewritten);
     }
 
     /**

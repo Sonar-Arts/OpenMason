@@ -525,6 +525,9 @@ public final class UiComposition {
      */
     private void wireAnimationEditor() {
         var controller = animationEditor.getController();
+        // Bones are joints: the editor keys and previews the viewport's skeleton too.
+        controller.setBoneStoreSupplier(() -> mainInterface.getViewport3D() != null
+                ? mainInterface.getViewport3D().getBoneStore() : null);
         mainInterface.getModelOperations().setAroundSaveHooks(
                 () -> { if (animationEditor.isVisible()) controller.suspendPreview(); },
                 () -> { if (animationEditor.isVisible()) controller.resumePreview(); });

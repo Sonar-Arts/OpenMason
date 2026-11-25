@@ -106,12 +106,22 @@ public final class BoneToolDefinitions {
                 "Re-parent a bone. Pass an empty/null parent_id_or_name to make the bone a root.",
                 schema()
                         .str("id_or_name", "Bone id or name")
-                        .str("parent_id_or_name", "New parent bone id or name (empty/omit for root)")
+                        .str("parent_id_or_name", "New parent bone or part, id or name (empty/omit for root)")
                         .required("id_or_name")
                         .build(),
                 args -> editor.setBoneParent(
                         reqString(args, "id_or_name"),
                         optString(args, "parent_id_or_name")).orElse(null)));
+
+        registry.register(new McpTool(
+                "bone_bind_part",
+                "Parent a part to a bone: the part follows the bone's tail when posed or animated.",
+                schema()
+                        .str("part", "Part id or name")
+                        .str("bone", "Bone id or name")
+                        .required("part", "bone")
+                        .build(),
+                args -> editor.bindPart(reqString(args, "part"), reqString(args, "bone"))));
 
         registry.register(new McpTool(
                 "bone_select",
