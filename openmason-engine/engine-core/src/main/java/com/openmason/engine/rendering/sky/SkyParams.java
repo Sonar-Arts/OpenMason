@@ -25,12 +25,16 @@ import org.joml.Vector3f;
  *                       shines fully until it reaches it, then fades as it sinks
  * @param celestialPole  normalized direction the sky turns about (world space): the moon's disc
  *                       is set square to it
+ * @param skyAngle       how far the sky has turned about the pole (radians, right-handed, 0 with
+ *                       the sun on the meridian): the stars turn with it
+ * @param time           seconds, any origin: the stars' twinkle
  */
 public record SkyParams(Vector3f sunDirection, Vector3f moonDirection, float moonLight,
                         Vector3f zenithColor, Vector3f horizonColor,
                         Vector3f sunsetColor, float sunsetCoverage, Vector3f sunGlow,
                         Vector3f sunColor, Vector3f earthShadowColor, float earthShadowHeight,
-                        float twilightBand, float daylight, float seaHorizon, Vector3f celestialPole) {
+                        float twilightBand, float daylight, float seaHorizon, Vector3f celestialPole,
+                        float skyAngle, float time) {
 
     /** The pole of a sky seen from the equator, turning about the horizon's +Z point. */
     public static final Vector3f EQUATOR_POLE = new Vector3f(0f, 0f, 1f);
@@ -45,6 +49,7 @@ public record SkyParams(Vector3f sunDirection, Vector3f moonDirection, float moo
                      Vector3f sunColor, Vector3f earthShadowColor, float earthShadowHeight,
                      float twilightBand, float daylight) {
         this(sunDirection, moonDirection, moonLight, zenithColor, horizonColor, sunsetColor, sunsetCoverage,
-                sunGlow, sunColor, earthShadowColor, earthShadowHeight, twilightBand, daylight, 0f, EQUATOR_POLE);
+                sunGlow, sunColor, earthShadowColor, earthShadowHeight, twilightBand, daylight, 0f, EQUATOR_POLE,
+                0f, 0f);
     }
 }

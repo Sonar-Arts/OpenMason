@@ -19,6 +19,8 @@ uniform float sunsetCoverage; // how far round from the sun the gold reaches
 uniform float daylight;       // 0 sun down .. 1 full day
 uniform float seaHorizon;     // the sea's edge seen from the eye (sine of elevation, <= 0)
 uniform vec3 celestialPole;   // the point the sky turns about (unit)
+uniform float skyAngle;       // how far the sky has turned about it (radians; 0 with the sun on the meridian)
+uniform float time;           // seconds, for the stars' twinkle
 uniform sampler2D moonTexture; // 64x64 pixel art, alpha = disc
 
 out vec4 FragColor;
@@ -166,6 +168,168 @@ vec3 getSunContribution(vec3 direction) {
     return (discColor * sunIntensity + glowColor * glowIntensity) * lit;
 }
 
+
+// ---------------------------------------------------------------------------
+// The night sky: stars, the Milky Way and airglow, fixed to the celestial
+// sphere, which turns about celestialPole by skyAngle with the sun and moon.
+// ---------------------------------------------------------------------------
+
+// Star cells per cube-face edge. A cell is ~0.56 degrees; each holds at most
+// one star, kept in its middle half so it never crosses into a neighbour.
+const float STAR_GRID = 160.0;
+// Chance a cell at the middle of a face holds a star: ~9,000 over the sphere,
+// about as many as the eye sees down to magnitude 6.5. Corner cells cover less
+// sky and get proportionally fewer.
+const float STAR_DENSITY = 0.06;
+// The magnitudes stars are drawn from, brightest to faintest. Counts rise
+// ~3x per magnitude (log N = 0.5 m), as in the real sky: many faint, few bright.
+const float STAR_MAG_BRIGHT = -1.0;
+const float STAR_MAG_FAINT = 6.5;
+// How strongly the sky's own light drowns a star: visibility is
+// flux / (flux + STAR_CONTRAST * sky luminance), luminance in linear light.
+// First-magnitude stars come out in civil twilight, the faintest last.
+const float STAR_CONTRAST = 8.0;
+// Screen brightness from flux: compressed (flux^0.45, so magnitude 6.5 is a
+// dim point and Sirius a bright one, ~28x apart rather than 1,600x).
+const float STAR_GAIN = 1.6;
+const float STAR_GAMMA = 0.45;
+// Atmospheric extinction, magnitudes per air mass (V band, a clear night).
+const float STAR_EXTINCTION = 0.25;
+// Twinkle (scintillation): its depth per air mass, and the most it reaches.
+const float TWINKLE_PER_AIRMASS = 0.06;
+const float TWINKLE_MAX = 0.6;
+// Star colours, cool (hot stars) to warm (cool stars); most fall between.
+const vec3 STAR_COOL = vec3(0.72, 0.82, 1.0);
+const vec3 STAR_WARM = vec3(1.0, 0.78, 0.58);
+// The Milky Way: a band about the galactic pole, tilted 62.9 degrees from the
+// celestial pole as the real one is, with the galactic centre brightest.
+const float MILKY_WAY_TILT = 1.098;
+const float MILKY_WAY_WIDTH = 0.14;    // sine of galactic latitude at 1/e
+const vec3 MILKY_WAY_COLOR = vec3(0.044, 0.047, 0.060);
+// Airglow: the upper air's own faint light (oxygen's green line, ~90 km up),
+// seen brightest about 12 degrees up, where the line of sight runs longest
+// through the glowing layer before the lower air dims it.
+const float AIRGLOW_ALTITUDE = 0.21;   // radians, ~12 degrees
+const vec3 AIRGLOW_COLOR = vec3(0.016, 0.022, 0.015);
+// The faint diffuse light (Milky Way, airglow) is visible only on a dark sky:
+// gone by this sky luminance (log10, linear light), full below the first.
+const float DIFFUSE_DARK_LOG = -4.2;
+const float DIFFUSE_GONE_LOG = -2.9;
+
+vec3 hash33(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.xxy + p.yxx) * p.zyx);
+}
+
+// Value noise and a few octaves of it, for the Milky Way's clouds of stars.
+float valueNoise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n000 = hash33(i).x, n100 = hash33(i + vec3(1, 0, 0)).x;
+    float n010 = hash33(i + vec3(0, 1, 0)).x, n110 = hash33(i + vec3(1, 1, 0)).x;
+    float n001 = hash33(i + vec3(0, 0, 1)).x, n101 = hash33(i + vec3(1, 0, 1)).x;
+    float n011 = hash33(i + vec3(0, 1, 1)).x, n111 = hash33(i + vec3(1, 1, 1)).x;
+    return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+               mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+
+float fbm(vec3 p) {
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i < 4; i++) {
+        sum += amp * valueNoise(p);
+        p *= 2.03;
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+// Kasten and Young's relative air mass at altitude `alt` radians (CloudSunlight).
+float airMass(float alt) {
+    return 1.0 / (sin(alt) + 0.50572 * pow(degrees(alt) + 6.07995, -1.6364));
+}
+
+// `v` turned by `angle` about unit axis `k` (Rodrigues).
+vec3 rotateAbout(vec3 v, vec3 k, float angle) {
+    float c = cos(angle), s = sin(angle);
+    return v * c + cross(k, v) * s + k * dot(k, v) * (1.0 - c);
+}
+
+// The star in this direction's cell, if any: rgb = light. `c` is the direction
+// on the celestial sphere, `pixel` the angle one pixel spans.
+vec3 starAt(vec3 c, float pixel, float alt, float skyLum) {
+    vec3 a = abs(c);
+    vec3 axis; vec2 uv; float face;
+    if (a.x >= a.y && a.x >= a.z) { face = c.x > 0.0 ? 0.0 : 1.0; uv = c.yz / a.x; axis = vec3(sign(c.x), 0.0, 0.0); }
+    else if (a.y >= a.z)          { face = c.y > 0.0 ? 2.0 : 3.0; uv = c.xz / a.y; axis = vec3(0.0, sign(c.y), 0.0); }
+    else                          { face = c.z > 0.0 ? 4.0 : 5.0; uv = c.xy / a.z; axis = vec3(0.0, 0.0, sign(c.z)); }
+    vec2 cell = floor((uv * 0.5 + 0.5) * STAR_GRID);
+    vec3 h = hash33(vec3(cell, face * 37.0 + 11.0));
+    vec2 suv = (cell + 0.25 + 0.5 * h.yz) / STAR_GRID * 2.0 - 1.0;
+    // Fewer stars in the small cells near a face's corners: the same density per solid angle.
+    float solidAngle = pow(1.0 + dot(suv, suv), -1.5);
+    if (h.x > STAR_DENSITY * solidAngle) return vec3(0.0);
+    vec3 star = axis.x != 0.0 ? vec3(axis.x, suv) : (axis.y != 0.0 ? vec3(suv.x, axis.y, suv.y) : vec3(suv, axis.z));
+    star = normalize(star);
+
+    vec3 h2 = hash33(vec3(cell.yx, face * 53.0 + 5.0));
+    // Magnitude: the cumulative count rises as 10^(0.5 m), inverted from a uniform draw.
+    float span = pow(10.0, 0.5 * (STAR_MAG_FAINT - STAR_MAG_BRIGHT)) - 1.0;
+    float mag = STAR_MAG_BRIGHT + 2.0 * log(1.0 + h2.x * span) / log(10.0);
+    // Dimmed by the air it shines through, most near the horizon.
+    float airmass = airMass(max(alt, 0.0));
+    mag += STAR_EXTINCTION * (airmass - 1.0);
+    float flux = pow(10.0, -0.4 * mag);
+    float visible = flux / (flux + STAR_CONTRAST * skyLum);
+    // Twinkle: deeper and faster near the horizon, where more air churns the light.
+    float depth = min(TWINKLE_PER_AIRMASS * airmass, TWINKLE_MAX);
+    float twinkle = 1.0 + depth * sin(time * (9.0 + 7.0 * h2.y) + 6.2832 * h2.z)
+                                * sin(time * (3.1 + 2.0 * h2.z) + 6.2832 * h2.y);
+    // A point a pixel or so wide, the brightest a touch wider.
+    float radius = pixel * (0.7 + 0.5 * min(flux, 2.5));
+    float d = length(cross(c, star));
+    float spot = exp(-(d * d) / (radius * radius));
+    vec3 tint = mix(STAR_COOL, STAR_WARM, smoothstep(0.15, 0.85, h2.y));
+    return tint * min(STAR_GAIN * pow(flux, STAR_GAMMA), 1.5) * visible * twinkle * spot;
+}
+
+// The night sky over `sky`: stars wherever the sky is dark enough to show
+// them, then the Milky Way and airglow on the darkest skies. `pixel` is the
+// angle one pixel spans.
+vec3 applyNight(vec3 direction, vec3 sky, float pixel) {
+    if (direction.y <= 0.0 || daylight >= 1.0) return sky;
+    // The sky's luminance in linear light: the palette is display-referred.
+    float skyLum = dot(pow(max(sky, vec3(0.0)), vec3(2.2)), vec3(0.2126, 0.7152, 0.0722));
+    float alt = asin(direction.y);
+    // The direction on the celestial sphere: undo the sky's turn.
+    vec3 c = rotateAbout(direction, celestialPole, -skyAngle);
+    vec3 light = vec3(0.0);
+    // The moon's disc hides the stars behind it.
+    if (dot(direction, moonDirection) < cos(MOON_RADIUS)) {
+        light += starAt(c, pixel, alt, skyLum);
+    }
+    float dark = (1.0 - smoothstep(DIFFUSE_DARK_LOG, DIFFUSE_GONE_LOG, log(max(skyLum, 1e-8)) / log(10.0)))
+               * (1.0 - 0.7 * moonLight);
+    if (dark > 0.0) {
+        // Galactic coordinates: the galactic pole is the celestial pole tilted about a fixed line.
+        vec3 tiltAxis = vec3(1.0, 0.0, 0.0); // square to the pole, which lies in the y-z plane
+        vec3 galPole = rotateAbout(celestialPole, tiltAxis, MILKY_WAY_TILT);
+        vec3 galCentre = normalize(cross(galPole, tiltAxis));
+        float b = dot(c, galPole);
+        float band = exp(-(b * b) / (MILKY_WAY_WIDTH * MILKY_WAY_WIDTH));
+        float clouds = fbm(c * 7.0);
+        // The dark rift: dust lanes down the band's middle.
+        float rift = 1.0 - 0.55 * exp(-(b * b) / 0.0012) * smoothstep(0.35, 0.65, fbm(c * 13.0 + 4.0));
+        float centre = 0.55 + 0.45 * max(dot(c, galCentre), 0.0);
+        vec3 diffuse = MILKY_WAY_COLOR * band * (0.35 + 0.9 * clouds) * rift * centre * smoothstep(0.0, 0.15, alt);
+        // Airglow: rises from the horizon to a peak ~12 degrees up, then falls slowly.
+        float above = alt - AIRGLOW_ALTITUDE;
+        diffuse += AIRGLOW_COLOR * exp(-(above * above) / (above < 0.0 ? 0.012 : 0.16));
+        light += diffuse * dark;
+    }
+    return sky + light * (1.0 - daylight);
+}
+
 // The moon over `sky`. Pixel art on a lit sphere: the 64-texel grid is snapped first, then
 // each texel is lit from the real sun direction, so the phases (and which limb is lit)
 // come out of the geometry, and the terminator steps in whole pixels.
@@ -223,6 +387,9 @@ void main() {
     finalColor = applySunset(direction, finalColor);
     finalColor = applyEarthShadow(direction, finalColor);
     finalColor = applyAfterglow(direction, finalColor);
+    // The angle one pixel spans, for the stars' size; here, in uniform control flow.
+    float pixel = max(length(dFdx(direction)), length(dFdy(direction)));
+    finalColor = applyNight(direction, finalColor, pixel);
     finalColor = applyMoon(direction, finalColor);
 
     // Atmospheric perspective with horizon softening. The pale haze is sunlit air:

@@ -162,6 +162,8 @@ public class SkyRenderer {
             skyShaderProgram.createUniform("daylight");
             skyShaderProgram.createUniform("seaHorizon");
             skyShaderProgram.createUniform("celestialPole");
+            skyShaderProgram.createUniform("skyAngle");
+            skyShaderProgram.createUniform("time");
             skyShaderProgram.createUniform("moonTexture");
 
         } catch (Exception e) {
@@ -237,6 +239,8 @@ public class SkyRenderer {
         skyShaderProgram.setUniform("daylight", sky.daylight());
         skyShaderProgram.setUniform("seaHorizon", sky.seaHorizon());
         skyShaderProgram.setUniform("celestialPole", sky.celestialPole());
+        skyShaderProgram.setUniform("skyAngle", sky.skyAngle());
+        skyShaderProgram.setUniform("time", sky.time());
         skyShaderProgram.setUniform("moonTexture", MOON_TEXTURE_UNIT);
 
         int previousUnit = glGetInteger(GL_ACTIVE_TEXTURE);
