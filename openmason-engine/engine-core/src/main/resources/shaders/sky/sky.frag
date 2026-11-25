@@ -49,6 +49,12 @@ const float SUNSET_BELOW = 0.67;
 const vec3 BELT_PINK = vec3(1.0, 0.58, 0.56);
 // The sun disc's own tint over sunlight's hue: a touch yellow at noon.
 const vec3 SUN_DISC = vec3(1.0, 0.95, 0.7);
+// The disc's angular radius, radians: ~1.5 degrees, three times the real sun's,
+// so it reads as a disc and not a point (cos = 0.99966).
+const float SUN_RADIUS = 0.0262;
+// Limb-darkening coefficients (red, green, blue): the limb is ~45-65% dimmer than
+// the centre, most in blue, so the edge reads warmer, as the real sun's does.
+const vec3 LIMB_DARKENING = vec3(0.45, 0.55, 0.65);
 // The width of the sun's aureole (1 - cos of the angle from it) with a clear day's
 // aerosol; SunsetFog.AUREOLE_WIDTH. Haze scatters forward in a lobe that widens
 // with how much of it there is, so it scales with `aerosol`.
@@ -158,22 +164,34 @@ vec3 applyEarthShadow(vec3 direction, vec3 sky) {
     return mix(sky, earthShadowColor, inShadow * twilightBand * 0.85);
 }
 
-vec3 getSunContribution(vec3 direction) {
+// The sun: a small disc, darker and redder toward its limb, in the aureole the
+// haze scatters round it. `pixel` is the angle one pixel spans.
+vec3 getSunContribution(vec3 direction, float pixel) {
     float sunDot = dot(direction, sunDirection);
+    // The angle from the sun's centre; the sine is exact enough at these sizes and,
+    // unlike acos near 1, does not lose precision.
+    float angle = sunDot > 0.0 ? length(cross(direction, sunDirection)) : 3.1416;
 
-    float sunRadius = 0.98;
-    float sunIntensity = smoothstep(sunRadius - 0.01, sunRadius + 0.01, sunDot);
-    vec3 discColor = SUN_DISC * sunColor;
+    // The disc, its edge antialiased over a pixel. It sinks into the sea: the part
+    // below the sea's edge is hidden.
+    float disc = 1.0 - smoothstep(SUN_RADIUS - pixel, SUN_RADIUS + pixel, angle);
+    disc *= smoothstep(seaHorizon - pixel, seaHorizon + pixel, direction.y);
+    // Limb darkening: toward the edge we see shallower, cooler layers of the sun,
+    // dimmer and redder. I(mu) = 1 - u (1 - mu), mu the cosine on the disc's sphere.
+    float r = min(angle / SUN_RADIUS, 1.0);
+    float mu = sqrt(1.0 - r * r);
+    vec3 limb = 1.0 - LIMB_DARKENING * (1.0 - mu);
+    vec3 discColor = SUN_DISC * sunColor * limb;
 
+    // The aureole: sunlight the haze scatters a little off its path, wider in hazy air.
     float glowRadius = AUREOLE_WIDTH * aerosol;
     float glowIntensity = exp(-pow((1.0 - sunDot) / glowRadius, 1.5)) * 0.4;
     vec3 glowColor = vec3(1.0, 0.8, 0.5) * sunColor;
 
-    // Full until the sun reaches the sea's edge, then it fades as it sinks below it.
+    // The aureole is full until the sun reaches the sea's edge, then fades as it sinks below it.
     float lit = smoothstep(seaHorizon - SUN_SINK, seaHorizon, sunDirection.y);
-    return (discColor * sunIntensity + glowColor * glowIntensity) * lit;
+    return discColor * disc + glowColor * glowIntensity * lit;
 }
-
 
 // ---------------------------------------------------------------------------
 // The night sky: stars, the Milky Way and airglow, fixed to the celestial
@@ -393,7 +411,7 @@ void main() {
     finalColor = applySunset(direction, finalColor);
     finalColor = applyEarthShadow(direction, finalColor);
     finalColor = applyAfterglow(direction, finalColor);
-    // The angle one pixel spans, for the stars' size; here, in uniform control flow.
+    // The angle one pixel spans, for the stars and the sun's edge; here, in uniform control flow.
     float pixel = max(length(dFdx(direction)), length(dFdy(direction)));
     finalColor = applyNight(direction, finalColor, pixel);
     finalColor = applyMoon(direction, finalColor);
@@ -408,7 +426,7 @@ void main() {
     vec3 hazeColor = mix(horizonColor, vec3(0.8, 0.85, 0.9), daylight);
     finalColor = mix(hazeColor, finalColor, haze * (1.0 - hazeAmount));
     // The sun goes over the haze: the horizon haze would wash it out before it set.
-    finalColor += getSunContribution(direction);
+    finalColor += getSunContribution(direction, pixel);
 
     FragColor = vec4(finalColor + ditherTpdf(gl_FragCoord.xy), 1.0);
 }
