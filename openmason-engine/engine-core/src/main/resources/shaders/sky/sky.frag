@@ -18,6 +18,7 @@ uniform vec3 sunsetColor;     // evening gold at the horizon × strength (0 = no
 uniform float sunsetCoverage; // how far round from the sun the gold reaches
 uniform float daylight;       // 0 sun down .. 1 full day
 uniform float seaHorizon;     // the sea's edge seen from the eye (sine of elevation, <= 0)
+uniform vec3 celestialPole;   // the point the sky turns about (unit)
 uniform sampler2D moonTexture; // 64x64 pixel art, alpha = disc
 
 out vec4 FragColor;
@@ -178,11 +179,12 @@ vec3 applyMoon(vec3 direction, vec3 sky) {
     if (cosAngle < cos(MOON_RADIUS * 1.5)) {
         return sky;
     }
-    // A frame on the disc, its top toward the pole the sun and moon wheel around (Z).
-    // The path never points along Z, so the frame never degenerates. Like a real moon
-    // seen from the tropics, it rises on its side and sets on the other, and it keeps
-    // Mare Crisium (texture right) toward the evening sun, the first sea a waxing moon lights.
-    vec3 up = normalize(vec3(0.0, 0.0, 1.0) - f * f.z);
+    // A frame on the disc, fixed to the celestial pole the sun and moon wheel around,
+    // as the real moon's is: it rises tilted one way and sets tilted the other. Its top
+    // points away from the pole (toward the noon side of the sky), which keeps Mare
+    // Crisium (texture right) toward the evening sun, the first sea a waxing moon
+    // lights. The moon's path lies square to the pole, so the frame never degenerates.
+    vec3 up = normalize(f * dot(f, celestialPole) - celestialPole);
     vec3 right = cross(f, up);
     float scale = tan(MOON_RADIUS);
     vec2 uv = vec2(dot(direction, right), dot(direction, up)) / cosAngle / scale; // -1..1 over the disc

@@ -23,20 +23,28 @@ import org.joml.Vector3f;
  * @param daylight       0 with the sun down, 1 in full day: fades the haze in and washes the moon out
  * @param seaHorizon     the sea's edge as the eye sees it (sine of elevation, 0 or below): the sun
  *                       shines fully until it reaches it, then fades as it sinks
+ * @param celestialPole  normalized direction the sky turns about (world space): the moon's disc
+ *                       is set square to it
  */
 public record SkyParams(Vector3f sunDirection, Vector3f moonDirection, float moonLight,
                         Vector3f zenithColor, Vector3f horizonColor,
                         Vector3f sunsetColor, float sunsetCoverage, Vector3f sunGlow,
                         Vector3f sunColor, Vector3f earthShadowColor, float earthShadowHeight,
-                        float twilightBand, float daylight, float seaHorizon) {
+                        float twilightBand, float daylight, float seaHorizon, Vector3f celestialPole) {
 
-    /** A sky whose sea edge is the geometric horizon ({@code seaHorizon} 0), for callers without a sea. */
+    /** The pole of a sky seen from the equator, turning about the horizon's +Z point. */
+    public static final Vector3f EQUATOR_POLE = new Vector3f(0f, 0f, 1f);
+
+    /**
+     * A sky seen from the equator ({@link #EQUATOR_POLE}) whose sea edge is the geometric
+     * horizon ({@code seaHorizon} 0), for callers without a sea or a latitude.
+     */
     public SkyParams(Vector3f sunDirection, Vector3f moonDirection, float moonLight,
                      Vector3f zenithColor, Vector3f horizonColor,
                      Vector3f sunsetColor, float sunsetCoverage, Vector3f sunGlow,
                      Vector3f sunColor, Vector3f earthShadowColor, float earthShadowHeight,
                      float twilightBand, float daylight) {
         this(sunDirection, moonDirection, moonLight, zenithColor, horizonColor, sunsetColor, sunsetCoverage,
-                sunGlow, sunColor, earthShadowColor, earthShadowHeight, twilightBand, daylight, 0f);
+                sunGlow, sunColor, earthShadowColor, earthShadowHeight, twilightBand, daylight, 0f, EQUATOR_POLE);
     }
 }
