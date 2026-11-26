@@ -1,5 +1,6 @@
 #pragma once
 
+#include "omformat/visibility.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -9,7 +10,7 @@
 
 namespace cenda::omformat {
 
-class format_error final : public std::runtime_error {
+class OMFORMAT_EXCEPTION_TYPE format_error final : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "omformat/visibility.hpp"
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -9,7 +10,7 @@
 
 namespace cenda::omformat {
 
-class bounds_error final : public std::runtime_error {
+class OMFORMAT_EXCEPTION_TYPE bounds_error final : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };

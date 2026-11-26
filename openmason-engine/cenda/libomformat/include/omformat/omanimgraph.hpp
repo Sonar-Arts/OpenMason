@@ -73,6 +73,7 @@
 // parent twice) and is then evaluated ONCE per frame - one clip clock, influence summed over its uses, like
 // Unreal's cached poses / Godot's blend trees; never itself, no cycles, the root used by none. Ids, parameter, slot, mask and state names are unique within their kind.
 
+#include "omformat/visibility.hpp"
 #include "omformat/zip_archive.hpp"
 
 #include <stdexcept>
@@ -85,7 +86,7 @@ namespace cenda::omformat::omanimgraph {
 inline constexpr int kVersionMajor = 1;
 inline constexpr int kVersionMinor = 1;
 
-class version_error final : public std::runtime_error {
+class OMFORMAT_EXCEPTION_TYPE version_error final : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };

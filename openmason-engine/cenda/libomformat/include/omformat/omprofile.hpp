@@ -29,6 +29,7 @@
 // the position-th joint (by depth) under the joint of role `under` whose name holds one of `keywords`
 // (fingers, tails). Parents come before their children in the list.
 
+#include "omformat/visibility.hpp"
 #include "omformat/zip_archive.hpp"
 
 #include <optional>
@@ -42,7 +43,7 @@ namespace cenda::omformat::omprofile {
 inline constexpr int kVersionMajor = 1;
 inline constexpr int kVersionMinor = 1;
 
-class version_error final : public std::runtime_error {
+class OMFORMAT_EXCEPTION_TYPE version_error final : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };

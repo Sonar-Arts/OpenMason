@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -293,7 +294,7 @@ void test_eyes_point() {
 // ---- first-person projection ----------------------------------------------------------------------------
 
 void perspective(double fovy_deg, double aspect, double n, double f, float* out) {
-    const double t = 1.0 / std::tan(fovy_deg * M_PI / 360.0);
+    const double t = 1.0 / std::tan(fovy_deg * std::numbers::pi / 360.0);
     std::memset(out, 0, 64);
     out[0] = static_cast<float>(t / aspect);
     out[5] = static_cast<float>(t);
@@ -304,7 +305,7 @@ void perspective(double fovy_deg, double aspect, double n, double f, float* out)
 
 // View: eye at E, turned by yaw about Y (looking -Z at yaw 0). world -> view = Ry(-yaw)·T(-E).
 const double E[3] = {3.0, 2.0, 7.0};
-const double kYaw = 30.0 * M_PI / 180.0;
+const double kYaw = 30.0 * std::numbers::pi / 180.0;
 void make_view(float* v) {
     const double c = std::cos(kYaw), s = std::sin(kYaw);
     // R = Ry(-yaw): rows (c,0,-s),(0,1,0),(s,0,c) applied to (p - E).
@@ -354,7 +355,7 @@ void test_projection() {
     CHECK(cr_first_person_projection(V, P, &d, fp, pull) == CR_OK);
 
     // Own FOV, same aspect, jitter kept, w = view depth.
-    CHECK(near(fp[5], 1.0 / std::tan(35.0 * M_PI / 180.0), 1e-5));
+    CHECK(near(fp[5], 1.0 / std::tan(35.0 * std::numbers::pi / 180.0), 1e-5));
     CHECK(near(fp[0] / fp[5], P[0] / P[5], 1e-6));
     CHECK(fp[8] == P[8] && fp[9] == P[9] && fp[11] == -1.f && fp[15] == 0.f);
 
@@ -440,7 +441,7 @@ void test_stabilizer() {
     // Small bob (amplitude 0.01 < threshold) passes through exactly, the first frame too.
     for (int i = 0; i < 240; ++i) {
         const float t = static_cast<float>(i) * dt;
-        const float raw[3] = {0.f, 1.6f + 0.01f * std::sin(2.f * float(M_PI) * 2.f * t), 0.f};
+        const float raw[3] = {0.f, 1.6f + 0.01f * std::sin(2.f * std::numbers::pi_v<float> * 2.f * t), 0.f};
         CHECK(cr_stabilizer_update(s, raw, nullptr, dt, out) == CR_OK);
         CHECK(near(out[1], raw[1], 1e-6) && out[0] == 0.f && out[2] == 0.f);
     }
@@ -450,7 +451,7 @@ void test_stabilizer() {
     float lo = 1e9f, hi = -1e9f;
     for (int i = 0; i < 600; ++i) {
         const float t = static_cast<float>(i) * dt;
-        const float raw[3] = {0.f, 1.6f + 0.05f * std::sin(2.f * float(M_PI) * 2.f * t), 0.f};
+        const float raw[3] = {0.f, 1.6f + 0.05f * std::sin(2.f * std::numbers::pi_v<float> * 2.f * t), 0.f};
         CHECK(cr_stabilizer_update(s, raw, nullptr, dt, out) == CR_OK);
         if (i >= 300) {
             lo = std::fmin(lo, out[1]);

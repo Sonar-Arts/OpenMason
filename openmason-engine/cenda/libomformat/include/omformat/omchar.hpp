@@ -29,6 +29,7 @@
 //
 // Every reference into the skeleton is a joint id; role names appear only in `roles`.
 
+#include "omformat/visibility.hpp"
 #include "omformat/zip_archive.hpp"
 
 #include <cstddef>
@@ -47,7 +48,7 @@ inline constexpr const char* kManifestEntry = "manifest.json";
 inline constexpr const char* kDefaultModelEntry = "model.omo";
 
 // A file whose major version is newer than this reader.
-class version_error final : public std::runtime_error {
+class OMFORMAT_EXCEPTION_TYPE version_error final : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };

@@ -17,6 +17,7 @@
 //
 // Readers take 1.x and refuse a newer major (version_error). Duplicate slot names are refused.
 
+#include "omformat/visibility.hpp"
 #include "omformat/zip_archive.hpp"
 
 #include <cstddef>
@@ -31,7 +32,7 @@ namespace cenda::omformat::omlook {
 inline constexpr int kVersionMajor = 1;
 inline constexpr int kVersionMinor = 0;
 
-class version_error final : public std::runtime_error {
+class OMFORMAT_EXCEPTION_TYPE version_error final : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
