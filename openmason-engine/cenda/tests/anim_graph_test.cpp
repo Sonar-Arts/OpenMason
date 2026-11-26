@@ -782,10 +782,89 @@ void test_shared_nodes() {
     cr_rig_destroy(rig);
 }
 
+// Start position (#457): a clip node (re)starts at start x duration; 1 on a one-shot holds its last frame (the
+// player's fall fallback until a fall clip exists); a loop starts there and wraps. Notifies before it never fire.
+void test_start_position() {
+    cr_rig* rig = make_rig();
+    cm_clip* once = turn("spine", 0.f, 90.f, 1.f, false);
+    cm_clip* loop = turn("spine", 0.f, 90.f, 1.f, true);
+    CHECK(cm_clip_notify_add(once, "early", 0.1f, 0.f, nullptr) >= 0);
+    const std::string head = R"({"format": "omanimgraph", "version": "1.1", "slots": ["a"], "parameters": [{"name": "go", "type": "bool"}], )";
+    cg_graph* g = graph(head + R"("root": "sm", "nodes": [{"id": "rest", "type": "clip", "slot": "a"},
+        {"id": "end", "type": "clip", "slot": "a", "start": 1},
+        {"id": "sm", "type": "stateMachine", "entry": "r", "states": [{"name": "r", "node": "rest"}, {"name": "e", "node": "end"}],
+         "transitions": [{"from": "r", "to": "e", "conditions": [{"param": "go"}], "blend": 0}]}]})");
+    CHECK(refuse(head + R"("root": "c", "nodes": [{"id": "c", "type": "clip", "slot": "a", "start": 1.5}]})") == CG_ERR_FORMAT);
+    cg_instance* inst = cg_instance_create(g, rig, nullptr, nullptr);
+    bind(inst, g, "a", once);
+    eval(inst, 0.f);
+    CHECK(near(rot_y(inst, SPINE), 0.f));
+    cg_instance_set_bool(inst, 0, 1);
+    for (int f = 0; f < 5; ++f) {
+        eval(inst, 1.f / 60.f);
+        CHECK(near(rot_y(inst, SPINE), 90.f));  // held at the end from the first frame on
+        CHECK(cg_instance_notify_count(inst) == 0);
+    }
+    cg_instance_destroy(inst);
+    // A loop: start 0.5 begins half way and wraps.
+    cg_graph* gl = graph(head + R"("root": "c", "nodes": [{"id": "c", "type": "clip", "slot": "a", "start": 0.5}]})");
+    cg_instance* il = cg_instance_create(gl, rig, nullptr, nullptr);
+    bind(il, gl, "a", loop);
+    eval(il, 0.f);
+    CHECK(near(rot_y(il, SPINE), 45.f));
+    eval(il, 0.75f);
+    CHECK(near(rot_y(il, SPINE), 22.5f));
+    cg_instance_destroy(il);
+    cg_graph_destroy(gl);
+    cg_graph_destroy(g);
+    cm_clip_destroy(once);
+    cm_clip_destroy(loop);
+    cr_rig_destroy(rig);
+}
+
+// A clip joining a running sync group takes the group's phase (#457): walk alone, then the blend jumps straight to
+// run (run was inactive at weight 0 and leads at once) - run continues walk's normalized phase instead of time 0.
+void test_sync_join() {
+    cr_rig* rig = make_rig();
+    cm_clip* walk = turn("leg", 0.f, 90.f, 1.0f, true);
+    cm_clip* run = turn("leg", 0.f, 90.f, 0.6f, true);
+    cg_graph* g = graph(R"({"format": "omanimgraph", "version": "1.1", "slots": ["walk", "run"],
+        "parameters": [{"name": "f", "type": "float"}], "root": "b", "nodes": [
+        {"id": "w", "type": "clip", "slot": "walk", "sync": "feet"}, {"id": "r", "type": "clip", "slot": "run", "sync": "feet"},
+        {"id": "b", "type": "blend1d", "param": "f", "samples": [{"node": "w", "value": 0}, {"node": "r", "value": 1}]}]})");
+    cg_instance* inst = cg_instance_create(g, rig, nullptr, nullptr);
+    bind(inst, g, "walk", walk);
+    bind(inst, g, "run", run);
+    const float dt = 1.f / 60.f;
+    for (int f = 0; f < 21; ++f) eval(inst, dt);  // walk 0.35 s
+    const int w = cg_graph_node_find(g, "w");
+    const int r = cg_graph_node_find(g, "r");
+    const float walk_time = debug(g, inst)[static_cast<size_t>(w)].time;
+    CHECK(near(walk_time, 21.f * dt, 1e-5f));
+    CHECK((debug(g, inst)[static_cast<size_t>(r)].flags & 1u) == 0u);  // run inactive at weight 0
+    cg_instance_set_float(inst, 0, 1.f);
+    eval(inst, dt);
+    const float run_time = debug(g, inst)[static_cast<size_t>(r)].time;
+    CHECK(near(run_time / 0.6f, walk_time / 1.0f + dt / 0.6f, 1e-5f));  // the phase carried on at run's rate
+    CHECK(near(rot_y(inst, LEG), 90.f * run_time / 0.6f, 1e-3f));
+    const float run_progress = debug(g, inst)[static_cast<size_t>(r)].progress;
+    CHECK(near(run_progress - std::floor(run_progress), run_time / 0.6f, 1e-5f));  // progress continues the phase
+    // Leaving every member (the whole group restarts) starts from the clips' own start again.
+    cg_instance_set_float(inst, 0, 0.f);
+    eval(inst, dt);
+    cg_instance_destroy(inst);
+    cg_graph_destroy(g);
+    cm_clip_destroy(walk);
+    cm_clip_destroy(run);
+    cr_rig_destroy(rig);
+}
+
 int main() {
     CHECK(cg_abi_version() == CG_ABI_VERSION);
     test_format();
     test_shared_nodes();
+    test_start_position();
+    test_sync_join();
     test_blend_spaces();
     test_state_machine();
     test_montages();

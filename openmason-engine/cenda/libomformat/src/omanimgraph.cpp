@@ -250,6 +250,7 @@ Node parse_node(yyjson_val* v, std::size_t i) {
             n.rate = static_cast<float>(num_field(v, "rate", at, 1.0));
             n.rate_param = str_field(v, "rateParam", at, false);
             n.sync = str_field(v, "sync", at, false);
+            n.start = static_cast<float>(num_field(v, "start", at, 0.0));
             break;
         case NodeType::Blend1D:
         case NodeType::Blend2D: {
@@ -781,6 +782,7 @@ void validate(const Graph& g) {
             case NodeType::Clip:
                 if (g.find_slot(n.slot) < 0) fail(at + ": unknown slot " + n.slot);
                 if (!std::isfinite(n.rate)) fail(at + ": bad rate");
+                if (!(n.start >= 0.f && n.start <= 1.f)) fail(at + ": start must be in [0, 1]");
                 if (!n.rate_param.empty()) param_of(n.rate_param, at, {ParamType::Float});
                 break;
             case NodeType::Blend1D:
@@ -1052,6 +1054,7 @@ std::string write_impl(const Graph& g) {
                 if (n.rate != 1.f) put(d, o, "rate", yyjson_mut_float(d, n.rate));
                 put_str(d, o, "rateParam", n.rate_param);
                 put_str(d, o, "sync", n.sync);
+                if (n.start != 0.f) put(d, o, "start", yyjson_mut_float(d, n.start));
                 break;
             case NodeType::Blend1D:
             case NodeType::Blend2D: {

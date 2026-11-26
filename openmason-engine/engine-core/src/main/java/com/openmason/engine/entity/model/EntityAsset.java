@@ -33,12 +33,19 @@ public record EntityAsset(
         SoundData sounds,
         Map<String, byte[]> soundBytes,
         FxData fx,
-        byte[] character
+        byte[] character,
+        Map<String, byte[]> clipBytes
 ) {
     /** An asset without a character definition. */
     public EntityAsset(String objectId, Map<String, EntityGeometry> variants, Map<String, ParsedAnimClip> clips,
                        SoundData sounds, Map<String, byte[]> soundBytes, FxData fx) {
-        this(objectId, variants, clips, sounds, soundBytes, fx, null);
+        this(objectId, variants, clips, sounds, soundBytes, fx, null, Map.of());
+    }
+
+    /** An asset without the clips' container bytes (built in code: tests, block animations). */
+    public EntityAsset(String objectId, Map<String, EntityGeometry> variants, Map<String, ParsedAnimClip> clips,
+                       SoundData sounds, Map<String, byte[]> soundBytes, FxData fx, byte[] character) {
+        this(objectId, variants, clips, sounds, soundBytes, fx, character, Map.of());
     }
 
     /** True when the container embedded a character definition ({@code .omchar}, #153). */
@@ -53,6 +60,7 @@ public record EntityAsset(
         variants = variants == null ? Map.of() : Map.copyOf(variants);
         clips = clips == null ? Map.of() : Map.copyOf(clips);
         soundBytes = soundBytes == null ? Map.of() : Map.copyOf(soundBytes);
+        clipBytes = clipBytes == null ? Map.of() : Map.copyOf(clipBytes);
     }
 
     /** An asset without FX bindings. */
@@ -89,6 +97,15 @@ public record EntityAsset(
     /** Animation clip for a state name, or {@code null} if absent or {@code stateName} is null. */
     public ParsedAnimClip clipFor(String stateName) {
         return stateName != null ? clips.get(stateName) : null;
+    }
+
+    /**
+     * The {@code .omanim} container bytes of a state's clip as the asset shipped them, or null: what the native clip
+     * runtime reads ({@code AnimClipDocument.read}) to bind the clip into an animation graph (#457). The arrays are
+     * shared; never modify them.
+     */
+    public byte[] clipBytesFor(String stateName) {
+        return stateName != null ? clipBytes.get(stateName) : null;
     }
 
     /** Bytes of an embedded sound sample by entry filename, or null. */

@@ -169,8 +169,12 @@ public final class EntityModelLoader {
             }
         }
 
+        Map<String, byte[]> clipBytes = new LinkedHashMap<>();
+        for (Map.Entry<String, byte[]> state : source.stateClips().entrySet()) {
+            if (state.getValue() != null) clipBytes.put(state.getKey(), state.getValue());
+        }
         return new EntityAsset(source.objectId(), variants, clips,
-                source.sounds(), source.soundBytes(), source.fx(), source.character());
+                source.sounds(), source.soundBytes(), source.fx(), source.character(), clipBytes);
     }
 
     private static EntityAsset loadResource(String resourcePath, ResourceOpener opener) {

@@ -198,6 +198,15 @@ class AnimGraphTest {
                         maxL = Math.max(maxL, l);
                         assertEquals(-l, r, 1e-3f, sbe + ": legs in opposition");
                     }
+                    // nodeDebug (#457): the allocation-free single-node read == the debug() list.
+                    List<AnimGraphInstance.NodeDebug> all = inst.debug();
+                    float[] one = new float[3];
+                    for (int n = 0; n < all.size(); n++) {
+                        assertEquals(all.get(n).active(), inst.nodeDebug(n, one), "node " + n + " active");
+                        assertEquals(all.get(n).influence(), one[0], "node " + n + " influence");
+                        assertEquals(all.get(n).time(), one[1], "node " + n + " time");
+                        assertEquals(all.get(n).progress(), one[2], "node " + n + " progress");
+                    }
                     assertTrue(maxL > 28f && minL < -28f, sbe + " walk swing " + minL + ".." + maxL);
                     // Running between walk and run keeps the feet in step (sync markers) and swings wider.
                     inst.setFloat(speed, 5f);

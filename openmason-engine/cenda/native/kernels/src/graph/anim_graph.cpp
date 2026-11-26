@@ -97,6 +97,7 @@ struct CNode {
     float rate = 1.f;
     int rate_param = -1;
     int sync = -1;
+    float start = 0.f;  // normalized (re)start position
     // blends
     int param = -1;
     int param_y = -1;
@@ -322,6 +323,7 @@ void compile(cg_graph& cg) {
                 c.clip_slot = d.find_slot(src.slot);
                 c.rate = src.rate;
                 c.rate_param = src.rate_param.empty() ? -1 : d.find_param(src.rate_param);
+                c.start = src.start;
                 if (!src.sync.empty()) {
                     auto [it, added] = sync_ids.emplace(src.sync, static_cast<int>(sync_ids.size()));
                     c.sync = it->second;
@@ -2280,10 +2282,14 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         const NodeRt& r = inst->rt[static_cast<size_t>(i)];
         PlayerRt& p = inst->players[static_cast<size_t>(i)];
         if (!r.active) continue;
-        if (!r.was_active) p = PlayerRt{};
+        const BoundClip& b = inst->slots[static_cast<size_t>(c.clip_slot)];
+        if (!r.was_active) {
+            p = PlayerRt{};
+            // Start position (Unreal): a restart begins there; nothing between 0 and it is crossed (no notifies).
+            if (c.start > 0.f && b.duration > 0.f) p.time = clip_time(c.start * b.duration, b.duration, b.loop);
+        }
         p.prev = p.time;
         p.advanced = 0.f;
-        const BoundClip& b = inst->slots[static_cast<size_t>(c.clip_slot)];
         if (b.rig_clip == nullptr || b.duration <= 0.f || c.sync >= 0) continue;
         float rate = c.rate;
         if (c.rate_param >= 0) rate *= static_cast<float>(param_value(*inst, c.rate_param));
@@ -2296,6 +2302,39 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
     for (int group = 0; group < g.sync_groups; ++group) {
         inst->sync_members.clear();
         inst->sync_nodes.clear();
+        // A member that (re)starts this frame JOINS the running group (Unreal sync groups): it takes the group's
+        // normalized phase - that of a member that played last frame (the most influential now) - instead of time 0, so a
+        // change of pace (walk -> run, the new clip leading at once) keeps the gait phase. A group starting from
+        // nothing starts at the members' own start positions.
+        {
+            float best = -1.f;
+            double phase = -1.0;
+            for (int i : g.order) {
+                const CNode& c = g.nodes[static_cast<size_t>(i)];
+                const NodeRt& r = inst->rt[static_cast<size_t>(i)];
+                // Played last frame (it may have dropped out this very frame: walk -> run at once).
+                if (c.type != og::NodeType::Clip || c.sync != group || !r.was_active) continue;
+                const BoundClip& b = inst->slots[static_cast<size_t>(c.clip_slot)];
+                if (b.rig_clip == nullptr || b.duration <= 0.f) continue;
+                if (r.influence > best) {  // this frame's weight (0 for one leaving); ties: the first
+                    best = r.influence;
+                    phase = static_cast<double>(inst->players[static_cast<size_t>(i)].time) / b.duration;
+                }
+            }
+            if (phase >= 0.0) {
+                for (int i : g.order) {
+                    const CNode& c = g.nodes[static_cast<size_t>(i)];
+                    const NodeRt& r = inst->rt[static_cast<size_t>(i)];
+                    if (c.type != og::NodeType::Clip || c.sync != group || !r.active || r.was_active) continue;
+                    const BoundClip& b = inst->slots[static_cast<size_t>(c.clip_slot)];
+                    if (b.rig_clip == nullptr || b.duration <= 0.f) continue;
+                    PlayerRt& p = inst->players[static_cast<size_t>(i)];
+                    p.time = clip_time(static_cast<float>(phase * b.duration), b.duration, b.loop);
+                    p.prev = p.time;
+                    p.elapsed = static_cast<double>(p.time);  // its progress continues the group's phase too (footstep rules read it)
+                }
+            }
+        }
         for (int i : g.order) {
             const CNode& c = g.nodes[static_cast<size_t>(i)];
             if (c.type != og::NodeType::Clip || c.sync != group || !inst->rt[static_cast<size_t>(i)].active) continue;

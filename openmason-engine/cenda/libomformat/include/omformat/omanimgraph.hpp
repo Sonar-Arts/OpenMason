@@ -14,7 +14,9 @@
 //   masks             [ {name, entries: [ {role | joint, weight?: 1, branch?: true, depth?: 0} ]} ]
 //   root              the id of the output node
 //   nodes             [ node ... ], each {id, type, ...}:
-//     clip            slot, rate?: 1, rateParam?: float param multiplied in, sync?: group name
+//     clip            slot, rate?: 1, rateParam?: float param multiplied in, sync?: group name,
+//                     start?: 0 = where the clip (re)starts, normalized 0..1 (Unreal Start Position; 1 on a
+//                     one-shot = its last frame, held)
 //     blend1d         param (float), samples: [ {node, value} ] (sorted by value on read)
 //     blend2d         param (vec2) | paramX + paramY (floats), mode?: cartesian | directional,
 //                     samples: [ {node, x, y} ]   (gradient band interpolation, Johansen 2009)
@@ -169,6 +171,7 @@ struct Node {
     float rate = 1.f;
     std::string rate_param;
     std::string sync;
+    float start = 0.f;  // normalized (re)start position, 0..1
     // blend1d / blend2d
     std::string param;    // blend1d, or a vec2 for blend2d
     std::string param_y;  // blend2d with two floats: param = x, param_y = y

@@ -715,6 +715,34 @@ public final class AnimGraphInstance implements AutoCloseable {
         }
     }
 
+    /** Per-instance buffer of {@link #nodeDebug} (one record per node), allocated on first use. */
+    private MemorySegment nodeDebugBuffer;
+
+    /**
+     * Allocation-free read of one node's last-evaluate values (what {@link #debug} lists): {@code out[0]} influence,
+     * {@code out[1]} clip time, {@code out[2]} normalized progress. Returns whether the node was active. For hosts that
+     * follow a node every frame (a gait phase) without building the whole list.
+     */
+    public boolean nodeDebug(int node, float[] out) {
+        int n = graph.nodes().size();
+        if (node < 0 || node >= n) throw new IndexOutOfBoundsException("node " + node);
+        if (nodeDebugBuffer == null) {
+            nodeDebugBuffer = Arena.ofAuto().allocate(CendaAnimGraph.DEBUG_BYTES * Math.max(1, n), 4);
+        }
+        try {
+            CendaAnimGraph.check((int) CendaAnimGraph.DEBUG.invokeExact(handle(), nodeDebugBuffer), "debug");
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        }
+        long o = CendaAnimGraph.DEBUG_BYTES * node;
+        out[0] = nodeDebugBuffer.get(CendaAnimGraph.F32, o);
+        out[1] = nodeDebugBuffer.get(CendaAnimGraph.F32, o + 4);
+        out[2] = nodeDebugBuffer.get(CendaAnimGraph.F32, o + 8);
+        return (nodeDebugBuffer.get(CendaAnimGraph.I32, o + 16) & 1) != 0;
+    }
+
     /** One record per graph node. */
     public List<NodeDebug> debug() {
         int n = graph.nodes().size();
