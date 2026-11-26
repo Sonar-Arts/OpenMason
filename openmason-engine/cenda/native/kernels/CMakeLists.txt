@@ -60,6 +60,19 @@ FetchContent_Declare(yoga
 FetchContent_MakeAvailable(yoga)
 get_target_property(_yoga_includes yogacore INTERFACE_INCLUDE_DIRECTORIES)
 set_target_properties(yogacore PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_yoga_includes}")
+# Yoga builds itself with RTTI off (-fno-rtti / /GR-). With RTTI off, its objects carry their OWN weak copies of
+# `typeinfo for std::exception` / logic_error / bad_alloc, which end up inside libcenda_kernels. On macOS (Mach-O, libc++
+# comparing type_info by address on arm64) every `catch (const std::exception&)` in the library then binds to that
+# copy, while a thrown std::runtime_error subclass names the runtime's own - the handler never matches (macOS CI
+# 2026-11-26: libomformat's format_error escaped cc_profile_read & co. and aborted 7 ctests; only exact
+# `catch (format_error&)` still worked). Linux's libstdc++ compares type names, which hid it. RTTI back on (the last
+# flag wins) = no private copies of the std exception typeinfos; check with
+# `nm -C --defined-only libcenda_kernels.* | grep -E "typeinfo for std::(exception|logic_error|bad_alloc)"` (nothing).
+if(MSVC)
+    target_compile_options(yogacore PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/GR>)
+else()
+    target_compile_options(yogacore PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-frtti>)
+endif()
 
 # miniaudio (public domain / MIT-0) for the audio engine (ca_*): playback device + decoders only;
 # the mixer is ours (src/audio). stb_vorbis ships in its extras/ and gives the decoder Ogg Vorbis.
