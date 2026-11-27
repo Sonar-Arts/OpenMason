@@ -3,12 +3,14 @@ package com.openmason.engine.rendering.model.draw;
 import com.openmason.engine.entity.model.EntityAttachmentPoint;
 import com.openmason.engine.entity.model.EntityGeometry;
 import com.openmason.engine.entity.model.EntityPart;
+import com.openmason.engine.entity.model.EntitySockets;
 import com.openmason.engine.rendering.RenderOrigin;
 import com.openmason.engine.rig.JointPalette;
 import com.openmason.engine.rig.Rig;
 import com.openmason.engine.rig.RigJoint;
 import com.openmason.engine.rig.RigModel;
 import com.openmason.engine.rig.RigPoser;
+import com.openmason.engine.rig.SocketSet;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
@@ -147,57 +149,26 @@ public final class ModelPoseSolver {
                                              float headYawDeg, float headPitchDeg,
                                              String socketName, Matrix4f dest) {
         if (geometry == null || socketName == null) return null;
-        EntityAttachmentPoint socket = findSocket(geometry, socketName);
-        if (socket == null) return null;
-        if (socket.isModelRoot()) {
-            dest.set(base);
-        } else {
-            int host = hostJoint(geometry, socket);
-            if (host < 0) return null;
-            JointPalette palette = pose(geometry, layers, base, headYawDeg, headPitchDeg, null, SCRATCH.get());
-            palette.skinMatrix(host, dest);
-        }
-        return applySocketLocal(socket, dest);
+        SocketSet sockets = EntitySockets.of(geometry);
+        int index = sockets.find(socketName);
+        if (index < 0) return null;
+        JointPalette palette = sockets.info(index).joint() == SocketSet.ROOT ? null
+                : pose(geometry, layers, base, headYawDeg, headPitchDeg, null, SCRATCH.get());
+        return sockets.frame(index, palette, null, base, dest);
     }
 
     /**
      * Socket frame from an already-posed palette (no second pose): {@code K(host)·T·R·S}, the base for
-     * a model-root socket. Null when the socket or its host is unknown.
+     * a model-root socket. Null when the socket or its host is unknown. Resolved natively over the model's
+     * {@link EntitySockets} (Stonebreak #459).
      */
     public static Matrix4f socketWorldMatrix(EntityGeometry geometry, JointPalette palette, Matrix4f base,
                                              String socketName, Matrix4f dest) {
         if (geometry == null || socketName == null) return null;
-        EntityAttachmentPoint socket = findSocket(geometry, socketName);
-        if (socket == null) return null;
-        if (socket.isModelRoot()) {
-            dest.set(base);
-        } else {
-            int host = hostJoint(geometry, socket);
-            if (host < 0 || host >= palette.count()) return null;
-            palette.skinMatrix(host, dest);
-        }
-        return applySocketLocal(socket, dest);
-    }
-
-    private static EntityAttachmentPoint findSocket(EntityGeometry geometry, String socketName) {
-        for (EntityAttachmentPoint candidate : geometry.attachmentPoints()) {
-            if (socketName.equalsIgnoreCase(candidate.name())) {
-                return candidate;
-            }
-        }
-        return null;
-    }
-
-    private static Matrix4f applySocketLocal(EntityAttachmentPoint socket, Matrix4f dest) {
-        Vector3f pos = socket.localPos();
-        Vector3f rot = socket.localRotDeg();
-        Vector3f scl = socket.localScale();
-        return dest
-                .translate(pos)
-                .rotateXYZ((float) Math.toRadians(rot.x),
-                        (float) Math.toRadians(rot.y),
-                        (float) Math.toRadians(rot.z))
-                .scale(scl);
+        SocketSet sockets = EntitySockets.of(geometry);
+        int index = sockets.find(socketName);
+        if (index < 0) return null;
+        return sockets.frame(index, palette, null, base, dest);
     }
 
     /** Host joint (part or bone) by id, falling back to exact name; -1 when both miss. */

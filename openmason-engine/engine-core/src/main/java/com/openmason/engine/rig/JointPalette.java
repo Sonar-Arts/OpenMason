@@ -160,7 +160,7 @@ public final class JointPalette {
             s.get(F32, o + 48), s.get(F32, o + 52), s.get(F32, o + 56), s.get(F32, o + 60));
     }
 
-    static void write(MemorySegment s, int joint, Matrix4f m) {
+    static void write(MemorySegment s, int joint, org.joml.Matrix4fc m) {
         long o = 64L * joint;
         s.set(F32, o, m.m00()); s.set(F32, o + 4, m.m01()); s.set(F32, o + 8, m.m02()); s.set(F32, o + 12, m.m03());
         s.set(F32, o + 16, m.m10()); s.set(F32, o + 20, m.m11()); s.set(F32, o + 24, m.m12()); s.set(F32, o + 28, m.m13());

@@ -118,6 +118,29 @@ public final class CendaRig {
     static final MethodHandle STABILIZER_DESTROY;
     static final MethodHandle STABILIZER_RESET;
     static final MethodHandle STABILIZER_UPDATE;
+    // Sockets and mounts (socket.h, Stonebreak #459).
+    static final MethodHandle SOCKETS_CREATE;
+    static final MethodHandle SOCKETS_DESTROY;
+    static final MethodHandle SOCKETS_ADD;
+    static final MethodHandle SOCKETS_ADD_REF;
+    static final MethodHandle SOCKETS_COUNT;
+    static final MethodHandle SOCKETS_FIND;
+    static final MethodHandle SOCKETS_GET;
+    static final MethodHandle SOCKETS_FRAME;
+    static final MethodHandle CHAR_SOCKETS_INTO;
+    static final MethodHandle MOUNTS_CREATE;
+    static final MethodHandle MOUNTS_DESTROY;
+    static final MethodHandle MOUNTS_SET;
+    static final MethodHandle MOUNTS_REMOVE;
+    static final MethodHandle MOUNTS_CLEAR;
+    static final MethodHandle MOUNTS_COUNT;
+    static final MethodHandle MOUNTS_FIND;
+    static final MethodHandle MOUNTS_SET_POINT;
+    static final MethodHandle MOUNTS_POINT_COUNT;
+    static final MethodHandle MOUNTS_FIND_POINT;
+    static final MethodHandle MOUNTS_TOTAL_POINTS;
+    static final MethodHandle MOUNTS_POINT_BASE;
+    static final MethodHandle MOUNTS_RESOLVE;
     /** {@code cr_first_person_desc} / {@code cr_stabilizer_desc} sizes. */
     static final long FIRST_PERSON_DESC_BYTES = 32;
     static final long STABILIZER_DESC_BYTES = 16;
@@ -230,6 +253,31 @@ public final class CendaRig {
         STABILIZER_RESET = handle(lookup, "cr_stabilizer_reset", FunctionDescriptor.of(I32, ADDR), critical);
         STABILIZER_UPDATE = handle(lookup, "cr_stabilizer_update",
             FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, F32, ADDR), critical);
+        SOCKETS_CREATE = handle(lookup, "cr_sockets_create", FunctionDescriptor.of(ADDR, ADDR));
+        SOCKETS_DESTROY = handle(lookup, "cr_sockets_destroy", FunctionDescriptor.ofVoid(ADDR));
+        SOCKETS_ADD = handle(lookup, "cr_sockets_add", FunctionDescriptor.of(I32, ADDR, ADDR, I32, ADDR, ADDR, ADDR, I32));
+        SOCKETS_ADD_REF = handle(lookup, "cr_sockets_add_ref",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, ADDR, ADDR, ADDR, I32));
+        SOCKETS_COUNT = handle(lookup, "cr_sockets_count", FunctionDescriptor.of(I32, ADDR), critical);
+        SOCKETS_FIND = handle(lookup, "cr_sockets_find", FunctionDescriptor.of(I32, ADDR, ADDR));
+        SOCKETS_GET = handle(lookup, "cr_sockets_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
+        SOCKETS_FRAME = handle(lookup, "cr_sockets_frame",
+            FunctionDescriptor.of(I32, ADDR, I32, ADDR, I32, ADDR, ADDR, ADDR), critical);
+        CHAR_SOCKETS_INTO = handle(lookup, "cc_char_sockets_into", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        MOUNTS_CREATE = handle(lookup, "cr_mounts_create", FunctionDescriptor.of(ADDR));
+        MOUNTS_DESTROY = handle(lookup, "cr_mounts_destroy", FunctionDescriptor.ofVoid(ADDR));
+        MOUNTS_SET = handle(lookup, "cr_mounts_set", FunctionDescriptor.of(I32, ADDR, ADDR, I32, ADDR, ADDR));
+        MOUNTS_REMOVE = handle(lookup, "cr_mounts_remove", FunctionDescriptor.of(I32, ADDR, ADDR));
+        MOUNTS_CLEAR = handle(lookup, "cr_mounts_clear", FunctionDescriptor.of(I32, ADDR));
+        MOUNTS_COUNT = handle(lookup, "cr_mounts_count", FunctionDescriptor.of(I32, ADDR), critical);
+        MOUNTS_FIND = handle(lookup, "cr_mounts_find", FunctionDescriptor.of(I32, ADDR, ADDR));
+        MOUNTS_SET_POINT = handle(lookup, "cr_mounts_set_point", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
+        MOUNTS_POINT_COUNT = handle(lookup, "cr_mounts_point_count", FunctionDescriptor.of(I32, ADDR, I32), critical);
+        MOUNTS_FIND_POINT = handle(lookup, "cr_mounts_find_point", FunctionDescriptor.of(I32, ADDR, I32, ADDR));
+        MOUNTS_TOTAL_POINTS = handle(lookup, "cr_mounts_total_points", FunctionDescriptor.of(I32, ADDR), critical);
+        MOUNTS_POINT_BASE = handle(lookup, "cr_mounts_point_base", FunctionDescriptor.of(I32, ADDR, I32), critical);
+        MOUNTS_RESOLVE = handle(lookup, "cr_mounts_resolve",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, ADDR, ADDR, ADDR, ADDR, ADDR), critical);
     }
 
     private CendaRig() {
