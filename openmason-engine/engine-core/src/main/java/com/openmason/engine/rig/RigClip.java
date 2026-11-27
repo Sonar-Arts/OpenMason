@@ -5,6 +5,7 @@ import com.openmason.engine.format.oma.Easing;
 import com.openmason.engine.format.oma.ParsedAnimClip;
 import com.openmason.engine.format.oma.ParsedAnimTrack;
 import com.openmason.engine.format.oma.ParsedKeyframe;
+import com.openmason.engine.format.oma.ParsedMorphTrack;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -140,9 +141,52 @@ public final class RigClip {
             if (handle.equals(MemorySegment.NULL)) {
                 throw new IllegalArgumentException("cr_clip_create: " + CendaRig.lastError());
             }
-            return new RigClip(handle, tracks.size());
+            RigClip created = new RigClip(handle, tracks.size());
+            setMorphTracks(arena, handle, clip.morphTracks());
+            return created;
         } catch (RuntimeException e) {
             throw e;
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+    }
+
+    /**
+     * Gives a freshly created native clip its OMANIM 1.3 morph tracks ({@code cr_clip_set_morph_tracks}, OpenMason
+     * #171) - before the clip is bound to any rig. No tracks: nothing (the clip samples exactly as before).
+     */
+    private static void setMorphTracks(Arena arena, MemorySegment handle, List<ParsedMorphTrack> morphs)
+            throws Throwable {
+        if (morphs == null || morphs.isEmpty()) return;
+        int keyCount = 0;
+        for (ParsedMorphTrack m : morphs) keyCount += m.keys().size();
+        MemorySegment offsets = arena.allocate(4L * (morphs.size() + 1), 4);
+        MemorySegment keys = arena.allocate(CendaRig.MORPH_KEY_BYTES * Math.max(1, keyCount), 4);
+        List<String> names = new ArrayList<>(morphs.size());
+        int k = 0;
+        for (int t = 0; t < morphs.size(); t++) {
+            ParsedMorphTrack m = morphs.get(t);
+            names.add(m.name());
+            offsets.setAtIndex(CendaRig.I32, t, k);
+            for (ParsedMorphTrack.Key key : m.keys()) {
+                long o = CendaRig.MORPH_KEY_BYTES * k++;
+                keys.set(CendaRig.F32, o, key.time());
+                keys.set(CendaRig.F32, o + 4, key.value());
+                keys.set(CendaRig.F32, o + 8, key.inTangent());
+                keys.set(CendaRig.F32, o + 12, key.outTangent());
+                keys.set(CendaRig.I32, o + 16, key.interp());
+            }
+        }
+        offsets.setAtIndex(CendaRig.I32, morphs.size(), k);
+        int rc = (int) CendaRig.CLIP_SET_MORPH_TRACKS.invokeExact(handle, morphs.size(),
+            CendaRig.strings(arena, names), offsets, keys);
+        if (rc != CendaRig.OK) throw new IllegalArgumentException("cr_clip_set_morph_tracks: " + CendaRig.lastError());
+    }
+
+    /** Number of morph tracks the native clip carries (OMANIM 1.3, OpenMason #171). */
+    public int morphTrackCount() {
+        try {
+            return (int) CendaRig.CLIP_MORPH_TRACK_COUNT.invokeExact(handle);
         } catch (Throwable t) {
             throw CendaRig.rethrow(t);
         }

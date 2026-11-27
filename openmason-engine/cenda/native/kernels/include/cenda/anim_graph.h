@@ -33,6 +33,15 @@
  *      sum over the base chain and montages; with CG_ROOT_MOTION_EXTRACT the root is pinned in the pose).
  * Deterministic: the same bound clips, parameter values and dt sequence give bit-identical poses and outputs.
  *
+ * MORPH WEIGHTS (OpenMason #171; rig.h "Morph targets"): when the rig has morph channels, every pose carries their
+ * weights. Clip morph tracks (OMANIM 1.3) bind to the channels by name and pass through every node like joint
+ * tracks (blend spaces and state-machine blends blend them, inertialized transitions decay them, layers apply them
+ * under the mask's morph weights - a graph mask covers a channel only through a {"morph": name | "*"} entry - and
+ * montages override them). A retargeted slot (#160) samples its clip's morph tracks onto the target's channels by
+ * name. The graph's `morphs` drives (omformat/omanimgraph.hpp, 1.2) then override channels toward float parameters
+ * (CR_OP_MORPH), after the modifiers, in both views. cg_instance_morph_weights reads the result (the per-frame GPU
+ * weights after cr_morphs_clamp_weights). A drive or mask entry naming a channel the rig lacks counts as unresolved.
+ *
  * Lifetimes: the rig and the character (if any) must outlive the instance; the graph must outlive it too.
  * Strings returned are owned by the graph / instance and stay valid until the next call that changes it.
  */
@@ -236,6 +245,10 @@ int32_t cg_instance_compose_view(const cg_instance* inst, int32_t view, const cr
                                  float* out_child);
 /* How many first-person view layers the graph's root has. */
 int32_t cg_graph_first_person_layer_count(const cg_graph* g);
+
+/* The last frame's morph weights (#171) of a view (CG_VIEW_*): writes min(count, capacity) floats and returns the
+ * rig's morph channel count (cr_rig_morph_count; negative = error). */
+int32_t cg_instance_morph_weights(const cg_instance* inst, int32_t view, float* out, int32_t capacity);
 
 /* The last frame's local pose (joint_count * 9 floats, as cr_rig_local_pose). */
 int32_t cg_instance_local_pose(const cg_instance* inst, float* out_local);

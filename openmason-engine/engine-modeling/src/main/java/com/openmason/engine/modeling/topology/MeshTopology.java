@@ -20,8 +20,7 @@ import java.util.Set;
  *   <li>{@link #elementAdjacencyQuery()} — vertex/edge/face adjacency lookups</li>
  *   <li>{@link #faceGeometryCache()} — face normals, centroids, areas with dirty tracking</li>
  *   <li>{@link #dihedralAngleCache()} — per-edge dihedral angles with dirty tracking</li>
- *   <li>{@link #vertexNormalCache()} — per-vertex smooth normals with dirty tracking</li>
- *   <li>{@link #edgeClassifier()} — edge classification, auto-sharp, crease weights</li>
+ *   <li>{@link #edgeClassifier()} — edge kinds (open / manifold / non-manifold)</li>
  *   <li>{@link #vertexClassifier()} — valence, boundary, interior, pole queries</li>
  *   <li>{@link #vertexRingQuery()} — connected vertices and ordered vertex ring traversal</li>
  *   <li>{@link #vertexAdjacencyQuery()} — vertex-to-vertex connectivity and neighbor counts</li>
@@ -48,7 +47,6 @@ public class MeshTopology {
     private final ElementAdjacencyQuery elementAdjacencyQuery;
     private final FaceGeometryCache faceGeometryCache;
     private final DihedralAngleCache dihedralAngleCache;
-    private final VertexNormalCache vertexNormalCache;
 
     // 9 existing sub-services
     private final EdgeClassifier edgeClassifier;
@@ -71,7 +69,6 @@ public class MeshTopology {
                  ElementAdjacencyQuery elementAdjacencyQuery,
                  FaceGeometryCache faceGeometryCache,
                  DihedralAngleCache dihedralAngleCache,
-                 VertexNormalCache vertexNormalCache,
                  EdgeClassifier edgeClassifier,
                  VertexClassifier vertexClassifier,
                  FaceEdgeTraversal faceEdgeTraversal,
@@ -89,7 +86,6 @@ public class MeshTopology {
         this.elementAdjacencyQuery = elementAdjacencyQuery;
         this.faceGeometryCache = faceGeometryCache;
         this.dihedralAngleCache = dihedralAngleCache;
-        this.vertexNormalCache = vertexNormalCache;
         this.edgeClassifier = edgeClassifier;
         this.vertexClassifier = vertexClassifier;
         this.faceEdgeTraversal = faceEdgeTraversal;
@@ -128,11 +124,6 @@ public class MeshTopology {
     /** @return The dihedral angle cache (never null) */
     public DihedralAngleCache dihedralAngleCache() {
         return dihedralAngleCache;
-    }
-
-    /** @return The vertex normal cache (never null) */
-    public VertexNormalCache vertexNormalCache() {
-        return vertexNormalCache;
     }
 
     /** @return The edge classifier (never null) */
@@ -224,34 +215,9 @@ public class MeshTopology {
     // EDGE CLASSIFICATION (delegation to EdgeClassifier)
     // =========================================================================
 
-    /** @see EdgeClassifier#get(int) */
-    public EdgeClassification getEdgeClassification(int edgeId) {
-        dihedralAngleCache.ensureClean(edgeId);
-        return edgeClassifier.get(edgeId);
-    }
-
     /** @see EdgeClassifier#getKind(int) */
     public EdgeKind getEdgeKind(int edgeId) {
-        dihedralAngleCache.ensureClean(edgeId);
         return edgeClassifier.getKind(edgeId);
-    }
-
-    /** @see EdgeClassifier#isSharp(int) */
-    public boolean isEdgeSharp(int edgeId) {
-        dihedralAngleCache.ensureClean(edgeId);
-        return edgeClassifier.isSharp(edgeId);
-    }
-
-    /** @see EdgeClassifier#isSeam(int) */
-    public boolean isEdgeSeam(int edgeId) {
-        dihedralAngleCache.ensureClean(edgeId);
-        return edgeClassifier.isSeam(edgeId);
-    }
-
-    /** @see EdgeClassifier#getCreaseWeight(int) */
-    public float getEdgeCreaseWeight(int edgeId) {
-        dihedralAngleCache.ensureClean(edgeId);
-        return edgeClassifier.getCreaseWeight(edgeId);
     }
 
     /** @see EdgeClassifier#isOpen(int) */
@@ -269,63 +235,11 @@ public class MeshTopology {
         return edgeClassifier.isNonManifold(edgeId);
     }
 
-    /** @see EdgeClassifier#setSharp(int, boolean) */
-    public void setEdgeSharp(int edgeId, boolean sharp) {
-        edgeClassifier.setSharp(edgeId, sharp);
-    }
-
-    /** @see EdgeClassifier#setSeam(int, boolean) */
-    public void setEdgeSeam(int edgeId, boolean seam) {
-        edgeClassifier.setSeam(edgeId, seam);
-    }
-
-    /** @see EdgeClassifier#setCreaseWeight(int, float) */
-    public void setEdgeCreaseWeight(int edgeId, float creaseWeight) {
-        edgeClassifier.setCreaseWeight(edgeId, creaseWeight);
-    }
-
-    /** @see EdgeClassifier#getThresholdRadians() */
-    public float getAutoSharpThresholdRadians() {
-        return edgeClassifier.getThresholdRadians();
-    }
-
-    /** @see EdgeClassifier#getThresholdDegrees() */
-    public float getAutoSharpThresholdDegrees() {
-        return edgeClassifier.getThresholdDegrees();
-    }
-
-    /**
-     * Update the auto-sharp threshold and reclassify all edges.
-     *
-     * @param thresholdRadians New threshold in radians (clamped to [0, pi])
-     */
-    public void setAutoSharpThreshold(float thresholdRadians) {
-        for (int i = 0; i < edges.length; i++) {
-            dihedralAngleCache.ensureClean(i);
-        }
-        edgeClassifier.setThreshold(thresholdRadians, dihedralAngleCache.angles());
-    }
-
-    /**
-     * Update the auto-sharp threshold (in degrees) and reclassify all edges.
-     *
-     * @param thresholdDegrees New threshold in degrees (clamped to [0, 180])
-     */
-    public void setAutoSharpThresholdDegrees(float thresholdDegrees) {
-        setAutoSharpThreshold((float) Math.toRadians(
-            Math.clamp(thresholdDegrees, 0.0f, 180.0f)
-        ));
-    }
-
     /** @see EdgeClassifier#countByKind(EdgeKind) */
     public int countEdgesByKind(EdgeKind kind) {
         return edgeClassifier.countByKind(kind);
     }
 
-    /** @see EdgeClassifier#countSharp() */
-    public int countSharpEdges() {
-        return edgeClassifier.countSharp();
-    }
 
     // =========================================================================
     // FACE QUERIES
@@ -367,15 +281,6 @@ public class MeshTopology {
     /** @see FaceGeometryCache#isFacePlanar(int, float) */
     public boolean isFacePlanar(int faceId, float tolerance) {
         return faceGeometryCache.isFacePlanar(faceId, tolerance);
-    }
-
-    // =========================================================================
-    // VERTEX NORMAL QUERIES
-    // =========================================================================
-
-    /** @see VertexNormalCache#getVertexNormal(int) */
-    public Vector3f getVertexNormal(int uniqueVertexIdx) {
-        return vertexNormalCache.getVertexNormal(uniqueVertexIdx);
     }
 
     // =========================================================================

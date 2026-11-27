@@ -655,8 +655,14 @@ cr_clip* rig_clip_of(const cm_clip* clip, const cc_char* chr, cm_clip** bound) {
         namep.push_back(names[i].c_str());
     }
     cr_clip_desc desc{h.duration, h.loop, CR_LAYER_BASE, 0, 0.f, 0.f};
-    return cr_clip_create(&desc, tracks.data(), static_cast<int32_t>(tracks.size()), keys.data(),
-                          static_cast<int32_t>(keys.size()), idp.data(), namep.data(), nullptr, 0);
+    cr_clip* out = cr_clip_create(&desc, tracks.data(), static_cast<int32_t>(tracks.size()), keys.data(),
+                                  static_cast<int32_t>(keys.size()), idp.data(), namep.data(), nullptr, 0);
+    // Morph tracks (#171) ride along by name.
+    if (out != nullptr && cm_clip_apply_morphs(*bound, out) != CM_OK) {
+        cr_clip_destroy(out);
+        return nullptr;
+    }
+    return out;
 }
 
 double angle_gap(double a, double b) {
@@ -986,6 +992,15 @@ cm_clip* cc_retarget_bake(cc_retargeter* rt, const cm_clip* source_clip, float f
         ck.resize(static_cast<size_t>(kc));
         cm_clip_curve_keys(source_clip, c, ck.data(), kc);
         cm_clip_curve_set(out, name, ck.data(), kc);
+    }
+    // Morph tracks (#171) pass through by name, unchanged (shape keys are not skeleton-relative).
+    for (int32_t c = 0, n = cm_clip_morph_count(source_clip); c < n; ++c) {
+        const char* name = nullptr;
+        int32_t kc = 0;
+        cm_clip_morph_get(source_clip, c, &name, &kc);
+        ck.resize(static_cast<size_t>(kc));
+        cm_clip_morph_keys(source_clip, c, ck.data(), kc);
+        cm_clip_morph_set(out, name, ck.data(), kc);
     }
     for (int32_t i = 0, n = cm_clip_notify_count(source_clip); i < n; ++i) {
         const char* name = nullptr;

@@ -2,6 +2,7 @@ package com.openmason.main.systems.menus;
 
 import com.openmason.main.systems.menus.dialogs.FileDialogService;
 import com.openmason.main.systems.menus.dialogs.HomeScreenDialog;
+import com.openmason.main.systems.menus.dialogs.ModelImportDialog;
 import com.openmason.main.systems.menus.dialogs.UnsavedChangesDialog;
 import com.openmason.main.systems.menus.mainHub.services.RecentProjectsService;
 import com.openmason.main.systems.project.ProjectService;
@@ -32,6 +33,7 @@ public class FileMenuHandler {
     private final StatusService statusService;
     private final HomeScreenDialog homeScreenDialog;
     private final UnsavedChangesDialog unsavedChangesDialog;
+    private final ModelImportDialog modelImportDialog;
 
     private ViewportController viewport;
     private LogoManager logoManager;
@@ -79,6 +81,19 @@ public class FileMenuHandler {
         this.statusService = statusService;
         this.homeScreenDialog = new HomeScreenDialog();
         this.unsavedChangesDialog = new UnsavedChangesDialog();
+        this.modelImportDialog = new ModelImportDialog(modelOperations, modelState, statusService);
+    }
+
+    /** File > Import Model's options + summary dialog (#173); rendered every frame by the shell. */
+    public ModelImportDialog getModelImportDialog() {
+        return modelImportDialog;
+    }
+
+    /** Asks for a glTF / OBJ file, then shows the import options for it. */
+    public void showImportModelDialog() {
+        fileDialogService.showOpenDialog(FileDialogService.StartIn.LAST_USED,
+                path -> modelImportDialog.show(java.nio.file.Path.of(path)),
+                com.openmason.main.systems.io.BuiltinFileTypes.GLTF, com.openmason.main.systems.io.BuiltinFileTypes.OBJ);
     }
 
     /**
@@ -207,6 +222,12 @@ public class FileMenuHandler {
 
     public void setProjectService(ProjectService projectService) {
         this.projectService = projectService;
+        modelImportDialog.setProjectDirectory(() -> {
+            String omp = projectService != null ? projectService.getCurrentProjectPath() : null;
+            if (omp == null || omp.isBlank()) return null;
+            java.nio.file.Path parent = java.nio.file.Path.of(omp).getParent();
+            return parent != null ? parent.toString() : null;
+        });
     }
 
     /**
@@ -256,6 +277,10 @@ public class FileMenuHandler {
 
         if (ImGui.menuItem("Open Model...", shortcut(ViewportKeybindActions.OPEN_MODEL))) {
             modelOperations.openOMOModel();
+        }
+
+        if (ImGui.menuItem("Import Model...")) {
+            showImportModelDialog();
         }
 
         if (ImGui.menuItem("Open Project...")) {

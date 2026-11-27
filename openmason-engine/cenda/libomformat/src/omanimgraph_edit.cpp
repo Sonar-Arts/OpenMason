@@ -347,7 +347,7 @@ int index_after(const std::string& at, const char* prefix) {
 std::string op_graph(Graph& g, yyjson_val* op) {
     MutGraph m(g);
     m.overlay(m.root, op, {"op", "format", "version", "nodes", "parameters", "slots", "masks", "targets", "colliders",
-                           "modifiers", "editor"});
+                           "modifiers", "morphs", "editor"});
     g = m.result();
     return "graph updated";
 }
@@ -659,8 +659,8 @@ std::string op_sample(Graph& g, yyjson_val* op) {
 
 std::string op_section(Graph& g, yyjson_val* op) {
     const std::string name = text_of(op, "name", true);
-    static const std::set<std::string> allowed = {"targets", "colliders", "modifiers", "masks"};
-    if (!allowed.contains(name)) fail("section must be targets, colliders, modifiers or masks");
+    static const std::set<std::string> allowed = {"targets", "colliders", "modifiers", "masks", "morphs"};
+    if (!allowed.contains(name)) fail("section must be targets, colliders, modifiers, masks or morphs");
     MutGraph m(g);
     yyjson_mut_obj_remove_key(m.root, name.c_str());
     yyjson_val* v = member(op, "value");

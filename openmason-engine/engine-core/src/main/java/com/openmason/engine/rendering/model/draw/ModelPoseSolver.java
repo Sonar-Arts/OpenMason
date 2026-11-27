@@ -114,6 +114,40 @@ public final class ModelPoseSolver {
         return out;
     }
 
+    /** Per thread: a two-slot pose workspace per rig model with morph channels (weak keys: models may be unloaded). */
+    private static final ThreadLocal<java.util.Map<RigModel, MorphScratch>> MORPH_SCRATCH =
+            ThreadLocal.withInitial(java.util.WeakHashMap::new);
+
+    private record MorphScratch(com.openmason.engine.rig.PoseWorkspace workspace,
+                                com.openmason.engine.rig.PoseProgram program) {}
+
+    /**
+     * The morph (shape-key) weights of the frame {@link #pose} draws from the same {@code layers} (OpenMason #171):
+     * one per target of {@code geometry}'s morphs ({@link EntityGeometry#morphs()}), the channel defaults with the
+     * clips' OMANIM 1.3 morph tracks folded in like the joints ({@link RigPoser#morphWeights}). Returns {@code out}
+     * (a new array when it is null or too short), or null when the model has no morph targets - draw with the
+     * defaults then.
+     */
+    public static float[] morphWeights(EntityGeometry geometry, ClipLayers layers, float[] out) {
+        RigModel model = geometry.rig();
+        int n = model.morphCount();
+        if (n == 0) return null;
+        float[] result = out != null && out.length >= n ? out : new float[n];
+        MorphScratch scratch = MORPH_SCRATCH.get().computeIfAbsent(model, m -> new MorphScratch(
+                com.openmason.engine.rig.PoseWorkspace.create(m.rig(), 2), new com.openmason.engine.rig.PoseProgram()));
+        ClipLayers l = layers != null ? layers : ClipLayers.REST;
+        List<RigPoser.Overlay> overlays = List.of();
+        if (!l.overlays().isEmpty()) {
+            overlays = new ArrayList<>(l.overlays().size());
+            for (ClipLayers.Overlay o : l.overlays()) {
+                overlays.add(new RigPoser.Overlay(o.clip(), o.time(), o.weight()));
+            }
+        }
+        RigPoser.local().morphWeights(scratch.workspace(), scratch.program(), l.baseClip(), l.baseTime(), overlays,
+                result);
+        return result;
+    }
+
     /**
      * Walks the geometry's parts in order, handing each part's skin matrix (its rigid draw matrix) to
      * {@code consumer}. {@code headYawDeg}/{@code headPitchDeg} turn the head joint and its descendants

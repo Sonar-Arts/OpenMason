@@ -13,13 +13,15 @@ package com.openmason.engine.rendering.model.draw;
  * </ul>
  * The blended matrix {@code sum_k (q_k / 65535) K(joint_k)} uses exactly the weights {@code cr_skin_deform} uses on
  * the CPU. With {@code u_skinned} false (or a vertex with no influences) the matrix is the identity, so a host can
- * keep drawing rigid parts with a per-part {@code model} matrix. Attribute location 3 (the ABI 2 weights) is free.
+ * keep drawing rigid parts with a per-part {@code model} matrix. Attribute location 3 (the ABI 2 weights) carries the
+ * morph ranges since #171 ({@link ModelMorphGlsl}).
  *
  * <p>Splice {@link #VERTEX} after the {@code #version} line. Positions: {@code vec4 local = skinPosition(aPos);}.
  * A shader that needs both the position and the normal blends once: {@code mat4 s = skinMatrix();} and uses
  * {@code skinPosition(s, aPos)} / {@code skinNormal(s, n)} (normals ride the same blended matrix, its {@code mat3}).
- * Morph targets (shape keys) displace the rest position and normal BEFORE skinning: {@code skinPosition(s, aPos +
- * delta)}.
+ * Morph targets (shape keys, OpenMason #171) displace the rest position and normal BEFORE skinning: {@link #VERTEX}
+ * starts with {@link ModelMorphGlsl#VERTEX}, so every shader splicing it has {@code morphPosition} / {@code morphNormal}
+ * and draws {@code skinPosition(s, morphPosition(aPos))} (a no-op unless the mesh has morphs and {@code u_morphed}).
  */
 public final class ModelSkinGlsl {
 
@@ -37,7 +39,7 @@ public final class ModelSkinGlsl {
     public static final int INFLUENCES_UNIT = 32;
 
     /** Attributes, uniforms, {@code skinMatrix()}, {@code skinPosition(...)} and {@code skinNormal(...)}. */
-    public static final String VERTEX = """
+    public static final String VERTEX = ModelMorphGlsl.VERTEX + """
             layout (location = 2) in uvec2 aSkinRange;
             uniform samplerBuffer u_jointPalette;
             uniform usamplerBuffer u_skinInfluences;

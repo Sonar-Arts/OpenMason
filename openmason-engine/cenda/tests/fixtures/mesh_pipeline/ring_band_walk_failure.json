@@ -1,0 +1,29 @@
+{
+  "format": "openmason.meshPipelineFixture", "version": 1,
+  "name": "ring_band_walk_failure",
+  "javaSource": "MeshImporter.reconstructLoop BOUNDARY_WALK_FAILED fallback (face-id contract violation: an annulus is not a simple polygon)",
+  "notes": "Outer square 0..3 (3x3), inner square 4..7 (1..2). boundaryNext (first-occurrence order) 0>1 5>4 1>2 6>5 2>3 7>6 3>0 4>7 (8 entries). The walk from 0 closes after 4 vertices (0 1 2 3) != 8 -> fallback = distinct triangle vertices in insertion order 0 1 5 4 2 6 3 7, warning value = 8 triangles. Render: 8 corners, 6 triangles (always n - 2).",
+  "tolerance": 1e-6,
+  "input": {
+    "kind": "soup",
+    "vertices": [0,0,0, 3,0,0, 3,3,0, 0,3,0, 1,1,0, 2,1,0, 2,2,0, 1,2,0],
+    "indices": [0,1,5, 0,5,4, 1,2,6, 1,6,5, 2,3,7, 2,7,6, 3,0,4, 3,4,7],
+    "triangleToFaceId": [0,0,0,0,0,0,0,0]
+  },
+  "expected": {
+    "weld": {
+      "soupToVertex": [0,1,2,3,4,5,6,7],
+      "vertexToSoup": [[0],[1],[2],[3],[4],[5],[6],[7]]
+    },
+    "faces": {
+      "faces": [{"id": 0, "loop": [0,1,5,4,2,6,3,7], "cornerUVs": null}],
+      "faceIdUpperBound": 1,
+      "warnings": [{"kind": "BOUNDARY_WALK_FAILED", "faceId": 0, "value": 8}]
+    },
+    "render": {
+      "triangleCount": 6,
+      "cornerToVertexId": [0,1,5,4,2,6,3,7],
+      "triangleToFaceId": [0,0,0,0,0,0]
+    }
+  }
+}

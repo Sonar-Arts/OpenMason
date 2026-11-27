@@ -22,8 +22,12 @@ import java.util.List;
  * unnecessary by construction.
  *
  * <p>The UV projection is the same tangent-frame region mapping the legacy
- * {@code PerFaceUVCoordinateGenerator} applied on every rebuild (UVs are
- * derived from face regions, never authored per-vertex).
+ * {@code PerFaceUVCoordinateGenerator} applied on every rebuild. A face's
+ * AUTHORED corner UVs win over the projection when the face has no explicit
+ * mapping, or when its mapping says they are authored
+ * ({@link FaceTextureMapping#authoredUVs()}: an imported / loaded UV layout
+ * that is not the region projection — before #169 those were thrown away and
+ * every mapped face was re-projected).
  */
 public final class RenderMeshBuilder {
 
@@ -113,18 +117,16 @@ public final class RenderMeshBuilder {
 
     /**
      * Emit a face's corner UVs. Faces with an explicit non-default mapping are
-     * projected into their region; faces without one keep their AUTHORED
-     * per-corner UVs when present (sphere lat/long grids, hand-authored UVs) —
-     * the same precedence the legacy regenerate-and-merge pass applied.
+     * projected into their region unless the mapping marks the face's UVs as
+     * authored; faces without one keep their AUTHORED per-corner UVs when
+     * present (sphere lat/long grids, hand-authored UVs).
      */
     private static void emitFaceUVs(EditableFace face, Vector3f[] loop, float[] texCoords,
                                     int firstCorner, FaceTextureMapping faceMapping) {
-        boolean explicitMapping = faceMapping != null
-            && (faceMapping.materialId() != MaterialDefinition.DEFAULT.materialId()
-                || !faceMapping.uvRegion().equals(FaceTextureMapping.FULL_REGION));
+        boolean explicitMapping = isExplicit(faceMapping);
 
         float[] authored = face.cornerUVs();
-        if (!explicitMapping && authored != null) {
+        if (authored != null && (!explicitMapping || faceMapping.authoredUVs())) {
             for (int i = 0; i < loop.length; i++) {
                 texCoords[(firstCorner + i) * 2]     = authored[i * 2];
                 texCoords[(firstCorner + i) * 2 + 1] = authored[i * 2 + 1];
@@ -133,6 +135,40 @@ public final class RenderMeshBuilder {
         }
 
         projectFaceUVs(loop, texCoords, firstCorner, faceMapping);
+    }
+
+    /** True when a mapping is not the implicit default (another material, or a sub-region). */
+    public static boolean isExplicit(FaceTextureMapping mapping) {
+        return mapping != null
+            && (mapping.materialId() != MaterialDefinition.DEFAULT.materialId()
+                || !mapping.uvRegion().equals(FaceTextureMapping.FULL_REGION));
+    }
+
+    /**
+     * True when the face's authored corner UVs equal (within {@code tolerance}
+     * per coordinate) what the projection into {@code mapping}'s region gives —
+     * UVs the editor itself projected and saved, as opposed to an authored UV
+     * layout. False for a face without authored UVs.
+     */
+    public static boolean authoredUVsMatchProjection(EditableMesh mesh, EditableFace face,
+                                                     FaceTextureMapping mapping, float tolerance) {
+        float[] authored = face.cornerUVs();
+        if (authored == null) {
+            return false;
+        }
+        int n = face.loopLength();
+        Vector3f[] loop = new Vector3f[n];
+        for (int i = 0; i < n; i++) {
+            loop[i] = mesh.position(face.vertexAt(i));
+        }
+        float[] projected = new float[n * 2];
+        projectFaceUVs(loop, projected, 0, mapping);
+        for (int i = 0; i < projected.length; i++) {
+            if (Math.abs(projected[i] - authored[i]) > tolerance) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

@@ -115,6 +115,77 @@ public final class ModelFileService {
         });
     }
 
+    // -------------------------------------------------------------- import
+
+    /**
+     * Imports a glTF / OBJ file (#173) into the editor as an unsaved model (replacing unsaved work asks the user).
+     *
+     * @param saveClipsTo a folder for the glTF animations ({@code project:Animations}, {@code project} = that, an
+     *                    absolute folder inside a root), or null to not save them
+     */
+    public Map<String, Object> importModel(String filePath,
+                                           com.openmason.engine.format.omo.CendaImport.Options options,
+                                           String saveClipsTo, int timeoutSeconds) {
+        if (filePath == null || filePath.isBlank()) {
+            throw new IllegalArgumentException("path is required");
+        }
+        java.nio.file.Path source = writes.sandbox().resolveExisting(filePath);
+        if (!com.openmason.engine.format.omo.CendaImport.canImport(source.getFileName().toString())) {
+            throw new IllegalArgumentException("unsupported_format: " + source.getFileName()
+                    + " (import reads .gltf, .glb and .obj)");
+        }
+        java.nio.file.Path clipFolder = null;
+        if (saveClipsTo != null && !saveClipsTo.isBlank()) {
+            String folder = saveClipsTo.trim().equalsIgnoreCase("project")
+                    ? "project:" + com.openmason.main.systems.io.ModelImportService.ANIMATIONS_FOLDER : saveClipsTo.trim();
+            clipFolder = writes.sandbox().resolve(WriteKind.OMANIM,
+                    folder.replaceFirst("[/\\\\]+$", "") + "/probe.omanim").path().getParent();
+        }
+        Snapshot s = snapshot();
+        if (s.loaded() && s.dirty()) {
+            Map<String, Object> declined = confirmReplace("model_import",
+                    "An agent asks to import '" + source.getFileName() + "' into the editor",
+                    List.of("File: " + source, "The current model has unsaved changes."), timeoutSeconds);
+            if (declined != null) {
+                return declined;
+            }
+        }
+        com.openmason.engine.format.omo.CendaImport.Result result;
+        try {
+            result = com.openmason.main.systems.io.ModelImportService.convert(source, options);
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException("import_failed: " + e.getMessage(), e);
+        }
+        ModelOperationService ops = requireOps();
+        java.nio.file.Path clips = clipFolder;
+        com.openmason.main.systems.io.ModelImportService.Outcome outcome = onMain(() ->
+                com.openmason.main.systems.io.ModelImportService.open(ops, source, result, clips));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("opened", outcome.opened());
+        out.put("message", outcome.message());
+        com.openmason.engine.format.omo.CendaImport.Counts c = outcome.counts();
+        if (c != null) {
+            Map<String, Object> counts = new LinkedHashMap<>();
+            counts.put("parts", c.parts());
+            counts.put("bones", c.bones());
+            counts.put("faces", c.faces());
+            counts.put("triangles", c.triangles());
+            counts.put("vertices", c.vertices());
+            counts.put("materials", c.materials());
+            counts.put("max_influences", c.maxInfluences());
+            counts.put("morphs", c.morphs());
+            counts.put("vertex_groups", c.vertexGroups());
+            counts.put("clips", c.clips());
+            out.put("counts", counts);
+        }
+        out.put("warnings", outcome.warnings());
+        if (!outcome.clipNames().isEmpty()) out.put("clips", outcome.clipNames());
+        if (!outcome.savedClips().isEmpty()) {
+            out.put("saved_clips", outcome.savedClips().stream().map(java.nio.file.Path::toString).toList());
+        }
+        return out;
+    }
+
     // ----------------------------------------------------------------- new
 
     public Map<String, Object> newModel(int timeoutSeconds) {

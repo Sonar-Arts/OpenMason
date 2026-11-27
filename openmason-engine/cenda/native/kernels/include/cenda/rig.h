@@ -368,8 +368,9 @@ int32_t cr_poses_evaluate(cr_poses* poses, const cr_pose_op* ops, int32_t op_cou
                           const float* base_matrix,
                           float* out_skin, float* out_world, float* out_child);
 
-/* Weighted bone masks (Unity Avatar Mask, Unreal layered blend per bone): a weight in [0,1] per joint.
- * The rig must outlive the mask. */
+/* Weighted bone masks (Unity Avatar Mask, Unreal layered blend per bone): a weight in [0,1] per joint (and per
+ * morph channel since #171: `fill` and cr_mask_fill set those too; cr_mask_set_morph below). The rig must outlive
+ * the mask. */
 enum {
     CR_MASK_BRANCH = 1u << 0   /* cr_mask_set: the joint's descendants take the weight too */
 };
@@ -381,10 +382,11 @@ int32_t cr_mask_fill(cr_mask* mask, float weight);
  * ramps the weight down the branch (Unreal's blend depth): a joint d levels below `joint` gets
  * weight·min(1, (d+1)/blend_depth). Later sets overwrite earlier ones. */
 int32_t cr_mask_set(cr_mask* mask, int32_t joint, float weight, uint32_t flags, int32_t blend_depth);
-/* joint_count floats in / out. */
+/* joint_count floats in / out (joints only; morph channels: cr_mask_get_morph / cr_mask_set_morph). */
 int32_t cr_mask_get(const cr_mask* mask, float* out_weights);
 int32_t cr_mask_set_all(cr_mask* mask, const float* weights);
-/* 1 on the joints a clip's name mask covers (every joint for an empty mask), else 0. */
+/* 1 on the joints a clip's name mask covers (every joint for an empty mask), else 0; morph channels by the same
+ * mask ("Morph targets": the channel name or "morph:<name>"). */
 int32_t cr_mask_from_clip(cr_mask* mask, const cr_clip* clip);
 
 /* Inertialization (Unreal; Bollo, GDC 2018): on a source switch the old pose is not evaluated any

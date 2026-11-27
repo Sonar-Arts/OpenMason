@@ -32,10 +32,14 @@ public final class RigModel {
     private final List<Skin.Influence> influences;
     private final Map<String, Integer> byId;
 
+    private final RigMorphs morphs;
+
     private volatile Rig rig;
     private volatile PackedSkin packed;
 
-    private RigModel(List<RigJoint> joints, int partCount, int[] partJointOfVertex, List<Skin.Influence> influences) {
+    private RigModel(List<RigJoint> joints, int partCount, int[] partJointOfVertex, List<Skin.Influence> influences,
+                     RigMorphs morphs) {
+        this.morphs = morphs != null && morphs.targetCount() > 0 ? morphs : null;
         this.joints = List.copyOf(joints);
         this.partCount = partCount;
         this.partJointOfVertex = partJointOfVertex;
@@ -59,6 +63,17 @@ public final class RigModel {
      */
     public static RigModel build(List<PartSpec> parts, List<OMOFormat.BoneEntry> bones, OMOFormat.SkinData skin,
                                  int[] partVertexStart, int[] partJointOfVertex) {
+        return build(parts, bones, skin, partVertexStart, partJointOfVertex, null);
+    }
+
+    /**
+     * {@link #build(List, List, OMOFormat.SkinData, int[], int[])} with the model's morph targets (OpenMason #171,
+     * over the same combined vertices; null = none): they become the native rig's morph channels when it is built
+     * ({@link Rig#create(List, RigMorphs)}), before anything can pose it. The model keeps {@code morphs} (it must stay
+     * open while the model is in use).
+     */
+    public static RigModel build(List<PartSpec> parts, List<OMOFormat.BoneEntry> bones, OMOFormat.SkinData skin,
+                                 int[] partVertexStart, int[] partJointOfVertex, RigMorphs morphs) {
         Objects.requireNonNull(parts, "parts");
         List<OMOFormat.BoneEntry> boneList = bones == null ? List.of() : bones;
         int vertexCount = partJointOfVertex == null ? 0 : partJointOfVertex.length;
@@ -130,7 +145,11 @@ public final class RigModel {
         for (int v = 0; v < partJoints.length; v++) {
             if (partJoints[v] < 0 || partJoints[v] >= joints.size()) partJoints[v] = 0;
         }
-        return new RigModel(joints, Math.max(1, parts.size()), partJoints, influences);
+        if (morphs != null && morphs.targetCount() > 0 && morphs.vertexCount() != partJoints.length) {
+            throw new IllegalArgumentException("morph targets cover " + morphs.vertexCount() + " vertices, the model has "
+                    + partJoints.length);
+        }
+        return new RigModel(joints, Math.max(1, parts.size()), partJoints, influences, morphs);
     }
 
     /** A rig with no bones and no skin: one joint per part (the pre-rig model). */
@@ -187,12 +206,22 @@ public final class RigModel {
             synchronized (this) {
                 r = rig;
                 if (r == null) {
-                    r = Rig.create(joints);
+                    r = Rig.create(joints, morphs);
                     rig = r;
                 }
             }
         }
         return r;
+    }
+
+    /** The model's morph targets (shape keys, OpenMason #171), or null when it has none. */
+    public RigMorphs morphs() {
+        return morphs;
+    }
+
+    /** Number of morph targets (= the rig's morph channels); 0 without. */
+    public int morphCount() {
+        return morphs == null ? 0 : morphs.targetCount();
     }
 
     /** A fresh editable skin holding the authored weights (caller closes it). */

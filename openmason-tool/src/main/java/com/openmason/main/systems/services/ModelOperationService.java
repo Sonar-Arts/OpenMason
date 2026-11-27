@@ -142,6 +142,10 @@ public class ModelOperationService {
                 viewport.getAttachmentStore().clear();
                 viewport.getAttachmentPreviewStore().clearAll();
                 viewport.loadModel(currentEditableModel);
+                if (viewport.getModelRenderer() != null) {
+                    viewport.getModelRenderer().getShading().clear();
+                }
+                carriedVertexData = com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry.EMPTY;
                 statusService.updateStatus("Blank model created and loaded: " + currentEditableModel.getName());
             } else {
                 statusService.updateStatus("Blank model created: " + currentEditableModel.getName() +
@@ -317,6 +321,30 @@ public class ModelOperationService {
                         logger.info("Saving skin weights for {} part(s)", skin.parts().size());
                     }
                 }
+
+                // OMO 1.9: shading resolved against the exact mesh being written; vertex groups / morphs carried
+                // from the load, remapped to the written layout like the skin.
+                EditableModel model = viewport.getModelRenderer();
+                if (model != null && meshData != null) {
+                    OMOFormat.ShadingData shading = model.getShading().toSavedLayout(meshData,
+                            partEntries != null && !partEntries.isEmpty() ? partEntries : null);
+                    omoSerializer.setShadingData(shading);
+                    if (shading != null) {
+                        logger.info("Saving shading: {}", shading);
+                    }
+                }
+                List<OMOFormat.PartEntry> entriesForVertexData = partEntries;
+                if (carriedVertexData.hasData() && (entriesForVertexData == null || entriesForVertexData.isEmpty())) {
+                    // Vertex groups and morphs are keyed by part id: write the part entries for them.
+                    entriesForVertexData = OmoExportAssembler.extractPartEntries(viewport.getPartManager(), meshData, true);
+                    if (entriesForVertexData != null && !entriesForVertexData.isEmpty()) {
+                        omoSerializer.setPartEntries(entriesForVertexData);
+                    }
+                }
+                omoSerializer.setVertexGroups(carriedVertexData.groupsInSavedLayout(
+                        viewport.getPartManager(), entriesForVertexData));
+                omoSerializer.setMorphs(carriedVertexData.morphsInSavedLayout(
+                        viewport.getPartManager(), entriesForVertexData));
             }
 
             // Extract and set model-level transform (v1.4+)
@@ -548,6 +576,12 @@ public class ModelOperationService {
                     logger.warn("Viewport not set - model loaded but not displayed");
                 }
 
+                // OMO 1.9: smooth shading (per-part native stores) and the vertex groups / morphs the editor
+                // carries through to the next save. AFTER the parts and face textures: the stores key the live mesh.
+                if (viewport != null) {
+                    restoreVertexData(meshData, omoDeserializer.getLastLoadedPartEntries());
+                }
+
                 // Restore model-level transform (v1.4+)
                 OMOFormat.ModelTransform modelTransform = omoDeserializer.getLastLoadedModelTransform();
                 if (modelTransform != null && viewport != null) {
@@ -616,6 +650,31 @@ public class ModelOperationService {
             statusService.updateStatus("Error loading model: " + e.getMessage());
         }
     }
+
+    /**
+     * OMO 1.9 data of the model just loaded: shading into the editor's per-part stores, vertex groups and morphs
+     * into {@link #carriedVertexData} (kept for the next save).
+     */
+    private void restoreVertexData(OMOFormat.MeshData meshData, List<OMOFormat.PartEntry> partEntries) {
+        EditableModel renderer = viewport.getModelRenderer();
+        carriedVertexData = com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry.load(
+                omoDeserializer.getLastLoadedVertexGroups(), omoDeserializer.getLastLoadedMorphs());
+        if (renderer == null) {
+            return;
+        }
+        String rootId = viewport.getPartManager().getAllParts().isEmpty() ? null
+                : viewport.getPartManager().getAllParts().get(0).id();
+        try {
+            renderer.getShading().load(meshData, partEntries, omoDeserializer.getLastLoadedShadingData(), rootId);
+        } catch (RuntimeException e) {
+            logger.warn("Shading not loaded: {}", e.getMessage());
+            statusService.updateStatus("Model loaded, but its smooth shading could not be read: " + e.getMessage());
+        }
+    }
+
+    // Vertex groups / morphs of the loaded file, written back on save (the editor does not edit them yet).
+    private com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry carriedVertexData =
+            com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry.EMPTY;
 
     // =========================================================================
     // FACE TEXTURE DATA EXTRACTION (save path)
@@ -705,9 +764,10 @@ public class ModelOperationService {
                     gpuTextureId = textureLoader.loadPNGAsTexture(pngBytes);
                 }
             }
-            // OMO 1.9: a material may have only a base colour (no PNG); keep it with a solid-colour texture
+            // OMO 1.9: a material may have only a base colour (no PNG): a white texture times the base colour,
+            // the runtime's rule (texture x baseColor) that textured materials follow too.
             if (gpuTextureId <= 0 && matEntry.baseColor() != null) {
-                gpuTextureId = textureLoader.loadPNGAsTexture(OMOFormat.solidColorPng(matEntry.baseColor()));
+                gpuTextureId = textureLoader.loadPNGAsTexture(OMOFormat.solidColorPng(new float[] {1f, 1f, 1f, 1f}));
             }
 
             if (gpuTextureId <= 0) {
@@ -727,7 +787,8 @@ public class ModelOperationService {
                     matEntry.name(),
                     gpuTextureId,
                     renderLayer,
-                    new MaterialDefinition.MaterialProperties(matEntry.emissive(), matEntry.tintColor())
+                    new MaterialDefinition.MaterialProperties(matEntry.emissive(), matEntry.tintColor(),
+                            matEntry.baseColor())
             );
             ftm.registerMaterial(material);
             logger.debug("Restored material {} '{}' (textureId={})", matEntry.materialId(), matEntry.name(), gpuTextureId);
@@ -754,6 +815,10 @@ public class ModelOperationService {
                 .max()
                 .orElse(0);
         FaceMaterialSection.syncNextMaterialId(maxLoadedId);
+
+        // Imported / hand-authored UV layouts are drawn as authored; faces whose saved UVs are the editor's own
+        // region projection stay projected (they keep following geometry and region edits).
+        renderer.adoptAuthoredUVs();
 
         // Refresh rendering state
         renderer.markDrawBatchesDirty();

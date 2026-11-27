@@ -1,5 +1,6 @@
 /* Cenda model import (OpenMason #173, writer half): glTF 2.0 (.gltf / .glb) and Wavefront OBJ (+ MTL) turned into
- * an OMO 1.9 document (a co_doc, cenda/model.h) plus one OMANIM 1.2 clip per glTF animation. The PARSE half is
+ * an OMO 1.9 document (a co_doc, cenda/model.h) plus one OMANIM clip per glTF animation (1.2; 1.3 when it animates
+ * morph weights, OpenMason #171). The PARSE half is
  * libomformat's omformat/import.hpp (values as authored); everything below is the conversion to Open Mason's
  * conventions. CO_ABI_VERSION stays 1 (functions added).
  *
@@ -75,8 +76,15 @@
  *                 value - position (relative to max(1, |p|)), rotation matrix entries, scale and the composed matrix,
  *                 each - at every resampled key time and segment midpoint is kept next; found by doubling then
  *                 bisection (deterministic). Redundant source keys (baked constant / linear stretches) collapse; first
- *                 and last keys always stay; STEP tracks are not reduced. Skipped with a warning: morph weight channels
- *                 (OMANIM morph tracks are not in 1.2), channels on non-joint nodes.
+ *                 and last keys always stay; STEP tracks are not reduced. Skipped with a warning: channels on non-joint nodes.
+ *                 MORPH WEIGHT channels (#171; with CO_IMPORT_MORPHS, else skipped with a warning) become OMANIM 1.3
+ *                 morph tracks: target t of the node's mesh -> the morph of the same name (the Morphs rule above),
+ *                 the sampler's keys as they are (LINEAR / STEP / CUBICSPLINE -> LINEAR / STEP / CUBIC with
+ *                 in-tangent a_k and out-tangent b_k: glTF and OMANIM both give tangents per second, so the curve is
+ *                 identical); exact reduction only (LINEAR: a key between two equal values; STEP: a key repeating
+ *                 the previous value; first / last kept; CUBIC untouched). A morph animated by two channels keeps
+ *                 the first (warning); a target whose morph was not imported is skipped (warning). A clip with
+ *                 only morph tracks is still written.
  *
  * Errors: functions return CO_OK or a negative CO_ERR_* (model.h): CO_ERR_ARG (bad argument, unknown extension, file
  * not readable), CO_ERR_FORMAT (malformed / invalid model). co_last_error says why (co_import_last_error returns the

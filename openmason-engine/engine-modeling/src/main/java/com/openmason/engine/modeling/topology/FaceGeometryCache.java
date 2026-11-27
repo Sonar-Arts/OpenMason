@@ -6,8 +6,7 @@ import org.joml.Vector3f;
  * Per-face normals, centroids, and areas with lazy dirty recomputation.
  *
  * <p>Root of the dirty-tracking dependency chain. When a vertex moves,
- * affected faces are marked dirty here. Sibling caches ({@link VertexNormalCache},
- * {@link DihedralAngleCache}) call {@link #ensureFaceClean(int)} before reading
+ * affected faces are marked dirty here. {@link DihedralAngleCache} calls {@link #ensureFaceClean(int)} before reading
  * face geometry data.
  *
  * @see MeshTopologyBuilder
@@ -121,7 +120,7 @@ public final class FaceGeometryCache {
 
     /**
      * Direct reference to the face normals array.
-     * Package-private — used by {@link DihedralAngleCache} and {@link VertexNormalCache}.
+     * Package-private — used by {@link DihedralAngleCache}.
      */
     Vector3f[] normals() {
         return faceNormals;
@@ -129,7 +128,7 @@ public final class FaceGeometryCache {
 
     /**
      * Direct reference to the face areas array.
-     * Package-private — used by {@link VertexNormalCache}.
+     * Package-private.
      */
     float[] areas() {
         return faceAreas;

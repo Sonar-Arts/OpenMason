@@ -29,6 +29,9 @@ A decline is `reason: user_declined|timeout|busy|prompt_unavailable`, never a pr
 - `model_save` / `tex_save_project` / `anim_save` / `scene_save`: without `file_path` they re-save the
   open file in place (silent — it is the user's own working file) or open the sheet for untitled work.
 - `model_open` / `model_new`: replacing unsaved work asks through the approval dialog (Approve / Save current first / Decline).
+- `model_import {path, ...options, save_clips_to?}`: a .gltf/.glb/.obj (inside a root) opens as an UNSAVED model
+  (save it with `model_save` + `file_path`); returns counts + the importer's warnings. Its animations are written
+  as `<model> - <clip>.omanim` only with `save_clips_to` (`project` = `project:Animations`); never overwrites.
 - `sbo_export` / `sbe_export`: current model → new asset. The .omo is saved first when needed (may open the
   sheet), parameters get the export windows' defaults (next free `numericId`, free atlas slot), the result is
   handed to the SBO/SBE editor window like the UI export. Source files inside `params` (clips, override models,

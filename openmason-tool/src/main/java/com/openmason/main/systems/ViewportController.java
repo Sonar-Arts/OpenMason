@@ -763,6 +763,9 @@ public class ViewportController {
     public ViewerCamera getCamera() { return viewportCamera; }
     public ViewportInputHandler getInputHandler() { return inputHandler; }
     public FaceSelectionState getFaceSelectionState() { return faceSelectionState; }
+    public com.openmason.main.systems.viewport.state.EdgeSelectionState getEdgeSelectionState() {
+        return edgeSelectionState;
+    }
     public EditableModel getModelRenderer() { return modelRenderer; }
     public com.openmason.engine.modeling.parts.ModelPartManager getPartManager() {
         return modelRenderer.getPartManager();

@@ -102,38 +102,6 @@ public final class MeshGeometry {
     }
 
     /**
-     * Compute a smooth vertex normal as the area-weighted average of adjacent face normals.
-     * Larger faces contribute more to the result, which is the standard weighting approach.
-     *
-     * @param adjacentFaceIds Face IDs adjacent to the vertex
-     * @param faceNormals     Precomputed face normals array
-     * @param faceAreas       Precomputed face areas array
-     * @return Normalized vertex normal, or zero vector if no valid adjacent faces
-     */
-    public static Vector3f computeVertexNormal(List<Integer> adjacentFaceIds,
-                                               Vector3f[] faceNormals, float[] faceAreas) {
-        float nx = 0, ny = 0, nz = 0;
-
-        for (int faceId : adjacentFaceIds) {
-            if (faceId < 0 || faceId >= faceNormals.length || faceNormals[faceId] == null) {
-                continue;
-            }
-            Vector3f fn = faceNormals[faceId];
-            float area = faceAreas[faceId];
-            nx += fn.x * area;
-            ny += fn.y * area;
-            nz += fn.z * area;
-        }
-
-        Vector3f result = new Vector3f(nx, ny, nz);
-        float len = result.length();
-        if (len > ModelingConstants.DEGENERATE_NORMAL_EPSILON) {
-            result.div(len);
-        }
-        return result;
-    }
-
-    /**
      * Compute the dihedral angle between two face normals.
      *
      * @param n0 First face normal (unit vector)

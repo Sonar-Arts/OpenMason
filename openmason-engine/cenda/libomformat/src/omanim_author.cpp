@@ -536,6 +536,110 @@ std::string op_curve(Session& s, yyjson_val* op) {
     return "curve " + name + " set";
 }
 
+// ---- morph tracks (#171) ----------------------------------------------------------------------------------------
+
+std::string morph_name(yyjson_val* op) {
+    std::string name = text(op, "morph", true);
+    if (name.rfind(kMorphPrefix, 0) == 0) name.erase(0, std::string(kMorphPrefix).size());
+    if (name.empty()) fail("\"morph\" names no channel");
+    return name;
+}
+
+CurveInterp parse_interp(const std::string& interp) {
+    if (interp.empty() || interp == "LINEAR") return CurveInterp::Linear;
+    if (interp == "STEP") return CurveInterp::Step;
+    if (interp == "CUBIC") return CurveInterp::Cubic;
+    fail("interp must be LINEAR, STEP or CUBIC");
+}
+
+void extend_duration(Session& s, float t) {
+    if (t <= s.clip.duration) return;
+    s.clip.duration = t;
+    for (AuthorLayer& al : s.layers) al.clip.duration = t;
+}
+
+// morph_key: layer?, morph, time, value, interp?, inTangent?, outTangent? | remove: true. Sets (or replaces) the key
+// at that time of the layer's morph track (created when missing); members left out keep the replaced key's.
+std::string op_morph_key(Session& s, yyjson_val* op) {
+    const int li = layer_of(s, op);
+    const std::string name = morph_name(op);
+    const float t = req_num(op, "time");
+    if (t < 0.f) fail("time must be >= 0");
+    AuthorLayer& l = s.layers[static_cast<std::size_t>(li)];
+    auto tr = std::find_if(l.clip.morphs.begin(), l.clip.morphs.end(), [&](const Curve& c) { return c.name == name; });
+    if (boolean(op, "remove", false)) {
+        if (tr == l.clip.morphs.end()) fail("layer " + l.name + " has no morph track " + name);
+        const std::size_t before = tr->keys.size();
+        std::erase_if(tr->keys, [&](const CurveKey& k) { return near(k.time, t); });
+        if (before == tr->keys.size()) fail("morph " + name + " has no key at " + std::to_string(t));
+        if (tr->keys.empty()) l.clip.morphs.erase(tr);
+        return "morph key " + name + " @" + std::to_string(t) + " removed";
+    }
+    if (tr == l.clip.morphs.end()) {
+        Curve c;
+        c.name = name;
+        l.clip.morphs.push_back(std::move(c));
+        tr = l.clip.morphs.end() - 1;
+    }
+    auto it = std::find_if(tr->keys.begin(), tr->keys.end(), [&](const CurveKey& k) { return near(k.time, t); });
+    CurveKey k = it != tr->keys.end() ? *it : CurveKey{};
+    k.time = t;
+    k.value = req_num(op, "value");
+    if (get(op, "interp") != nullptr) k.interp = parse_interp(text(op, "interp"));
+    if (get(op, "inTangent") != nullptr) k.in_tangent = num(op, "inTangent", 0.f);
+    if (get(op, "outTangent") != nullptr) k.out_tangent = num(op, "outTangent", 0.f);
+    if (it != tr->keys.end()) {
+        *it = k;
+    } else {
+        tr->keys.push_back(k);
+        std::stable_sort(tr->keys.begin(), tr->keys.end(), [](const CurveKey& a, const CurveKey& b) { return a.time < b.time; });
+    }
+    extend_duration(s, t);
+    return "morph key " + name + " @" + std::to_string(t);
+}
+
+// morph: layer?, morph, keys: [{time, value, interp?, inTangent?, outTangent?}] | null. Replaces (or removes) the
+// layer's whole morph track.
+std::string op_morph(Session& s, yyjson_val* op) {
+    const int li = layer_of(s, op);
+    const std::string name = morph_name(op);
+    AuthorLayer& l = s.layers[static_cast<std::size_t>(li)];
+    auto it = std::find_if(l.clip.morphs.begin(), l.clip.morphs.end(), [&](const Curve& c) { return c.name == name; });
+    yyjson_val* keys = get(op, "keys");
+    if (keys == nullptr) {
+        if (it == l.clip.morphs.end()) fail("layer " + l.name + " has no morph track " + name);
+        l.clip.morphs.erase(it);
+        return "morph " + name + " removed";
+    }
+    if (!yyjson_is_arr(keys)) fail("\"keys\" must be an array");
+    Curve c;
+    c.name = name;
+    for (std::size_t i = 0, n = yyjson_arr_size(keys); i < n; ++i) {
+        yyjson_val* k = yyjson_arr_get(keys, i);
+        if (!yyjson_is_obj(k)) fail("morph keys are objects");
+        CurveKey ck;
+        ck.time = req_num(k, "time");
+        if (ck.time < 0.f) fail("time must be >= 0");
+        ck.value = req_num(k, "value");
+        ck.in_tangent = num(k, "inTangent", 0.f);
+        ck.out_tangent = num(k, "outTangent", 0.f);
+        ck.interp = parse_interp(text(k, "interp"));
+        c.keys.push_back(ck);
+        extend_duration(s, ck.time);
+    }
+    std::stable_sort(c.keys.begin(), c.keys.end(), [](const CurveKey& a, const CurveKey& b) { return a.time < b.time; });
+    if (c.keys.empty()) {
+        if (it != l.clip.morphs.end()) l.clip.morphs.erase(it);
+        return "morph " + name + " removed";
+    }
+    if (it != l.clip.morphs.end()) {
+        *it = std::move(c);
+    } else {
+        l.clip.morphs.push_back(std::move(c));
+    }
+    return "morph " + name + " set";
+}
+
 std::string op_marker(Session& s, yyjson_val* op) {
     if (get(op, "index") != nullptr) {
         const int i = static_cast<int>(num(op, "index", 0.f));
@@ -726,6 +830,7 @@ Session session_of(const Clip& clip) {
         base.clip.duration = clip.duration;
         base.clip.loop = clip.loop;
         base.clip.tracks = clip.tracks;
+        base.clip.morphs = clip.morphs;
         s.layers.push_back(std::move(base));
     }
     return s;
@@ -741,6 +846,7 @@ Clip clip_of(const Session& s) {
     Clip c = s.clip;
     if (trivial(s)) {
         c.tracks = s.layers.front().clip.tracks;
+        c.morphs = s.layers.front().clip.morphs;
         return c;
     }
     MutDocPtr doc(yyjson_mut_doc_new(nullptr));
@@ -810,6 +916,8 @@ std::vector<std::string> apply(Session& s, std::string_view ops_json, Host& host
             else if (kind == "additive") out.push_back(op_additive(s, op));
             else if (kind == "effector") out.push_back(op_effector(s, op, host));
             else if (kind == "effector_key") out.push_back(op_effector_key(s, op));
+            else if (kind == "morph_key") out.push_back(op_morph_key(s, op));
+            else if (kind == "morph") out.push_back(op_morph(s, op));
             else if (kind == "match") {
                 const int e = find_effector(s, text(op, "effector", true));
                 if (e < 0) fail("no effector " + text(op, "effector"));
@@ -822,7 +930,7 @@ std::vector<std::string> apply(Session& s, std::string_view ops_json, Host& host
                 out.push_back("baked");
             } else {
                 fail("unknown op (header, clip_layer, key, remove_keys, move_keys, easing, track, layer, layer_weight, notify, curve, "
-                     "marker, root_motion, additive, effector, effector_key, match, bake)");
+                     "marker, root_motion, additive, effector, effector_key, morph_key, morph, match, bake)");
             }
         } catch (const std::exception& e) {
             throw format_error("ops[" + std::to_string(i) + "] (" + kind + "): " + e.what());
@@ -889,6 +997,21 @@ std::string view(const Session& s) {
             yyjson_mut_arr_append(tracks, to);
         }
         put(d, o, "tracks", tracks);
+        yyjson_mut_val* morphs = yyjson_mut_arr(d);  // #171: [{name, keys: [[time, value], ...]}]
+        for (const Curve& c : l.clip.morphs) {
+            yyjson_mut_val* mo = yyjson_mut_obj(d);
+            put(d, mo, "name", mstr(d, c.name));
+            yyjson_mut_val* ks = yyjson_mut_arr(d);
+            for (const CurveKey& k : c.keys) {
+                yyjson_mut_val* p = yyjson_mut_arr(d);
+                yyjson_mut_arr_append(p, yyjson_mut_float(d, k.time));
+                yyjson_mut_arr_append(p, yyjson_mut_float(d, k.value));
+                yyjson_mut_arr_append(ks, p);
+            }
+            put(d, mo, "keys", ks);
+            yyjson_mut_arr_append(morphs, mo);
+        }
+        put(d, o, "morphs", morphs);
         yyjson_mut_arr_append(layers, o);
     }
     put(d, root, "layers", layers);

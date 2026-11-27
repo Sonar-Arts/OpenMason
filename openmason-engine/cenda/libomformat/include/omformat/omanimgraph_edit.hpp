@@ -23,7 +23,7 @@
 //   transition  machine, index? (an existing one; omitted = new), from?, to?, conditions?, priority?, blend?,
 //               mode?, exitTime?, canInterrupt?, remove?
 //   sample      node, index, child?, value? | x?, y?
-//   section     name: targets | colliders | modifiers | masks, value (the whole section)
+//   section     name: targets | colliders | modifiers | masks | morphs (#171), value (the whole section)
 //   position    node, x, y  |  machine, state, x, y
 //   layout      onlyMissing?: true
 //   editor      key, value (an editor-section member, e.g. "preview"; null removes)

@@ -29,6 +29,13 @@ public final class BuiltinFileTypes {
     public static final FileType PNG = FileType.of("png", "PNG Image", ".png")
             .withSave("exports", "", "texture");
 
+    /** glTF 2.0 models, imported (File > Import Model, #173) into an unsaved .omo. Read only. */
+    public static final FileType GLTF = new FileType("gltf", "glTF 2.0 Model", java.util.List.of(".glb", ".gltf"),
+            null, null);
+
+    /** Wavefront OBJ models (+ MTL), imported like glTF. Read only. */
+    public static final FileType OBJ = FileType.of("obj", "Wavefront OBJ Model", ".obj");
+
     // ── openmason.texture ───────────────────────────────────────────────────
 
     public static final FileType OMT = FileType.of("omt", "Open Mason Texture", ".omt")
@@ -69,6 +76,6 @@ public final class BuiltinFileTypes {
 
     /** Every built-in type, in the order the built-in plugins register them. */
     public static List<FileType> all() {
-        return List.of(OMO, OMSC, OMP, PNG, OMT, OMANIM, OMUI, SBUI);
+        return List.of(OMO, OMSC, OMP, PNG, GLTF, OBJ, OMT, OMANIM, OMUI, SBUI);
     }
 }

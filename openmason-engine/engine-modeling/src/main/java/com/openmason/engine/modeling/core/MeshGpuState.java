@@ -10,16 +10,19 @@ public final class MeshGpuState implements IMeshGpuSync {
     private boolean positionsDirty = true;
     private boolean uvsDirty = true;
     private boolean indicesDirty = true;
+    private boolean normalsDirty = true;
 
     @Override
     public void positionsChanged() {
         positionsDirty = true;
+        normalsDirty = true;
     }
 
     @Override
     public void verticesChanged() {
         positionsDirty = true;
         uvsDirty = true;
+        normalsDirty = true;
     }
 
     @Override
@@ -27,6 +30,12 @@ public final class MeshGpuState implements IMeshGpuSync {
         positionsDirty = true;
         uvsDirty = true;
         indicesDirty = true;
+        normalsDirty = true;
+    }
+
+    @Override
+    public void normalsChanged() {
+        normalsDirty = true;
     }
 
     /** Everything stale (a freshly created GPU mesh holds nothing). */
@@ -46,9 +55,14 @@ public final class MeshGpuState implements IMeshGpuSync {
         return indicesDirty;
     }
 
+    /** Corner normals must be recomputed (positions, topology or shading changed). */
+    public boolean normalsDirty() {
+        return normalsDirty;
+    }
+
     /** True when nothing needs uploading. */
     public boolean isClean() {
-        return !positionsDirty && !uvsDirty && !indicesDirty;
+        return !positionsDirty && !uvsDirty && !indicesDirty && !normalsDirty;
     }
 
     /** Called once the GPU copy holds the current arrays. */
@@ -56,5 +70,6 @@ public final class MeshGpuState implements IMeshGpuSync {
         positionsDirty = false;
         uvsDirty = false;
         indicesDirty = false;
+        normalsDirty = false;
     }
 }

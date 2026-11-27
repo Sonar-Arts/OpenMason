@@ -1,5 +1,5 @@
 // Model import, WRITER half (OpenMason #173): an omformat::import::Scene (glTF 2.0 / OBJ, parsed by libomformat)
-// converted to an OMO 1.9 document + OMANIM 1.2 clips. The conversion rules are documented in
+// converted to an OMO 1.9 document + OMANIM 1.2 clips (1.3 with morph weight tracks, #171). The conversion rules are documented in
 // cenda/model_import.h; this file implements them. No exception leaves the co_import_* entry points.
 #include "model_internal.hpp"
 #include "cenda/model_import.h"
@@ -543,6 +543,8 @@ private:
     void bake_mesh_node(int node, PartB& part, int rigid_bone);
     void build_doc();
     void build_animations();
+    void weights_channel(const std::string& clip_name, const imp::AnimSampler& smp, int node_index,
+                         std::vector<oa::Curve>& out);
     std::string unique_name(const std::string& want, const std::string& fallback);
     void warn(std::string w) { warnings.push_back(std::move(w)); }
     int nearest_bone(int node) const;
@@ -1288,6 +1290,67 @@ void sample_channel(const imp::AnimSampler& s, double t, bool is_rotation, doubl
     finish();
 }
 
+// One glTF `weights` channel (#171): the node's mesh's targets, by the morph names bake_mesh_node gave them, become
+// OMANIM 1.3 morph tracks with the sampler's own keys (LINEAR / STEP / CUBICSPLINE -> LINEAR / STEP / CUBIC; glTF
+// cubic tangents are per second like OMANIM's, so the curve is the same). Constant runs collapse (exact).
+void Converter::weights_channel(const std::string& clip_name, const imp::AnimSampler& smp, int node_index,
+                                std::vector<oa::Curve>& out) {
+    const imp::Node& nd = node(node_index);
+    if (nd.mesh < 0 || sz(nd.mesh) >= s_.meshes.size()) {
+        warn("animation '" + clip_name + "': weights of node '" + nd.name + "' skipped (the node has no mesh)");
+        return;
+    }
+    const imp::Mesh& mesh = s_.meshes[sz(nd.mesh)];
+    const std::size_t comps = sz(smp.components);
+    const bool cubic = smp.interpolation == imp::Interpolation::CubicSpline;
+    const std::size_t stride = comps * (cubic ? 3 : 1);
+    const std::size_t n = smp.input.size();
+    if (comps == 0 || n == 0 || smp.output.size() < n * stride) {
+        warn("animation '" + clip_name + "': weights of node '" + nd.name + "' skipped (malformed sampler)");
+        return;
+    }
+    for (std::size_t t = 0; t < comps; ++t) {
+        const std::string mname = t < mesh.target_names.size() && !mesh.target_names[t].empty()
+                                      ? mesh.target_names[t] : "Key " + std::to_string(t + 1);
+        if (morph_params_.count(mname) == 0) {
+            warn("animation '" + clip_name + "': weights of morph '" + mname + "' skipped (no such morph imported)");
+            continue;
+        }
+        if (std::any_of(out.begin(), out.end(), [&](const oa::Curve& c) { return c.name == mname; })) {
+            warn("animation '" + clip_name + "': morph '" + mname + "' is animated twice; the first channel is kept");
+            continue;
+        }
+        oa::Curve cv;
+        cv.name = mname;
+        for (std::size_t k = 0; k < n; ++k) {
+            oa::CurveKey key;
+            key.time = smp.input[k];
+            key.value = smp.output[k * stride + (cubic ? comps : 0) + t];
+            if (cubic) {
+                key.interp = oa::CurveInterp::Cubic;
+                key.in_tangent = smp.output[k * stride + t];
+                key.out_tangent = smp.output[k * stride + 2 * comps + t];
+            } else {
+                key.interp = smp.interpolation == imp::Interpolation::Step ? oa::CurveInterp::Step : oa::CurveInterp::Linear;
+            }
+            cv.keys.push_back(key);
+        }
+        std::stable_sort(cv.keys.begin(), cv.keys.end(), [](const oa::CurveKey& a, const oa::CurveKey& b) { return a.time < b.time; });
+        if (!cubic && cv.keys.size() > 2) {  // exact key reduction: a key inside a constant run changes nothing
+            std::vector<oa::CurveKey> kept{cv.keys.front()};
+            for (std::size_t k = 1; k + 1 < cv.keys.size(); ++k) {
+                const bool same_before = cv.keys[k].value == cv.keys[k - 1].value;
+                const bool same_after = cv.keys[k].value == cv.keys[k + 1].value;
+                const bool redundant = smp.interpolation == imp::Interpolation::Step ? same_before : same_before && same_after;
+                if (!redundant) kept.push_back(cv.keys[k]);
+            }
+            kept.push_back(cv.keys.back());
+            cv.keys = std::move(kept);
+        }
+        out.push_back(std::move(cv));
+    }
+}
+
 void Converter::build_animations() {
     std::set<std::string> clip_names;
     for (std::size_t ai = 0; ai < s_.animations.size(); ++ai) {
@@ -1310,16 +1373,21 @@ void Converter::build_animations() {
         std::map<int, std::array<int, 3>> per_bone;
         bool warned_weights = false;
         std::set<int> warned_nodes;
+        std::vector<oa::Curve> morph_tracks;  // morph weight channels -> OMANIM 1.3 morph tracks (#171)
         for (const imp::AnimChannel& ch : anim.channels) {
             if (ch.sampler < 0 || sz(ch.sampler) >= anim.samplers.size() || ch.node < 0 ||
                 sz(ch.node) >= s_.nodes.size()) {
                 continue;
             }
             if (ch.path == imp::AnimPath::Weights) {
-                if (!warned_weights) {
-                    warn("animation '" + name + "': morph weight channels skipped (OMANIM has no morph tracks yet)");
-                    warned_weights = true;
+                if ((o_.flags & CO_IMPORT_MORPHS) == 0) {
+                    if (!warned_weights) {
+                        warn("animation '" + name + "': morph weight channels skipped (morphs not imported)");
+                        warned_weights = true;
+                    }
+                    continue;
                 }
+                weights_channel(name, anim.samplers[sz(ch.sampler)], ch.node, morph_tracks);
                 continue;
             }
             const int bone = bone_of_node_[sz(ch.node)];
@@ -1537,8 +1605,9 @@ void Converter::build_animations() {
             }
             clip.tracks.push_back(std::move(tr));
         }
-        if (clip.tracks.empty()) {
-            warn("animation '" + name + "': nothing to import (no joint channels)");
+        clip.morphs = std::move(morph_tracks);
+        if (clip.tracks.empty() && clip.morphs.empty()) {
+            warn("animation '" + name + "': nothing to import (no joint or morph weight channels)");
             continue;
         }
         clips.push_back({name, oa::write(clip)});

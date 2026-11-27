@@ -101,7 +101,7 @@ struct Rigged {
     int find(const char* n) const { return cr_rig_find(rig, n); }
 };
 
-Rigged make(const Body& b) {
+Rigged make(const Body& b, bool morph_channels = false) {
     Rigged r;
     r.bones = humanoid(b);
     const size_t n = r.bones.size();
@@ -135,6 +135,11 @@ Rigged make(const Body& b) {
     }
     r.rig = cr_rig_create(descs.data(), static_cast<int32_t>(n), names.data(), names.data());
     CHECK(r.rig != nullptr);
+    if (morph_channels) {  // #171: shape-key channels, set before anything poses the rig
+        const char* ch[2] = {"Smile", "Blink"};
+        const float defs[2] = {0.f, 0.1f};
+        CHECK(cr_rig_set_morph_channels(r.rig, 2, ch, defs) == CR_OK);
+    }
     r.chr = cc_char_create();
     CHECK(cc_char_set_skeleton(r.chr, r.rig) == CC_OK);
     cc_profile* humanoid_profile = cc_profile_builtin("humanoid");
@@ -282,7 +287,7 @@ void test_self_retarget_reproduces_the_pose() {
 struct Pair {
     Rigged src, dst;
     cc_retargeter* rt = nullptr;
-    Pair() {
+    explicit Pair(bool dst_morphs = false) {
         src = make(Body{});
         Body t;
         t.leg = 0.7;
@@ -290,7 +295,7 @@ struct Pair {
         t.spines = 3;
         t.faces_pz = true;
         t.twist = true;
-        dst = make(t);
+        dst = make(t, dst_morphs);
         CHECK(cc_char_set_string(dst.chr, CC_FIELD_FACING, "+z") == CC_OK);
         rt = cc_retarget_create(src.rig, src.chr, dst.rig, dst.chr);
         CHECK(rt != nullptr);
@@ -515,6 +520,47 @@ void test_bake_matches_runtime() {
     cm_clip_destroy(src);
 }
 
+// Morph (shape key) tracks pass through retargeting by name (#171): the bake copies them unchanged, and a runtime
+// retargeted slot drives the target's morph channels exactly like the baked clip.
+void test_morph_tracks_pass_through() {
+    Pair p(true);
+    cm_clip* src = source_clip(p.src);
+    const cm_curve_key smile[2] = {{0.f, 0.f, 0.f, 0.f, CM_INTERP_LINEAR}, {1.f, 1.f, 0.f, 0.f, CM_INTERP_LINEAR}};
+    const cm_curve_key other[1] = {{0.f, 0.7f, 0.f, 0.f, CM_INTERP_LINEAR}};
+    CHECK(cm_clip_morph_set(src, "smile", smile, 2) == 0);   // case-insensitive on the target
+    CHECK(cm_clip_morph_set(src, "Frown", other, 1) == 1);   // no such channel on the target: ignored
+    int32_t rc = -1;
+    cm_clip* baked = cc_retarget_bake(p.rt, src, 30.f, &rc);
+    CHECK(baked != nullptr && cm_clip_morph_count(baked) == 2);
+    if (baked == nullptr) {
+        cm_clip_destroy(src);
+        return;
+    }
+    cm_curve_key k[2];
+    CHECK(cm_clip_morph_keys(baked, cm_clip_morph_find(baked, "smile"), k, 2) == 2 && std::memcmp(k, smile, sizeof smile) == 0);
+    const std::string json = R"({"format": "omanimgraph", "version": "1.0", "slots": ["walk"], "root": "walk",
+                                 "nodes": [{"id": "walk", "type": "clip", "slot": "walk"}]})";
+    int32_t grc = 0;
+    cg_graph* g = cg_graph_read(json.data(), static_cast<int64_t>(json.size()), &grc);
+    cg_instance* live = cg_instance_create(g, p.dst.rig, p.dst.chr, nullptr);
+    cg_instance* bake = cg_instance_create(g, p.dst.rig, p.dst.chr, nullptr);
+    CHECK(cg_instance_bind_slot_retarget(live, 0, src, p.rt, nullptr) == CG_OK);
+    CHECK(cg_instance_bind_slot(bake, 0, baked, nullptr) == CG_OK);
+    float wa[2], wb[2];
+    for (int step = 0; step < 20; ++step) {
+        CHECK(cg_instance_evaluate(live, 1.f / 30.f, nullptr, 0, nullptr, nullptr, nullptr, nullptr) == CG_OK);
+        CHECK(cg_instance_evaluate(bake, 1.f / 30.f, nullptr, 0, nullptr, nullptr, nullptr, nullptr) == CG_OK);
+        CHECK(cg_instance_morph_weights(live, CG_VIEW_BODY, wa, 2) == 2 && cg_instance_morph_weights(bake, CG_VIEW_BODY, wb, 2) == 2);
+        CHECK(std::memcmp(wa, wb, sizeof wa) == 0 && wa[1] == 0.1f);  // Blink keeps its default
+        CHECK(std::fabs(wa[0] - static_cast<float>(step + 1) / 30.f) < 1e-6f);
+    }
+    cg_instance_destroy(live);
+    cg_instance_destroy(bake);
+    cg_graph_destroy(g);
+    cm_clip_destroy(baked);
+    cm_clip_destroy(src);
+}
+
 void test_determinism() {
     Pair a, b;
     std::mt19937 rng(160);
@@ -536,6 +582,7 @@ int main() {
     test_different_proportions();
     test_op_stack();
     test_bake_matches_runtime();
+    test_morph_tracks_pass_through();
     test_determinism();
     if (failures != 0) {
         std::fprintf(stderr, "retarget: %d check(s) failed\n", failures);

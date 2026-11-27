@@ -207,7 +207,9 @@ Mask parse_mask(yyjson_val* m, std::size_t i) {
         MaskEntry me;
         me.role = str_field(e, "role", ew, false);
         me.joint = str_field(e, "joint", ew, false);
-        if (!t_draft && (me.role.empty() == me.joint.empty())) fail(ew + ": give exactly one of \"role\" or \"joint\"");
+        me.morph = str_field(e, "morph", ew, false);
+        const int given = (me.role.empty() ? 0 : 1) + (me.joint.empty() ? 0 : 1) + (me.morph.empty() ? 0 : 1);
+        if (!t_draft && given != 1) fail(ew + ": give exactly one of \"role\", \"joint\" or \"morph\"");
         me.weight = static_cast<float>(num_field(e, "weight", ew, 1.0));
         if (me.weight < 0.f || me.weight > 1.f) fail(ew + ": weight must be in [0, 1]");
         me.branch = bool_field(e, "branch", ew, true);
@@ -783,6 +785,14 @@ void validate(const Graph& g) {
     auto mask_of = [&](const std::string& name, const std::string& at) {
         if (!name.empty() && g.find_mask(name) < 0) fail(at + ": unknown mask " + name);
     };
+    for (std::size_t i = 0; i < g.morph_drives.size(); ++i) {  // 1.2 (#171)
+        const MorphDrive& md = g.morph_drives[i];
+        const std::string at = "morphs[" + std::to_string(i) + "]";
+        if (md.morph.empty()) fail(at + ": missing morph");
+        param_of(md.param, at, {ParamType::Float});
+        if (!md.weight_param.empty()) param_of(md.weight_param, at, {ParamType::Float});
+        if (!(std::isfinite(md.weight) && md.weight >= 0.f)) fail(at + ": weight must be >= 0");
+    }
 
     std::unordered_map<std::string, std::vector<std::string>> uses;  // node id -> the nodes it uses
     std::unordered_set<std::string> slot_names;
@@ -970,10 +980,23 @@ Graph read_impl(std::string_view text, bool draft) {
     if (yyjson_val* ms = arr_field(root, "modifiers", "graph", false)) {
         for (std::size_t i = 0, n = yyjson_arr_size(ms); i < n; ++i) g.modifiers.push_back(parse_modifier(yyjson_arr_get(ms, i), i));
     }
+    if (yyjson_val* ds = arr_field(root, "morphs", "graph", false)) {
+        for (std::size_t i = 0, n = yyjson_arr_size(ds); i < n; ++i) {
+            yyjson_val* e = yyjson_arr_get(ds, i);
+            const std::string at = "morphs[" + std::to_string(i) + "]";
+            if (!yyjson_is_obj(e)) fail(at + " must be an object");
+            MorphDrive md;
+            md.morph = str_field(e, "morph", at, true);
+            md.param = str_field(e, "param", at, true);
+            md.weight = static_cast<float>(num_field(e, "weight", at, 1.0));
+            md.weight_param = str_field(e, "weightParam", at, false);
+            g.morph_drives.push_back(std::move(md));
+        }
+    }
 
     static const std::unordered_set<std::string> known = {"format", "version", "name", "description", "profile",
                                                           "notifyThreshold", "parameters", "slots", "masks", "root",
-                                                          "nodes", "targets", "colliders", "modifiers"};
+                                                          "nodes", "targets", "colliders", "modifiers", "morphs"};
     std::unordered_set<std::string> keys;
     yyjson_obj_iter it = yyjson_obj_iter_with(root);
     yyjson_val* key;
@@ -998,7 +1021,12 @@ std::string write_impl(const Graph& g) {
     yyjson_mut_val* root = yyjson_mut_obj(d);
     yyjson_mut_doc_set_root(d, root);
     put(d, root, "format", yyjson_mut_str(d, "omanimgraph"));
-    put(d, root, "version", mstr(d, std::to_string(kVersionMajor) + "." + std::to_string(kVersionMinor)));
+    // 1.2 only when a 1.2 feature is used (#171), so a 1.1 graph writes byte for byte what it did.
+    bool uses_1_2 = !g.morph_drives.empty();
+    for (const Mask& m : g.masks) {
+        for (const MaskEntry& e : m.entries) uses_1_2 |= !e.morph.empty();
+    }
+    put(d, root, "version", mstr(d, std::to_string(kVersionMajor) + (uses_1_2 ? ".2" : ".1")));
     put_str(d, root, "name", g.name);
     put_str(d, root, "description", g.description);
     put_str(d, root, "profile", g.profile);
@@ -1047,6 +1075,7 @@ std::string write_impl(const Graph& g) {
                 yyjson_mut_val* eo = yyjson_mut_obj(d);
                 put_str(d, eo, "role", e.role);
                 put_str(d, eo, "joint", e.joint);
+                put_str(d, eo, "morph", e.morph);
                 if (e.weight != 1.f) put(d, eo, "weight", yyjson_mut_float(d, e.weight));
                 if (!e.branch) put(d, eo, "branch", yyjson_mut_bool(d, false));
                 if (e.depth != 0) put(d, eo, "depth", yyjson_mut_sint(d, e.depth));
@@ -1345,6 +1374,18 @@ std::string write_impl(const Graph& g) {
             yyjson_mut_arr_append(ms, o);
         }
         put(d, root, "modifiers", ms);
+    }
+    if (!g.morph_drives.empty()) {
+        yyjson_mut_val* ds = yyjson_mut_arr(d);
+        for (const MorphDrive& md : g.morph_drives) {
+            yyjson_mut_val* o = yyjson_mut_obj(d);
+            put(d, o, "morph", mstr(d, md.morph));
+            put(d, o, "param", mstr(d, md.param));
+            if (md.weight != 1.f) put(d, o, "weight", yyjson_mut_float(d, md.weight));
+            put_str(d, o, "weightParam", md.weight_param);
+            yyjson_mut_arr_append(ds, o);
+        }
+        put(d, root, "morphs", ds);
     }
 
     for (const UnknownSection& u : g.unknown_sections) {

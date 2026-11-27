@@ -14,4 +14,7 @@ scale_faces
 select_part
 set_part_geometry
 set_part_visibility
+shading_get
+shading_set
+shading_sharp
 subdivide_edge

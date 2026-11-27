@@ -92,7 +92,7 @@ std::string upper(std::string s) {
 
 constexpr const char* kKnownKeys[] = {"version", "name", "fps", "duration", "loop", "modelRef", "tracks",
                                       "requiredParts", "layer", "notifies", "curves", "syncMarkers",
-                                      "rootMotion", "additive"};
+                                      "rootMotion", "additive", "morphs"};
 
 bool known(std::string_view key) {
     return std::any_of(std::begin(kKnownKeys), std::end(kKnownKeys), [&](const char* k) { return key == k; });
@@ -165,6 +165,38 @@ void read_layer(yyjson_val* l, Layer& layer) {
     }
 }
 
+// `curves` (1.2) and `morphs` (1.3, #171): named scalar key lists.
+void read_curve_list(yyjson_val* root, const char* section, const char* what, std::vector<Curve>& out) {
+    if (yyjson_val* curves = opt_array(root, section)) {
+        std::unordered_set<std::string> names;
+        for (std::size_t i = 0, n = yyjson_arr_size(curves); i < n; ++i) {
+            yyjson_val* e = yyjson_arr_get(curves, i);
+            const std::string at = std::string(section) + "[" + std::to_string(i) + "]";
+            if (!yyjson_is_obj(e)) fail(at + " must be an object");
+            Curve curve;
+            curve.name = opt_str(e, "name", "");
+            if (curve.name.empty()) fail(at + ": missing name");
+            if (!names.insert(curve.name).second) fail(std::string("duplicate ") + what + " " + curve.name);
+            if (yyjson_val* keys = opt_array(e, "keys")) {
+                for (std::size_t k = 0, m = yyjson_arr_size(keys); k < m; ++k) {
+                    yyjson_val* kv = yyjson_arr_get(keys, k);
+                    const std::string kat = at + ".keys[" + std::to_string(k) + "]";
+                    if (!yyjson_is_obj(kv)) fail(kat + " must be an object");
+                    CurveKey key;
+                    key.time = opt_num(kv, "time", 0.f, kat);
+                    key.value = opt_num(kv, "value", 0.f, kat);
+                    key.in_tangent = opt_num(kv, "inTangent", 0.f, kat);
+                    key.out_tangent = opt_num(kv, "outTangent", 0.f, kat);
+                    key.interp = interp_from(opt_str(kv, "interp", ""), kat);
+                    curve.keys.push_back(key);
+                }
+            }
+            std::stable_sort(curve.keys.begin(), curve.keys.end(), [](const CurveKey& a, const CurveKey& b) { return a.time < b.time; });
+            out.push_back(std::move(curve));
+        }
+    }
+}
+
 void read_extensions(yyjson_val* root, Clip& c) {
     if (yyjson_val* notifies = opt_array(root, "notifies")) {
         for (std::size_t i = 0, n = yyjson_arr_size(notifies); i < n; ++i) {
@@ -185,34 +217,8 @@ void read_extensions(yyjson_val* root, Clip& c) {
         }
         std::stable_sort(c.notifies.begin(), c.notifies.end(), [](const Notify& a, const Notify& b) { return a.time < b.time; });
     }
-    if (yyjson_val* curves = opt_array(root, "curves")) {
-        std::unordered_set<std::string> names;
-        for (std::size_t i = 0, n = yyjson_arr_size(curves); i < n; ++i) {
-            yyjson_val* e = yyjson_arr_get(curves, i);
-            const std::string at = "curves[" + std::to_string(i) + "]";
-            if (!yyjson_is_obj(e)) fail(at + " must be an object");
-            Curve curve;
-            curve.name = opt_str(e, "name", "");
-            if (curve.name.empty()) fail(at + ": missing name");
-            if (!names.insert(curve.name).second) fail("duplicate curve " + curve.name);
-            if (yyjson_val* keys = opt_array(e, "keys")) {
-                for (std::size_t k = 0, m = yyjson_arr_size(keys); k < m; ++k) {
-                    yyjson_val* kv = yyjson_arr_get(keys, k);
-                    const std::string kat = at + ".keys[" + std::to_string(k) + "]";
-                    if (!yyjson_is_obj(kv)) fail(kat + " must be an object");
-                    CurveKey key;
-                    key.time = opt_num(kv, "time", 0.f, kat);
-                    key.value = opt_num(kv, "value", 0.f, kat);
-                    key.in_tangent = opt_num(kv, "inTangent", 0.f, kat);
-                    key.out_tangent = opt_num(kv, "outTangent", 0.f, kat);
-                    key.interp = interp_from(opt_str(kv, "interp", ""), kat);
-                    curve.keys.push_back(key);
-                }
-            }
-            std::stable_sort(curve.keys.begin(), curve.keys.end(), [](const CurveKey& a, const CurveKey& b) { return a.time < b.time; });
-            c.curves.push_back(std::move(curve));
-        }
-    }
+    read_curve_list(root, "curves", "curve", c.curves);
+    read_curve_list(root, "morphs", "morph track", c.morphs);
     if (yyjson_val* markers = opt_array(root, "syncMarkers")) {
         for (std::size_t i = 0, n = yyjson_arr_size(markers); i < n; ++i) {
             yyjson_val* e = yyjson_arr_get(markers, i);
@@ -293,6 +299,32 @@ struct Writer {
         return {out.get(), len};
     }
 };
+
+// `curves` / `morphs`: named scalar key lists.
+// morph_tangents (1.3 morph tracks): a key's tangents are written whenever they are non-zero (a CUBIC segment reads
+// the NEXT key's in-tangent, whatever that key's own interp), so every value comes back; curves keep the 1.2 rule.
+yyjson_mut_val* curve_list(Writer& w, const std::vector<Curve>& curves, bool morph_tangents) {
+    yyjson_mut_val* a = w.arr();
+    for (const Curve& cv : curves) {
+        yyjson_mut_val* o = w.obj();
+        w.put(o, "name", w.s(cv.name));
+        yyjson_mut_val* keys = w.arr();
+        for (const CurveKey& k : cv.keys) {
+            yyjson_mut_val* ko = w.obj();
+            w.put(ko, "time", w.f(k.time));
+            w.put(ko, "value", w.f(k.value));
+            if (k.interp != CurveInterp::Linear) w.put(ko, "interp", yyjson_mut_str(w.d(), interp_name(k.interp)));
+            if (k.interp == CurveInterp::Cubic || (morph_tangents && (k.in_tangent != 0.f || k.out_tangent != 0.f))) {
+                w.put(ko, "inTangent", w.f(k.in_tangent));
+                w.put(ko, "outTangent", w.f(k.out_tangent));
+            }
+            yyjson_mut_arr_append(keys, ko);
+        }
+        w.put(o, "keys", keys);
+        yyjson_mut_arr_append(a, o);
+    }
+    return a;
+}
 
 std::string sanitize(const std::string& id) {
     std::string out;
@@ -417,7 +449,7 @@ std::vector<std::byte> write(const Clip& c) {
 
     Writer w;
     yyjson_mut_val* root = w.obj();
-    w.put(root, "version", yyjson_mut_str(w.d(), kWriteVersion));
+    w.put(root, "version", yyjson_mut_str(w.d(), c.morphs.empty() ? kWriteVersion : kMorphWriteVersion));
     w.put(root, "name", w.s(c.name));
     w.put(root, "fps", w.f(c.fps));
     w.put(root, "duration", w.f(c.duration));
@@ -461,28 +493,7 @@ std::vector<std::byte> write(const Clip& c) {
         }
         w.put(root, "notifies", a);
     }
-    if (!c.curves.empty()) {
-        yyjson_mut_val* a = w.arr();
-        for (const Curve& cv : c.curves) {
-            yyjson_mut_val* o = w.obj();
-            w.put(o, "name", w.s(cv.name));
-            yyjson_mut_val* keys = w.arr();
-            for (const CurveKey& k : cv.keys) {
-                yyjson_mut_val* ko = w.obj();
-                w.put(ko, "time", w.f(k.time));
-                w.put(ko, "value", w.f(k.value));
-                if (k.interp != CurveInterp::Linear) w.put(ko, "interp", yyjson_mut_str(w.d(), interp_name(k.interp)));
-                if (k.interp == CurveInterp::Cubic) {
-                    w.put(ko, "inTangent", w.f(k.in_tangent));
-                    w.put(ko, "outTangent", w.f(k.out_tangent));
-                }
-                yyjson_mut_arr_append(keys, ko);
-            }
-            w.put(o, "keys", keys);
-            yyjson_mut_arr_append(a, o);
-        }
-        w.put(root, "curves", a);
-    }
+    if (!c.curves.empty()) w.put(root, "curves", curve_list(w, c.curves, false));
     if (!c.markers.empty()) {
         yyjson_mut_val* a = w.arr();
         for (const SyncMarker& m : c.markers) {
@@ -512,6 +523,7 @@ std::vector<std::byte> write(const Clip& c) {
         w.put(o, "space", yyjson_mut_str(w.d(), c.additive.mesh_space ? "mesh" : "local"));
         w.put(root, "additive", o);
     }
+    if (!c.morphs.empty()) w.put(root, "morphs", curve_list(w, c.morphs, true));
     for (const UnknownSection& u : c.unknown_sections) {
         if (known(u.key)) fail("unknown section \"" + u.key + "\" collides with a known key");
         w.put_key(root, u.key, w.parsed(u.json, "section " + u.key));

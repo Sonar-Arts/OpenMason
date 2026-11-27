@@ -37,6 +37,8 @@ struct Binding {
     uint64_t clip_serial = 0;
     std::vector<int32_t> track;   // per joint, -1 = none
     std::vector<uint8_t> masked;  // per joint
+    std::vector<int32_t> morph_track;   // per rig morph channel (#171), -1 = none
+    std::vector<uint8_t> morph_masked;  // per rig morph channel
 };
 
 // One joint's local pose (the 9 floats of cr_rig_local_pose).
@@ -50,6 +52,8 @@ struct Pose {
 struct PoseBuf {
     std::vector<Pose> v;
     std::vector<uint8_t> driven;
+    std::vector<float> mw;          // morph weight per rig morph channel (#171; empty for a rig without)
+    std::vector<uint8_t> mdriven;   // per morph channel
 };
 
 // Float sampling helpers with the retired Java AnimSampler / AnimLayering operation order (rig.cpp).
@@ -70,9 +74,17 @@ void pose_rest(const cr_rig& rig, PoseBuf& dst);
 // scratch: a binding the call may overwrite.
 void pose_sample(const cr_rig& rig, const cr_clip& clip, float elapsed, bool clip_mask, PoseBuf& dst,
                  Binding& scratch);
-// Override layer: dst = lerp(dst or rest, src, min(weight·mask_j, 1)) on joints src drives.
+// Morph weights only (#171): dst's channels reset to their defaults, then the clip's morph tracks; joints untouched.
+void pose_sample_morphs(const cr_rig& rig, const cr_clip& clip, float elapsed, bool clip_mask, PoseBuf& dst,
+                        Binding& scratch);
+// Override layer: dst = lerp(dst or rest, src, min(weight·mask_j, 1)) on joints src drives; morph channels the same
+// with morph_mask (#171; null = weight alone).
 void pose_layer_override(const cr_rig& rig, PoseBuf& dst, const PoseBuf& src, float weight, const float* mask,
-                         uint32_t flags);
+                         uint32_t flags, const float* morph_mask = nullptr);
+// A morph track's value at a time (morph.cpp; cm_clip_curve_sample's math).
+float sample_morph_track(const cr_clip& clip, int32_t track, float t);
+// Copies a pose (joints + morph weights) without reallocating once sizes match.
+void copy_pose(PoseBuf& dst, const PoseBuf& src);
 
 // Runs a pose-modifier stack on a pose (modifiers.cpp).
 int32_t modstack_apply(cr_modstack& stack, PoseBuf& pose, float dt);
@@ -98,6 +110,13 @@ struct cr_rig {
     std::unordered_map<std::string, int32_t> by_name;
     std::unordered_map<std::string, int32_t> by_name_lower;
     uint32_t flags = 0;
+    // Morph channels (#171): names, lower-case names, defaults, lookups. Frozen once anything sized by them exists.
+    std::vector<std::string> morph_names;
+    std::vector<std::string> morph_lower;
+    std::vector<float> morph_defaults;
+    std::unordered_map<std::string, int32_t> morph_by_name;
+    std::unordered_map<std::string, int32_t> morph_by_lower;
+    mutable std::atomic<bool> morph_frozen{false};
 
     // Binding cache, most recently used first, bounded.
     mutable std::mutex binding_mutex;
@@ -116,4 +135,11 @@ struct cr_clip {
     std::unordered_map<std::string, int32_t> track_by_id;
     std::unordered_map<std::string, int32_t> track_by_name;
     std::unordered_map<std::string, int32_t> track_by_name_lower;
+    // Morph tracks (#171): keys morph_keys[first .. first+count) per track (cr_track_desc reused), by time.
+    std::vector<cr_track_desc> morph_tracks;
+    std::vector<cr_morph_key> morph_keys;
+    std::vector<std::string> morph_names;
+    std::unordered_map<std::string, int32_t> morph_by_name;
+    std::unordered_map<std::string, int32_t> morph_by_lower;
+    mutable std::atomic<bool> bound{false};  // set by the first binding: morph tracks are fixed from then on
 };

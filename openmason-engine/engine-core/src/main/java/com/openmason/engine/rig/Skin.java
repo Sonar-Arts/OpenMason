@@ -449,6 +449,37 @@ public final class Skin implements AutoCloseable {
         }
     }
 
+    /**
+     * Morph, then skin ({@code cr_skin_deform_morphed}, OpenMason #171): {@code morphs} applied with {@code weights}
+     * (clamped; null = 0 each) to the bind-pose {@code positions}, then skinned like {@link #deform}. {@code morphs}
+     * null = {@link #deform}. The CPU twin of the GPU path (picking, bounds, tests).
+     */
+    public static float[] deformMorphed(Skin skin, int[] partJointOfVertex, RigMorphs morphs, float[] weights,
+                                        float[] positions, JointPalette palette, float[] out) {
+        int n = positions.length / 3;
+        float[] result = out != null && out.length >= positions.length ? out : new float[positions.length];
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment p = arena.allocateFrom(ValueLayout.JAVA_FLOAT, positions);
+            MemorySegment parts = partJointOfVertex == null ? MemorySegment.NULL
+                : arena.allocateFrom(ValueLayout.JAVA_INT, partJointOfVertex);
+            MemorySegment w = weights == null || weights.length == 0 ? MemorySegment.NULL
+                : arena.allocateFrom(ValueLayout.JAVA_FLOAT, weights);
+            MemorySegment o = arena.allocate(ValueLayout.JAVA_FLOAT, Math.max(1, positions.length));
+            MemorySegment skinSeg = skin == null ? MemorySegment.NULL : skin.handle();
+            MemorySegment morphSeg = morphs == null ? MemorySegment.NULL : morphs.handle();
+            int wc = weights == null ? 0 : weights.length;
+            int rc = (int) CendaRig.SKIN_DEFORM_MORPHED.invokeExact(skinSeg, parts, morphSeg, w, wc, p, n,
+                palette.skinSegment(), palette.count(), o);
+            if (rc != CendaRig.OK) throw new IllegalArgumentException("cr_skin_deform_morphed: " + CendaRig.lastError());
+            MemorySegment.copy(o, ValueLayout.JAVA_FLOAT, 0, result, 0, positions.length);
+            return result;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+    }
+
     @Override
     public void close() {
         cleanable.clean();

@@ -54,11 +54,12 @@ public final class ModelNormalGlsl {
                 return (u_hasNormals && !(aNormalOct.x == -32768 && aNormalOct.y == -32768)) ? 1.0 : 0.0;
             }
 
-            // The corner normal in world space: skinned by the blended matrix, then the normal matrix of `model`
-            // (inverse transpose: part matrices may scale non-uniformly). Zero for a flat corner.
+            // The corner normal in world space: morphed (shape keys, before skinning), skinned by the blended matrix,
+            // then the normal matrix of `model` (inverse transpose: part matrices may scale non-uniformly). Zero for a
+            // flat corner.
             vec3 modelWorldNormal(mat4 model, mat4 skin) {
                 if (modelNormalSmooth() < 0.5) return vec3(0.0);
-                vec3 n = skinNormal(skin, octDecode(aNormalOct));
+                vec3 n = skinNormal(skin, morphNormal(octDecode(aNormalOct)));
                 return transpose(inverse(mat3(model))) * n;
             }
             """;

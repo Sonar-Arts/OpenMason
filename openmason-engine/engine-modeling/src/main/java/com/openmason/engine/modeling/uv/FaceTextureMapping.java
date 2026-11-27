@@ -15,13 +15,20 @@ package com.openmason.engine.modeling.uv;
  *                    texture if face geometry changes. Tools that explicitly size a
  *                    texture (MCP resize/create) set this to false so the user's
  *                    chosen size is preserved across subsequent geometry edits.
+ * @param authoredUVs When true, the face's AUTHORED corner UVs (imported or loaded UVs that are not the region
+ *                    projection, e.g. a glTF model's UV layout) are drawn as they are instead of being projected
+ *                    into {@code uvRegion}. Set when a model is loaded ({@code EditableModel.adoptAuthoredUVs});
+ *                    any edit that makes a new mapping (another material, region or rotation) clears it, so
+ *                    the face is projected into its new region exactly as before. Not persisted: a file stores
+ *                    the drawn UVs, and the next load decides again.
  */
 public record FaceTextureMapping(
     int faceId,
     int materialId,
     UVRegion uvRegion,
     UVRotation uvRotation,
-    boolean autoResize
+    boolean autoResize,
+    boolean authoredUVs
 ) {
 
     /**
@@ -29,14 +36,30 @@ public record FaceTextureMapping(
      * preserving prior behavior at call sites that predate the flag.
      */
     public FaceTextureMapping(int faceId, int materialId, UVRegion uvRegion, UVRotation uvRotation) {
-        this(faceId, materialId, uvRegion, uvRotation, true);
+        this(faceId, materialId, uvRegion, uvRotation, true, false);
+    }
+
+    /** A mapping whose face is projected into its region (no authored UVs drawn). */
+    public FaceTextureMapping(int faceId, int materialId, UVRegion uvRegion, UVRotation uvRotation,
+                              boolean autoResize) {
+        this(faceId, materialId, uvRegion, uvRotation, autoResize, false);
     }
 
     /**
      * @return copy of this mapping with the {@code autoResize} flag set to the given value
      */
     public FaceTextureMapping withAutoResize(boolean autoResize) {
-        return new FaceTextureMapping(faceId, materialId, uvRegion, uvRotation, autoResize);
+        return new FaceTextureMapping(faceId, materialId, uvRegion, uvRotation, autoResize, authoredUVs);
+    }
+
+    /** @return copy of this mapping with the {@code authoredUVs} flag set to the given value */
+    public FaceTextureMapping withAuthoredUVs(boolean authoredUVs) {
+        return new FaceTextureMapping(faceId, materialId, uvRegion, uvRotation, autoResize, authoredUVs);
+    }
+
+    /** @return copy of this mapping for another face id (keeps every other field) */
+    public FaceTextureMapping withFaceId(int newFaceId) {
+        return new FaceTextureMapping(newFaceId, materialId, uvRegion, uvRotation, autoResize, authoredUVs);
     }
 
     /** Full texture region covering the entire 0..1 UV space. */

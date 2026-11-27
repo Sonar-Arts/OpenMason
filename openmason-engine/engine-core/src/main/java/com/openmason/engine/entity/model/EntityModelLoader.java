@@ -341,6 +341,7 @@ public final class EntityModelLoader {
         // A vertex is bound to ONE joint; a vertex two parts both index (none of the shipped models
         // has one) is duplicated so each part keeps moving its own copy, as the per-part draw did.
         // Per-vertex data (normals) follows the copies.
+        int authoredVertexCount = vertices.length / 3;
         SplitMesh split = splitSharedVertices(parts, vertices, texCoords, indices, normals);
         vertices = split.vertices();
         texCoords = split.texCoords();
@@ -363,11 +364,123 @@ public final class EntityModelLoader {
         for (int i = 0; i < parts.size() && i < omo.parts().size(); i++) {
             partVertexStart[i] = omo.parts().get(i).vertexStart();
         }
+        // Morph targets (OMO 1.9 shape keys, OpenMason #171): part-local rows over the authored soup, then through
+        // the same split as every other per-vertex array (a copy takes its source's rows); they become the rig's
+        // morph channels when its native rig is built, before anything poses it.
+        com.openmason.engine.rig.RigMorphs morphs = morphTargets(omo, authoredVertexCount, split.source(),
+                vertices.length / 3);
         RigModel rig = RigModel.build(EntityGeometry.partSpecs(parts), omo.bones(), omo.skin(),
-                partVertexStart, partJointOfVertex);
+                partVertexStart, partJointOfVertex, morphs);
+
+        // Vertex groups (OMO 1.9, OpenMason #172): the mask plan over the split mesh, keyed by draw batch; its
+        // reordered index buffer replaces the authored one (triangles stay inside their batch, faces keep their
+        // ranges). No groups: the indices are exactly as authored.
+        com.openmason.engine.format.omo.MaskPlan maskPlan = maskPlan(omo, parts, indices, vertices.length / 3,
+                split.source(), authoredVertexCount);
+        if (maskPlan != null) indices = maskPlan.indices();
 
         return new EntityGeometry(vertices, texCoords, indices, parts, materials,
-                computeRestMinY(vertices, indices), attachmentPoints, rig, normals);
+                computeRestMinY(vertices, indices), attachmentPoints, rig, normals, maskPlan);
+    }
+
+    /** Soup range of each authored part (vertexStart, vertexCount) by part id, in {@code omo.parts()} order. */
+    private static List<String> partIdsOf(OMOReader.ReadResult omo) {
+        List<String> ids = new ArrayList<>(omo.parts().size());
+        for (OMOFormat.PartEntry pe : omo.parts()) ids.add(pe.id());
+        return ids;
+    }
+
+    /**
+     * The model's morph targets over its (split) soup, or null when it has none. Package-visible for tests.
+     */
+    static com.openmason.engine.rig.RigMorphs morphTargets(OMOReader.ReadResult omo, int authoredVertexCount,
+                                                           int[] source, int vertexCount) {
+        if (omo.morphs().isEmpty() || omo.parts().isEmpty()) return null;
+        int[] first = new int[omo.parts().size()];
+        int[] count = new int[omo.parts().size()];
+        for (int p = 0; p < first.length; p++) {
+            first[p] = omo.parts().get(p).vertexStart();
+            count[p] = omo.parts().get(p).vertexCount();
+        }
+        com.openmason.engine.rig.RigMorphs authored = com.openmason.engine.rig.RigMorphs.fromParts(omo.morphs(),
+                partIdsOf(omo), first, count, authoredVertexCount);
+        if (authored == null || authored.targetCount() == 0) {
+            if (authored != null) authored.close();
+            return null;
+        }
+        if (source == null) return authored;
+        try (authored) {
+            return authored.remap(vertexCount, source);
+        }
+    }
+
+    /**
+     * The vertex-group mask plan over the (split) soup, or null without groups. Group rows are part-local
+     * ({@code soup = vertexStart + local}); a split copy belongs to every group its source does. Triangle key = its
+     * (part, material) draw batch, so {@code ModelDrawPlan} / host plans built from the faces stay valid on the
+     * reordered buffer; triangles no face draws get key -1.
+     */
+    static com.openmason.engine.format.omo.MaskPlan maskPlan(OMOReader.ReadResult omo, List<EntityPart> parts,
+                                                             int[] indices, int vertexCount, int[] source,
+                                                             int authoredVertexCount) {
+        if (omo.vertexGroups().isEmpty() || indices.length == 0) return null;
+        Map<String, Integer> partIndex = new HashMap<>();
+        for (int p = 0; p < omo.parts().size(); p++) partIndex.putIfAbsent(omo.parts().get(p).id(), p);
+        // Split copies of each authored vertex.
+        int[] copyHead = null, copyNext = null;
+        if (source != null) {
+            copyHead = new int[authoredVertexCount];
+            java.util.Arrays.fill(copyHead, -1);
+            copyNext = new int[vertexCount];
+            for (int v = vertexCount - 1; v >= authoredVertexCount; v--) {
+                copyNext[v] = copyHead[source[v]];
+                copyHead[source[v]] = v;
+            }
+        }
+        List<String> names = new ArrayList<>(omo.vertexGroups().size());
+        int[] groupRows = new int[omo.vertexGroups().size() + 1];
+        int[] rowVertices = new int[64];
+        float[] rowWeights = new float[64];
+        int rows = 0;
+        for (int g = 0; g < omo.vertexGroups().size(); g++) {
+            OMOFormat.VertexGroupData group = omo.vertexGroups().get(g);
+            names.add(group.name());
+            for (OMOFormat.GroupPart gp : group.parts()) {
+                Integer p = partIndex.get(gp.partId());
+                if (p == null) continue;
+                OMOFormat.PartEntry pe = omo.parts().get(p);
+                int[] local = gp.vertices();
+                float[] w = gp.weights();
+                for (int r = 0; r < local.length; r++) {
+                    if (local[r] < 0 || local[r] >= pe.vertexCount()) continue;
+                    int v = pe.vertexStart() + local[r];
+                    if (v < 0 || v >= authoredVertexCount) continue;
+                    for (int c = v; c >= 0; c = (c == v ? (copyHead == null ? -1 : copyHead[v]) : copyNext[c])) {
+                        if (rows == rowVertices.length) {
+                            rowVertices = java.util.Arrays.copyOf(rowVertices, rows * 2);
+                            rowWeights = java.util.Arrays.copyOf(rowWeights, rows * 2);
+                        }
+                        rowVertices[rows] = c;
+                        rowWeights[rows++] = w[r];
+                    }
+                }
+            }
+            groupRows[g + 1] = rows;
+        }
+        int triangles = indices.length / 3;
+        int[] keys = new int[triangles];
+        java.util.Arrays.fill(keys, -1);
+        Map<Long, Integer> batchKey = new HashMap<>();
+        for (int p = 0; p < parts.size(); p++) {
+            for (EntityFace f : parts.get(p).faces()) {
+                int key = batchKey.computeIfAbsent(((long) p << 32) | (f.materialId() & 0xFFFFFFFFL),
+                        k -> batchKey.size());
+                int end = Math.min(triangles, (f.indexStart() + f.indexCount()) / 3);
+                for (int t = Math.max(0, f.indexStart() / 3); t < end; t++) keys[t] = key;
+            }
+        }
+        return com.openmason.engine.format.omo.MaskPlan.create(indices, vertexCount, keys, names, groupRows,
+                java.util.Arrays.copyOf(rowVertices, rows), java.util.Arrays.copyOf(rowWeights, rows));
     }
 
     /**
@@ -423,11 +536,12 @@ public final class EntityModelLoader {
         return oct;
     }
 
-    private record SplitMesh(float[] vertices, float[] texCoords, int[] indices, short[] normals) {}
+    /** {@code source[v]} = the authored vertex new vertex v copies (null = nothing was split: identity). */
+    private record SplitMesh(float[] vertices, float[] texCoords, int[] indices, short[] normals, int[] source) {}
 
     /**
      * Duplicates every vertex indexed by more than one part's faces (appended; indices rewritten). Per-vertex
-     * arrays riding the vertices (normals; morph / vertex-group rows once the runtime carries them) copy their
+     * arrays riding the vertices (normals; morph rows via cr_morphs_remap, vertex-group rows: see maskPlan) copy their
      * source vertex's entry to the duplicate.
      */
     private static SplitMesh splitSharedVertices(List<EntityPart> parts, float[] vertices, float[] texCoords,
@@ -460,21 +574,24 @@ public final class EntityModelLoader {
                 }
             }
         }
-        if (rewritten == null) return new SplitMesh(vertices, texCoords, indices, normals);
+        if (rewritten == null) return new SplitMesh(vertices, texCoords, indices, normals, null);
         logger.debug("Split {} vertices shared between parts", extraSources.size());
         int total = vertexCount + extraSources.size();
         float[] v2 = java.util.Arrays.copyOf(vertices, total * 3);
         boolean hasUv = texCoords.length >= vertexCount * 2;
         float[] t2 = hasUv ? java.util.Arrays.copyOf(texCoords, total * 2) : texCoords;
         short[] n2 = normals == null ? null : java.util.Arrays.copyOf(normals, total * 2);
+        int[] source = new int[total];
+        for (int v = 0; v < vertexCount; v++) source[v] = v;
         for (int k = 0; k < extraSources.size(); k++) {
             int src = extraSources.get(k);
             int dst = vertexCount + k;
+            source[dst] = src;
             System.arraycopy(vertices, src * 3, v2, dst * 3, 3);
             if (hasUv) System.arraycopy(texCoords, src * 2, t2, dst * 2, 2);
             if (n2 != null) System.arraycopy(normals, src * 2, n2, dst * 2, 2);
         }
-        return new SplitMesh(v2, t2, rewritten, n2);
+        return new SplitMesh(v2, t2, rewritten, n2, source);
     }
 
     /**

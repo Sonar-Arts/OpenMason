@@ -1,0 +1,47 @@
+{
+  "format": "openmason.meshPipelineFixture", "version": 1,
+  "name": "quad_authored_uvs",
+  "javaSource": "MeshImporterTest.authoredUVsAttachPerFaceCorner + RenderMeshBuilder (unmapped face keeps authored UVs)",
+  "notes": "Directed edges 0>1 1>2 2>0 2>3 3>0 0>2; 2>0/0>2 cancel; boundaryNext 0>1 1>2 2>3 3>0; walk starts at tri 0 corner 0. Convex quad -> fan (0,1,2)(0,2,3).",
+  "tolerance": 1e-6,
+  "input": {
+    "kind": "soup",
+    "vertices": [0,0,0, 1,0,0, 1,1,0, 0,1,0],
+    "texCoords": [0.1,0.2, 0.3,0.2, 0.3,0.6, 0.1,0.6],
+    "indices": [0,1,2, 2,3,0],
+    "triangleToFaceId": [0,0]
+  },
+  "expected": {
+    "weld": {
+      "soupToVertex": [0,1,2,3],
+      "positions": [0,0,0, 1,0,0, 1,1,0, 0,1,0],
+      "vertexToSoup": [[0],[1],[2],[3]]
+    },
+    "faces": {
+      "faces": [{"id": 0, "loop": [0,1,2,3], "cornerUVs": [0.1,0.2, 0.3,0.2, 0.3,0.6, 0.1,0.6]}],
+      "faceIdUpperBound": 1,
+      "warnings": []
+    },
+    "render": {
+      "vertices": [0,0,0, 1,0,0, 1,1,0, 0,1,0],
+      "texCoords": [0.1,0.2, 0.3,0.2, 0.3,0.6, 0.1,0.6],
+      "indices": [0,1,2, 0,2,3],
+      "triangleToFaceId": [0,0],
+      "cornerToVertexId": [0,1,2,3],
+      "vertexIdToCorners": [[0],[1],[2],[3]]
+    },
+    "topology": {
+      "edges": [[0,1],[1,2],[2,3],[0,3]],
+      "edgeFaces": [[0],[0],[0],[0]],
+      "faceEdges": {"0": [0,1,2,3]},
+      "vertexEdges": [[0,3],[0,1],[1,2],[2,3]],
+      "vertexFaces": [[0],[0],[0],[0]],
+      "faceAdjacency": {},
+      "faceNormals": {"0": [0,0,1]},
+      "faceCentroids": {"0": [0.5,0.5,0]},
+      "faceAreas": {"0": 1},
+      "edgeKinds": ["OPEN","OPEN","OPEN","OPEN"],
+      "edgeDihedral": [null,null,null,null]
+    }
+  }
+}

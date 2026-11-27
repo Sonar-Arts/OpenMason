@@ -11,7 +11,9 @@
 //   notifyThreshold   a clip player fires its notifies while its effective weight >= this (default 0.1)
 //   parameters        [ {name, type: float|int|bool|trigger|vec2, default?: number | bool | [x, y]} ]
 //   slots             [ "idle", "walk", ... ]                       clip slots the character binds
-//   masks             [ {name, entries: [ {role | joint, weight?: 1, branch?: true, depth?: 0} ]} ]
+//   masks             [ {name, entries: [ {role | joint, weight?: 1, branch?: true, depth?: 0} | {morph, weight?: 1} ]} ]
+//                     (a `morph` entry (1.2, #171) = a morph channel by name, "*" = every channel; a mask starts at 0
+//                     for every joint and morph channel)
 //   root              the id of the output node
 //   nodes             [ node ... ], each {id, type, ...}:
 //     clip            slot, rate?: 1, rateParam?: float param multiplied in, sync?: group name,
@@ -70,7 +72,15 @@
 //                     JOINT references: "role:<role>" (through the character) or a joint id / name.
 //                     TARGET references: a name from `targets`, or "role:<r>" / "joint:<j>" (that joint's posed
 //                     frame) / "socket:<s>" (a .omchar socket).
+//   morphs            (1.2, #171) [ {morph, param, weight?: 1, weightParam?} ]   morph DRIVES: after the pose and the
+//                     modifiers, each listed morph channel (by name) is overridden toward the float `param`'s value by
+//                     weight x weightParam (CR_OP_MORPH; both views). Clip morph tracks (OMANIM 1.3) need nothing here:
+//                     they flow through every node like joint tracks (sampled, blended, layered under masks,
+//                     inertialized)
 //   <other keys>      unknown top-level sections, kept verbatim
+//
+// The writer writes "1.1", or "1.2" when the graph uses a 1.2 feature (a morph mask entry or morph drives); readers
+// accept any 1.x.
 //
 // The nodes form a DAG under `root` (1.1, #164; 1.0 required a tree): a node may feed several parents (or one
 // parent twice) and is then evaluated ONCE per frame - one clip clock, influence summed over its uses, like
@@ -87,7 +97,7 @@
 namespace cenda::omformat::omanimgraph {
 
 inline constexpr int kVersionMajor = 1;
-inline constexpr int kVersionMinor = 1;
+inline constexpr int kVersionMinor = 2;  // the newest minor written (1.2 only when morph features are used)
 
 class OMFORMAT_EXCEPTION_TYPE version_error final : public std::runtime_error {
 public:
@@ -103,8 +113,9 @@ struct Param {
 };
 
 struct MaskEntry {
-    std::string role;   // exactly one of role / joint
+    std::string role;   // exactly one of role / joint / morph
     std::string joint;  // id or name
+    std::string morph;  // a morph channel name, "*" = every channel (1.2, #171)
     float weight = 1.f;
     bool branch = true;
     int depth = 0;
@@ -287,6 +298,14 @@ struct UnknownSection {
     std::string json;
 };
 
+// A morph drive (1.2, #171): channel `morph` <- float parameter `param`, as an override at weight x weightParam.
+struct MorphDrive {
+    std::string morph;
+    std::string param;
+    float weight = 1.f;
+    std::string weight_param;
+};
+
 struct Graph {
     std::string name;
     std::string description;
@@ -300,6 +319,7 @@ struct Graph {
     std::vector<std::string> targets;
     std::vector<Collider> colliders;
     std::vector<Modifier> modifiers;
+    std::vector<MorphDrive> morph_drives;  // "morphs" (1.2, #171)
     std::vector<UnknownSection> unknown_sections;
 
     [[nodiscard]] int find_node(std::string_view id) const;

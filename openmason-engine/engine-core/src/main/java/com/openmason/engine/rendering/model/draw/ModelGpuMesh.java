@@ -20,7 +20,10 @@ import static org.lwjgl.system.MemoryUtil.memFree;
  * attribute 0) and UV ({@code vec2}, attribute 1) buffers plus an element buffer; once
  * {@link #updateSkin} ran, the skin ranges ({@code uvec2} of uint32, attribute 2) and the influence buffer
  * texture ({@code GL_RG16UI}, bound by {@link #bindSkinInfluences}) for {@link ModelSkinGlsl}; once
- * {@link #updateNormals} ran, octahedral normals ({@code ivec2} of int16, attribute 4) for {@link ModelNormalGlsl}.
+ * {@link #updateNormals} ran, octahedral normals ({@code ivec2} of int16, attribute 4) for {@link ModelNormalGlsl};
+ * once {@link #updateMorphs} ran, the shape keys (OpenMason #171, {@link ModelMorphGlsl}): per-vertex record ranges
+ * ({@code uvec2}, attribute 3), the delta and normal-delta buffer textures ({@code GL_RGBA32F}) and the per-frame
+ * weight buffer texture ({@code GL_R32F}, {@link #uploadMorphWeights}).
  *
  * <p>Positions and UVs live in their own buffers so an interactive edit that only
  * moves vertices re-uploads 12 bytes per corner instead of the whole vertex. A
@@ -45,6 +48,15 @@ public final class ModelGpuMesh implements AutoCloseable {
     private int skinInfluences;
     private int normalVbo;
     private int normalVertices;
+    // Morph targets (#171).
+    private com.openmason.engine.rig.RigMorphs morphs;
+    private int morphRangeVbo;
+    private int morphDeltaBuffer, morphDeltaTexture;
+    private int morphNormalBuffer, morphNormalTexture;
+    private int morphWeightBuffer, morphWeightTexture;
+    private long morphBytes;
+    private float[] morphClamped;
+    private FloatBuffer morphUpload;
 
     private int positionFloats;
     private int uvFloats;
@@ -85,6 +97,202 @@ public final class ModelGpuMesh implements AutoCloseable {
     /** True when per-vertex skin attributes were uploaded ({@link #updateSkin}). */
     public boolean hasSkin() {
         return skinVertices > 0;
+    }
+
+    /** True when shape keys were uploaded ({@link #updateMorphs}). */
+    public boolean hasMorphs() {
+        return morphs != null;
+    }
+
+    /** The uploaded shape keys, or null. */
+    public com.openmason.engine.rig.RigMorphs morphs() {
+        return morphs;
+    }
+
+    /** True when the uploaded shape keys carry normal deltas. */
+    public boolean morphsHaveNormals() {
+        return morphs != null && morphNormalTexture != 0;
+    }
+
+    /**
+     * Uploads the mesh's shape keys ({@code RigMorphs.pack()}, once): the per-vertex record ranges on attribute
+     * {@link ModelMorphGlsl#RANGE_LOCATION}, the delta (and, when any, normal-delta) buffer textures and the weight
+     * buffer texture, filled with the targets' clamped default weights. Null (or no targets) removes them.
+     *
+     * @throws IllegalArgumentException when the targets cover another vertex count than the position buffer
+     */
+    public void updateMorphs(com.openmason.engine.rig.RigMorphs targets) {
+        ensureCreated();
+        int previousVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+        GL30.glBindVertexArray(vao);
+        long before = morphBytes;
+        if (targets == null || targets.targetCount() == 0) {
+            GL20.glDisableVertexAttribArray(ModelMorphGlsl.RANGE_LOCATION);
+            GL30.glBindVertexArray(previousVao);
+            deleteMorphObjects();
+            morphs = null;
+            morphBytes = 0;
+            retrack(-before);
+            return;
+        }
+        if (positionFloats > 0 && targets.vertexCount() != positionFloats / 3) {
+            GL30.glBindVertexArray(previousVao);
+            throw new IllegalArgumentException("morph targets cover " + targets.vertexCount() + " vertices, the mesh has "
+                    + positionFloats / 3);
+        }
+        com.openmason.engine.rig.RigMorphs.Packed packed = targets.pack();
+        if (morphRangeVbo == 0) {
+            morphRangeVbo = GL15.glGenBuffers();
+            morphDeltaBuffer = GL15.glGenBuffers();
+            morphDeltaTexture = GL11.glGenTextures();
+            morphWeightBuffer = GL15.glGenBuffers();
+            morphWeightTexture = GL11.glGenTextures();
+        }
+        int n = packed.vertexCount();
+        IntBuffer ranges = memAllocInt(Math.max(2, n * 2));
+        try {
+            ranges.put(packed.ranges()).flip();
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, morphRangeVbo);
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, ranges, usage);
+            GL30.glVertexAttribIPointer(ModelMorphGlsl.RANGE_LOCATION, 2, GL11.GL_UNSIGNED_INT, 8, 0L);
+            GL20.glEnableVertexAttribArray(ModelMorphGlsl.RANGE_LOCATION);
+        } finally {
+            memFree(ranges);
+        }
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL30.glBindVertexArray(previousVao);
+        int previousTexture = GL11.glGetInteger(GL31.GL_TEXTURE_BINDING_BUFFER);
+        bufferTexture(morphDeltaBuffer, morphDeltaTexture, packed.deltas(), GL30.GL_RGBA32F);
+        if (packed.normals() != null) {
+            if (morphNormalBuffer == 0) {
+                morphNormalBuffer = GL15.glGenBuffers();
+                morphNormalTexture = GL11.glGenTextures();
+            }
+            bufferTexture(morphNormalBuffer, morphNormalTexture, packed.normals(), GL30.GL_RGBA32F);
+        } else if (morphNormalBuffer != 0) {
+            GL15.glDeleteBuffers(morphNormalBuffer);
+            GL11.glDeleteTextures(morphNormalTexture);
+            morphNormalBuffer = morphNormalTexture = 0;
+        }
+        morphs = targets;
+        morphClamped = new float[targets.targetCount()];
+        if (morphUpload != null) memFree(morphUpload);
+        morphUpload = memAllocFloat(targets.targetCount());
+        bufferTexture(morphWeightBuffer, morphWeightTexture, targets.clampWeights(null, morphClamped), GL30.GL_R32F);
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, previousTexture);
+        morphBytes = 8L * n + 16L * packed.recordCount() * (packed.normals() != null ? 2 : 1)
+                + 4L * targets.targetCount();
+        retrack(morphBytes - before);
+        uploadedBytes += morphBytes;
+    }
+
+    /** Fills a buffer texture (DYNAMIC: the weights change every frame). Leaves the buffer texture bound. */
+    private void bufferTexture(int buffer, int texture, float[] data, int internalFormat) {
+        FloatBuffer fb = memAllocFloat(Math.max(4, data.length));
+        try {
+            fb.put(data).flip();
+            if (data.length == 0) fb.put(0, 0f).limit(4);
+            GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, buffer);
+            GL15.glBufferData(GL31.GL_TEXTURE_BUFFER, fb,
+                    internalFormat == GL30.GL_R32F ? GL15.GL_DYNAMIC_DRAW : usage);
+            GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, 0);
+        } finally {
+            memFree(fb);
+        }
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, texture);
+        GL31.glTexBuffer(GL31.GL_TEXTURE_BUFFER, internalFormat, buffer);
+    }
+
+    /**
+     * The per-draw shape-key weights (OpenMason #171): {@code weights} (raw, one per target in the rig's channel order;
+     * null = every target's default) clamped natively to each target's range and written into the weight buffer
+     * texture - {@code targetCount} floats, the only per-frame morph upload. No-op without morphs. Allocation-free.
+     */
+    public void uploadMorphWeights(float[] weights) {
+        if (morphs == null) return;
+        float[] clamped = weights == null ? morphs.clampWeights(defaults(), morphClamped)
+                : morphs.clampWeights(weights, morphClamped);
+        morphUpload.clear();
+        morphUpload.put(clamped, 0, morphs.targetCount()).flip();
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, morphWeightBuffer);
+        GL15.glBufferSubData(GL31.GL_TEXTURE_BUFFER, 0L, morphUpload);
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, 0);
+        uploadedBytes += 4L * morphs.targetCount();
+    }
+
+    private float[] defaultWeights;
+
+    private float[] defaults() {
+        if (defaultWeights == null || defaultWeights.length != morphs.targetCount()) {
+            defaultWeights = morphs.defaultWeights();
+        }
+        return defaultWeights;
+    }
+
+    /**
+     * Binds the delta, normal-delta and weight buffer textures to {@link ModelMorphGlsl#DELTAS_UNIT} /
+     * {@link ModelMorphGlsl#NORMALS_UNIT} / {@link ModelMorphGlsl#WEIGHTS_UNIT} (restores the active unit to 0); no-op
+     * without morphs.
+     */
+    public void bindMorphs() {
+        if (morphs == null) return;
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + ModelMorphGlsl.DELTAS_UNIT);
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, morphDeltaTexture);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + ModelMorphGlsl.NORMALS_UNIT);
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, morphNormalTexture);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + ModelMorphGlsl.WEIGHTS_UNIT);
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, morphWeightTexture);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+    }
+
+    /** Unbinds the three morph units (active unit 0 after). */
+    public static void unbindMorphs() {
+        for (int unit : new int[]{ModelMorphGlsl.DELTAS_UNIT, ModelMorphGlsl.NORMALS_UNIT, ModelMorphGlsl.WEIGHTS_UNIT}) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
+            GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, 0);
+        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+    }
+
+    /**
+     * Uploads this draw's weights, binds the morph textures and switches the bound {@code program}'s morphing on
+     * ({@code u_morphed}, {@code u_morphNormals}); returns false (program untouched) without morphs. Pair with
+     * {@link #endMorphs}.
+     */
+    public boolean beginMorphs(com.openmason.engine.rendering.shaders.ShaderProgram program, float[] weights) {
+        if (morphs == null) return false;
+        uploadMorphWeights(weights);
+        bindMorphs();
+        program.setBool("u_morphed", true);
+        program.setBool("u_morphNormals", morphsHaveNormals());
+        return true;
+    }
+
+    /** Switches the bound {@code program}'s morphing off and unbinds the morph units. */
+    public static void endMorphs(com.openmason.engine.rendering.shaders.ShaderProgram program) {
+        program.setBool("u_morphed", false);
+        program.setBool("u_morphNormals", false);
+        unbindMorphs();
+    }
+
+    private void deleteMorphObjects() {
+        if (morphRangeVbo != 0) {
+            GL15.glDeleteBuffers(morphRangeVbo);
+            GL15.glDeleteBuffers(morphDeltaBuffer);
+            GL11.glDeleteTextures(morphDeltaTexture);
+            GL15.glDeleteBuffers(morphWeightBuffer);
+            GL11.glDeleteTextures(morphWeightTexture);
+        }
+        if (morphNormalBuffer != 0) {
+            GL15.glDeleteBuffers(morphNormalBuffer);
+            GL11.glDeleteTextures(morphNormalTexture);
+        }
+        morphRangeVbo = morphDeltaBuffer = morphDeltaTexture = morphWeightBuffer = morphWeightTexture = 0;
+        morphNormalBuffer = morphNormalTexture = 0;
+        if (morphUpload != null) {
+            memFree(morphUpload);
+            morphUpload = null;
+        }
     }
 
     /** True when per-vertex normals were uploaded ({@link #updateNormals}). */
@@ -322,6 +530,9 @@ public final class ModelGpuMesh implements AutoCloseable {
             GL11.glDeleteTextures(influenceTexture);
         }
         if (normalVbo != 0) GL15.glDeleteBuffers(normalVbo);
+        deleteMorphObjects();
+        morphs = null;
+        morphBytes = 0;
         vao = positionVbo = uvVbo = ebo = skinRangeVbo = influenceBuffer = influenceTexture = 0;
         skinVertices = skinInfluences = normalVbo = normalVertices = 0;
         positionFloats = uvFloats = indexCount = 0;

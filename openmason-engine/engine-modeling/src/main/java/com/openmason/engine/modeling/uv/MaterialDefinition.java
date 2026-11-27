@@ -71,11 +71,54 @@ public record MaterialDefinition(
      * @param emissive  Whether the material emits light (ignores scene lighting)
      * @param tintColor RGBA tint applied multiplicatively, packed as 0xRRGGBBAA.
      *                  Use {@code 0xFFFFFFFF} (white, fully opaque) for no tint.
+     * @param baseColor OMO 1.9 base colour (RGBA, 4 floats; Blender / glTF semantics: it multiplies the
+     *                  material's texture, exactly as the runtime draws it), or null = none (white)
      */
-    public record MaterialProperties(boolean emissive, int tintColor) {
+    public record MaterialProperties(boolean emissive, int tintColor, float[] baseColor) {
 
         /** No-op properties: non-emissive, white tint (identity). */
         public static final MaterialProperties NONE = new MaterialProperties(false, 0xFFFFFFFF);
+
+        public MaterialProperties {
+            if (baseColor != null) {
+                if (baseColor.length != 4) {
+                    throw new IllegalArgumentException("baseColor must hold 4 floats (RGBA)");
+                }
+                baseColor = baseColor.clone();
+            }
+        }
+
+        /** Properties without a base colour. */
+        public MaterialProperties(boolean emissive, int tintColor) {
+            this(emissive, tintColor, null);
+        }
+
+        @Override
+        public float[] baseColor() {
+            return baseColor == null ? null : baseColor.clone();
+        }
+
+        /** @return copy with another base colour (null = none) */
+        public MaterialProperties withBaseColor(float[] rgba) {
+            return new MaterialProperties(emissive, tintColor, rgba);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof MaterialProperties p && p.emissive == emissive && p.tintColor == tintColor
+                && java.util.Arrays.equals(p.baseColor, baseColor);
+        }
+
+        @Override
+        public int hashCode() {
+            return (Boolean.hashCode(emissive) * 31 + tintColor) * 31 + java.util.Arrays.hashCode(baseColor);
+        }
+
+        @Override
+        public String toString() {
+            return "MaterialProperties[emissive=" + emissive + ", tintColor=" + tintColor
+                + ", baseColor=" + java.util.Arrays.toString(baseColor) + "]";
+        }
 
         /**
          * Extract the red channel (0–255).

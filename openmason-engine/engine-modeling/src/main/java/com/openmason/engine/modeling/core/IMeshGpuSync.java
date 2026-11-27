@@ -16,4 +16,8 @@ public interface IMeshGpuSync {
 
     /** Corners and triangles were re-derived (topology or face change). */
     void structureChanged();
+
+    /** Shading changed (smooth flags, sharp edges, custom normals; #169): the corner normals must be recomputed. */
+    default void normalsChanged() {
+    }
 }

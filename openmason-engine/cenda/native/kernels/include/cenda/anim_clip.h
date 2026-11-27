@@ -1,10 +1,11 @@
-/* Cenda animation clip documents — the .omanim format (OpenMason #155: version 1.2) behind a C ABI consumed by
+/* Cenda animation clip documents — the .omanim format (OpenMason #155: version 1.2; #171: 1.3) behind a C ABI consumed by
  * Java via FFM (com.openmason.engine.anim.*). The codec is libomformat (omformat/omanim.hpp documents the file
  * layout); this ABI is the editing model plus the clip-data queries the runtime needs: which notifies a step of
  * playback crosses, float curve values, sync-marker phase, and binding role-addressed tracks to a character.
  *
- * Reads 1.0 / 1.1 / 1.2 and always writes 1.2; every value read comes back bit-identical, and 1.1 readers still
- * read a 1.2 file (they ignore the new sections and skip role tracks).
+ * Reads 1.0 - 1.3 and writes 1.2, or 1.3 when the clip has morph tracks (#171; a clip without them writes what a 1.2
+ * writer did, byte for byte); every value read comes back bit-identical, and 1.1 / 1.2 readers still read a newer
+ * file (they ignore the new sections and skip role tracks).
  *
  * Strings and arrays returned by getters are owned by the clip and stay valid until the next call that changes
  * it; copy them. Keys use the rig's key struct (cr_key, rig.h). Times are seconds.
@@ -62,7 +63,7 @@ cm_clip* cm_clip_create(void);
 cm_clip* cm_clip_read(const uint8_t* bytes, int64_t length, int32_t* out_result);
 cm_clip* cm_clip_clone(const cm_clip* c);
 void cm_clip_destroy(cm_clip* c);
-/* Serializes as 1.2 (deterministic). NULL on failure. Free with cc_bytes_destroy (character.h). */
+/* Serializes as 1.2 (1.3 with morph tracks; deterministic). NULL on failure. Free with cc_bytes_destroy (character.h). */
 cc_bytes* cm_clip_write(const cm_clip* c);
 
 /* --- Header, strings, layer mask -------------------------------------------------------------------- */
@@ -151,6 +152,25 @@ int32_t cm_clip_curve_set(cm_clip* c, const char* name, const cm_curve_key* keys
 int32_t cm_clip_curve_find(const cm_clip* c, const char* name);
 /* The curve's value at a time (clamped to its first / last key; 0 for an empty curve or a bad index). */
 float cm_clip_curve_sample(const cm_clip* c, int32_t index, float time);
+
+/* --- Morph tracks (OMANIM 1.3, OpenMason #171) ---------------------------------------------------------- */
+
+/* Shape-key weight tracks: one per morph channel NAME (the mesh's shape key; bound to a rig's channels by name,
+ * rig.h "Morph targets"), scalar keys exactly like the float curves (cm_curve_key, CM_INTERP_*; CUBIC tangents in
+ * value per second). Names may be given with a leading "morph:" (stripped). In CM ABI 1 (additions). */
+int32_t cm_clip_morph_count(const cm_clip* c);
+int32_t cm_clip_morph_get(const cm_clip* c, int32_t index, const char** out_name, int32_t* out_key_count);
+/* Copies up to capacity keys; returns the track's key count. */
+int32_t cm_clip_morph_keys(const cm_clip* c, int32_t index, cm_curve_key* out, int32_t capacity);
+/* Adds or replaces a morph track (keys sorted by time, stably); keys NULL or count 0 removes it. Returns the index. */
+int32_t cm_clip_morph_set(cm_clip* c, const char* name, const cm_curve_key* keys, int32_t count);
+int32_t cm_clip_morph_find(const cm_clip* c, const char* name);
+/* The track's value at a time (clamped to its first / last key; 0 for an empty track or a bad index) - bit-identical
+ * to what a rig clip carrying the track samples (cr_clip_sample_morph). */
+float cm_clip_morph_sample(const cm_clip* c, int32_t index, float time);
+/* Gives a rig clip (rig.h, not yet bound) the document's morph tracks (cr_clip_set_morph_tracks). CM_OK when the
+ * document has none. What the animation graph, authoring and retargeting do with every clip they build. */
+int32_t cm_clip_apply_morphs(const cm_clip* c, cr_clip* rig_clip);
 
 /* --- Sync markers ------------------------------------------------------------------------------------ */
 

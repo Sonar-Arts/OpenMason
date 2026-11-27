@@ -5,6 +5,7 @@
 #include "cenda/anim_clip.h"
 #include "cenda/character.h"
 #include "cenda/rig.h"
+#include "omformat/omanim.hpp"
 #include "omformat/zip_archive.hpp"
 
 #include <cmath>
@@ -100,6 +101,18 @@ bool same_clip(const cm_clip* a, const cm_clip* b) {
         cm_clip_track_keys(b, t, y.data(), kb);
         if (!x.empty() && std::memcmp(x.data(), y.data(), x.size() * sizeof(cr_key)) != 0) return false;
     }
+    if (cm_clip_morph_count(a) != cm_clip_morph_count(b)) return false;  // 1.3 (#171)
+    for (int32_t m = 0; m < cm_clip_morph_count(a); ++m) {
+        const char *na, *nb;
+        int32_t ka, kb;
+        cm_clip_morph_get(a, m, &na, &ka);
+        cm_clip_morph_get(b, m, &nb, &kb);
+        if (std::strcmp(na, nb) || ka != kb) return false;
+        std::vector<cm_curve_key> x(static_cast<std::size_t>(ka)), y(static_cast<std::size_t>(kb));
+        cm_clip_morph_keys(a, m, x.data(), ka);
+        cm_clip_morph_keys(b, m, y.data(), kb);
+        if (!x.empty() && std::memcmp(x.data(), y.data(), x.size() * sizeof(cm_curve_key)) != 0) return false;
+    }
     return true;
 }
 
@@ -130,6 +143,17 @@ void test_every_fixture_clip() {
             CHECK(b != nullptr && same_clip(a, b));
             CHECK(written(b) == once);  // 1.2 -> 1.2 byte-identical
             CHECK(manifest_of(once).find("\"version\": \"1.2\"") != std::string::npos);
+            // #171: no morph tracks -> still 1.2, no morphs section; giving it morph tracks writes 1.3, and taking them
+            // away again writes the 1.2 bytes once more.
+            CHECK(cm_clip_morph_count(a) == 0 && manifest_of(once).find("\"morphs\"") == std::string::npos);
+            const cm_curve_key mk[2] = {{0.f, 0.f, 0.f, 0.f, CM_INTERP_LINEAR}, {0.5f, 1.f, 0.f, 0.f, CM_INTERP_LINEAR}};
+            CHECK(cm_clip_morph_set(b, "Smile", mk, 2) == 0);
+            const auto with = written(b);
+            CHECK(manifest_of(with).find("\"version\": \"1.3\"") != std::string::npos);
+            cm_clip* c = read(with);
+            CHECK(c != nullptr && same_clip(b, c) && written(c) == with);
+            if (c != nullptr) cm_clip_destroy(c);
+            CHECK(cm_clip_morph_set(b, "Smile", nullptr, 0) == CM_OK && written(b) == once);
             cm_clip_destroy(a);
             cm_clip_destroy(b);
             ++clips;
@@ -165,6 +189,64 @@ const char* kV11Manifest = R"({
     "priority" : 3
   }
 })";
+
+// OMANIM 1.3 morph tracks (#171): keys / interp / tangents round-trip bit-identically, names unique, a leading
+// "morph:" stripped, sampling = the rig clip's, 1.2 readers' view (an unknown section), refusals.
+void test_morph_tracks() {
+    cm_clip* c = cm_clip_create();
+    cm_header h{30.f, 2.f, 1, 0, 0.1f, 0.1f, 0};
+    CHECK(cm_clip_header_set(c, &h) == CM_OK);
+    const cm_curve_key smile[3] = {{0.f, 0.f, 0.f, 0.f, CM_INTERP_LINEAR},
+                                   {1.f, 0.75f, 0.f, 0.f, CM_INTERP_CUBIC},
+                                   {0.4f, 1.3f, 0.5f, -2.25f, CM_INTERP_CUBIC}};  // unsorted: sorted on set
+    const cm_curve_key blink[2] = {{0.f, 1.f, 0.f, 0.f, CM_INTERP_STEP}, {0.25f, 0.f, 0.f, 0.f, CM_INTERP_STEP}};
+    CHECK(cm_clip_morph_set(c, "morph:Smile", smile, 3) == 0);
+    CHECK(cm_clip_morph_set(c, "Blink", blink, 2) == 1);
+    CHECK(cm_clip_morph_find(c, "Smile") == 0 && cm_clip_morph_find(c, "morph:Blink") == 1 && cm_clip_morph_find(c, "x") == -1);
+    const cm_curve_key bad{0.f, std::nanf(""), 0.f, 0.f, CM_INTERP_LINEAR};
+    CHECK(cm_clip_morph_set(c, "Bad", &bad, 1) == CM_ERR_ARG && cm_clip_morph_count(c) == 2);
+    CHECK(cm_clip_morph_set(c, "", smile, 1) == CM_ERR_ARG && cm_clip_morph_set(c, "morph:", smile, 1) == CM_ERR_ARG);
+    cm_curve_key keys[3];
+    CHECK(cm_clip_morph_keys(c, 0, keys, 3) == 3);
+    CHECK(keys[0].time == 0.f && keys[1].time == 0.4f && keys[2].time == 1.f && keys[1].in_tangent == 0.5f);
+    // Sampling: clamped, Hermite between the CUBIC keys, step.
+    CHECK(cm_clip_morph_sample(c, 0, -1.f) == 0.f && cm_clip_morph_sample(c, 0, 5.f) == 0.75f);
+    CHECK(near(cm_clip_morph_sample(c, 0, 0.2f), 0.65f));  // LINEAR 0 -> 1.3 at 0.4
+    CHECK(cm_clip_morph_sample(c, 1, 0.1f) == 1.f && cm_clip_morph_sample(c, 1, 0.3f) == 0.f);
+    const auto bytes = written(c);
+    const std::string man = manifest_of(bytes);
+    CHECK(man.find("\"version\": \"1.3\"") != std::string::npos && man.find("\"morphs\"") != std::string::npos);
+    cm_clip* r = read(bytes);
+    CHECK(r != nullptr && same_clip(c, r) && written(r) == bytes);
+    // The LINEAR key at 0 carries no tangents; the CUBIC keys keep theirs (also a non-CUBIC key's non-zero tangent).
+    for (float t : {0.f, 0.1f, 0.33f, 0.4f, 0.7f, 0.99f, 1.f, 1.5f}) {
+        CHECK(cm_clip_morph_sample(r, 0, t) == cm_clip_morph_sample(c, 0, t));
+    }
+    // A rig clip carrying the tracks samples the same floats.
+    cr_clip_desc d{2.f, 1, CR_LAYER_BASE, 0, 0.f, 0.f};
+    cr_clip* rc = cr_clip_create(&d, nullptr, 0, nullptr, 0, nullptr, nullptr, nullptr, 0);
+    CHECK(rc != nullptr && cm_clip_apply_morphs(c, rc) == CM_OK && cr_clip_morph_track_count(rc) == 2);
+    CHECK(std::strcmp(cr_clip_morph_track_name(rc, 0), "Smile") == 0);
+    for (float t : {0.f, 0.1f, 0.33f, 0.4f, 0.7f, 0.99f, 1.f, 1.5f}) {
+        CHECK(cr_clip_sample_morph(rc, 0, t) == cm_clip_morph_sample(c, 0, t));
+        CHECK(cr_clip_sample_morph(rc, 1, t) == cm_clip_morph_sample(c, 1, t));
+    }
+    cr_clip_destroy(rc);
+    // A 1.2 reader keeps "morphs" as an unknown section: the libomformat model of a 1.3 file read by name.
+    const auto clip = om::omanim::read(std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+    CHECK(clip.version == "1.3" && clip.morphs.size() == 2 && clip.unknown_sections.empty());
+    // Duplicate names in a file are refused.
+    {
+        om::omanim::Clip dup;
+        dup.morphs.push_back({"A", {{0.f, 1.f, 0.f, 0.f, om::omanim::CurveInterp::Linear}}});
+        dup.morphs.push_back({"A", {{0.f, 1.f, 0.f, 0.f, om::omanim::CurveInterp::Linear}}});
+        const auto dbytes = bytes_of(om::omanim::write(dup));
+        int32_t res = 0;
+        CHECK(read(dbytes, &res) == nullptr && res == CM_ERR_FORMAT);
+    }
+    if (r != nullptr) cm_clip_destroy(r);
+    cm_clip_destroy(c);
+}
 
 void test_v11_to_v12() {
     const std::string t1 = R"({"partId":"p1","keyframes":[{"time":0.0,"position":[0.0,-0.023456722,0.0],"rotation":[1.1,2.2,3.3],"scale":[1.0,1.0,1.0],"easing":"LINEAR"},{"time":0.48,"position":[0.1,0.2,0.3],"rotation":[0.0,0.0,0.0],"scale":[1.0,2.0,1.0],"easing":"STEP"}]})";
@@ -524,6 +606,7 @@ void test_sync_groups() {
 int main() {
     CHECK(cm_abi_version() == CM_ABI_VERSION);
     test_every_fixture_clip();
+    test_morph_tracks();
     test_v11_to_v12();
     test_sections_round_trip();
     test_refusals();

@@ -726,6 +726,32 @@ public final class AnimGraphInstance implements AutoCloseable {
         }
     }
 
+    /** Per-instance buffer of {@link #morphWeights} (the rig's morph channels), allocated on first use. */
+    private MemorySegment morphBuffer;
+
+    /**
+     * The last evaluate's MORPH WEIGHTS (OpenMason #171) of a view ({@link #VIEW_BODY} / {@link #VIEW_FIRST_PERSON}):
+     * one per rig morph channel (= the mesh's targets), clip morph tracks blended through the graph and its
+     * {@code morphs} drives applied. Writes min(channels, out.length) floats; returns the channel count (0 for a rig
+     * without channels: nothing written). Allocation-free after the first call; upload the result through
+     * {@code RigMorphs.clampWeights} / {@code ModelGpuMesh.uploadMorphWeights}.
+     */
+    public int morphWeights(int view, float[] out) {
+        int n = rig.morphCount();
+        if (n == 0 || out == null) return n;
+        if (morphBuffer == null) morphBuffer = Arena.ofAuto().allocate(4L * n, 4);
+        try {
+            int got = (int) CendaAnimGraph.MORPH_WEIGHTS.invokeExact(handle(), view, morphBuffer, n);
+            if (got < 0) throw new IllegalArgumentException("morphWeights: " + CendaAnimGraph.lastError());
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaAnimGraph.rethrow(t);
+        }
+        MemorySegment.copy(morphBuffer, CendaAnimGraph.F32, 0, out, 0, Math.min(n, out.length));
+        return n;
+    }
+
     /** Per-instance buffer of {@link #nodeDebug} (one record per node), allocated on first use. */
     private MemorySegment nodeDebugBuffer;
 

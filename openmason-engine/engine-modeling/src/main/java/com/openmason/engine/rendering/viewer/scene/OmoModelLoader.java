@@ -94,9 +94,11 @@ public final class OmoModelLoader implements ModelSource {
         List<ParsedMaterialData> materials = result.materials();
         if (materials != null && !materials.isEmpty()) {
             for (ParsedMaterialData material : materials) {
-                // OMO 1.9: a material may have only a base colour (no PNG); keep it with a solid-colour texture
+                // OMO 1.9: a material may have only a base colour (no PNG): a white texture times the base
+                // colour, the runtime's rule (texture x baseColor) for textured materials too.
                 byte[] png = material.texturePng() != null ? material.texturePng()
-                        : material.baseColor() != null ? OMOFormat.solidColorPng(material.baseColor()) : null;
+                        : material.baseColor() != null ? OMOFormat.solidColorPng(new float[] {1f, 1f, 1f, 1f})
+                        : null;
                 int textureId = png != null ? textureUploader.upload(png) : 0;
                 if (textureId <= 0) {
                     logger.warn("No texture for material {} ('{}') in {}",
@@ -117,7 +119,8 @@ public final class OmoModelLoader implements ModelSource {
                         material.name(),
                         textureId,
                         layer,
-                        new MaterialDefinition.MaterialProperties(material.emissive(), material.tintColor())));
+                        new MaterialDefinition.MaterialProperties(material.emissive(), material.tintColor(),
+                                material.baseColor())));
             }
 
             List<ParsedFaceMapping> mappings = result.faceMappings();
@@ -141,8 +144,21 @@ public final class OmoModelLoader implements ModelSource {
             }
         }
 
+        // Imported / hand-authored UV layouts stay as authored; editor-projected faces stay projected.
+        renderer.adoptAuthoredUVs();
         renderer.markDrawBatchesDirty();
         renderer.refreshUVs();
+
+        // OMO 1.9 smooth shading (#169). The viewer loads the model as one part, so the whole mesh is its store.
+        if (result.shading() != null && !renderer.getPartManager().getAllParts().isEmpty()) {
+            try {
+                renderer.getShading().load(new OMOFormat.MeshData(mesh.vertices(), mesh.texCoords(),
+                        mesh.indices(), mesh.triangleToFaceId(), mesh.uvMode()), null, result.shading(),
+                        renderer.getPartManager().getAllParts().get(0).id());
+            } catch (RuntimeException e) {
+                logger.warn("Shading of {} not loaded: {}", displayName, e.getMessage());
+            }
+        }
 
         int[] ids = new int[textureIds.size()];
         for (int i = 0; i < ids.length; i++) {

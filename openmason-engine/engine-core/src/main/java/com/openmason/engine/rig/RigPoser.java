@@ -149,6 +149,54 @@ public final class RigPoser {
     }
 
     /**
+     * The MORPH WEIGHTS (OpenMason #171) of the frame {@link #pose} composes from the same inputs: the rig's channel
+     * defaults, {@code baseClip}'s morph tracks at {@code baseTime}, then each overlay's (its clip mask, weight x the
+     * clip's fade envelope, ordered by priority - the ABI 1 overlay fold) as a pose program on {@code workspace} slots
+     * 0 and 1 ({@code cr_rig_pose} composes joints only). Writes min(channels, out.length) weights and returns the
+     * channel count; a rig without channels returns 0 and runs nothing. {@code program} is reused scratch.
+     */
+    public int morphWeights(PoseWorkspace workspace, PoseProgram program, ParsedAnimClip baseClip, float baseTime,
+                            List<Overlay> overlays, float[] out) {
+        Rig rig = workspace.rig();
+        int n = rig.morphCount();
+        if (n == 0) return 0;
+        program.clear();
+        RigClip baseNative = RigClip.of(baseClip);
+        if (baseNative != null) {
+            program.sample(0, baseNative, baseTime, PoseProgram.MORPHS_ONLY);
+        } else {
+            program.rest(0);
+        }
+        int layerCount = overlays == null ? 0 : overlays.size();
+        if (layerCount > 0) {
+            // The ABI 1 fold: weight x fade envelope, <= 0 skipped, stable by priority.
+            Overlay[] live = new Overlay[layerCount];
+            float[] weight = new float[layerCount];
+            int count = 0;
+            for (Overlay ov : overlays) {
+                if (ov == null || ov.clip() == null) continue;
+                RigClip c = RigClip.of(ov.clip());
+                float w = ov.weight() * c.weightAt(ov.time());
+                if (w <= 0f) continue;
+                live[count] = ov;
+                weight[count++] = w;
+            }
+            Integer[] order = new Integer[count];
+            for (int i = 0; i < count; i++) order[i] = i;
+            java.util.Arrays.sort(order, java.util.Comparator.comparingInt(i -> live[i].clip().layer().priority()));
+            for (int i : order) {
+                program.sample(1, RigClip.of(live[i].clip()), live[i].time(),
+                    PoseProgram.CLIP_MASK | PoseProgram.MORPHS_ONLY);
+                program.layer(0, 1, null, weight[i], PoseProgram.OVERRIDE, 0);
+            }
+        }
+        workspace.run(program);
+        program.clear();
+        java.lang.ref.Reference.reachabilityFence(baseNative);
+        return workspace.morphWeights(0, out);
+    }
+
+    /**
      * Poses {@code rig} from explicit local transforms ({@code locals}: 9 floats per joint — pos, rot
      * degrees, scale — or null for the rest pose) plus the current extras, under {@code baseMatrix}.
      */

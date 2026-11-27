@@ -110,6 +110,13 @@ public final class CendaAnimClip {
     static final MethodHandle CURVE_SET;
     static final MethodHandle CURVE_FIND;
     static final MethodHandle CURVE_SAMPLE;
+    // Morph (shape-key) tracks, OMANIM 1.3 (OpenMason #171).
+    static final MethodHandle MORPH_COUNT;
+    static final MethodHandle MORPH_GET;
+    static final MethodHandle MORPH_KEYS;
+    static final MethodHandle MORPH_SET;
+    static final MethodHandle MORPH_FIND;
+    static final MethodHandle MORPH_SAMPLE;
     static final MethodHandle MARKER_COUNT;
     static final MethodHandle MARKER_GET;
     static final MethodHandle MARKER_ADD;
@@ -209,6 +216,12 @@ public final class CendaAnimClip {
         CURVE_SET = handle(lookup, "cm_clip_curve_set", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32));
         CURVE_FIND = handle(lookup, "cm_clip_curve_find", FunctionDescriptor.of(I32, ADDR, ADDR));
         CURVE_SAMPLE = handle(lookup, "cm_clip_curve_sample", FunctionDescriptor.of(F32, ADDR, I32, F32));
+        MORPH_COUNT = handle(lookup, "cm_clip_morph_count", FunctionDescriptor.of(I32, ADDR));
+        MORPH_GET = handle(lookup, "cm_clip_morph_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
+        MORPH_KEYS = handle(lookup, "cm_clip_morph_keys", FunctionDescriptor.of(I32, ADDR, I32, ADDR, I32));
+        MORPH_SET = handle(lookup, "cm_clip_morph_set", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32));
+        MORPH_FIND = handle(lookup, "cm_clip_morph_find", FunctionDescriptor.of(I32, ADDR, ADDR));
+        MORPH_SAMPLE = handle(lookup, "cm_clip_morph_sample", FunctionDescriptor.of(F32, ADDR, I32, F32));
         MARKER_COUNT = handle(lookup, "cm_clip_marker_count", FunctionDescriptor.of(I32, ADDR));
         MARKER_GET = handle(lookup, "cm_clip_marker_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
         MARKER_ADD = handle(lookup, "cm_clip_marker_add", FunctionDescriptor.of(I32, ADDR, ADDR, F32));

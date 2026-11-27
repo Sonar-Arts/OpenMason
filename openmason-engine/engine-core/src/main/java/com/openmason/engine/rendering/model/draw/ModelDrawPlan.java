@@ -44,10 +44,80 @@ public final class ModelDrawPlan {
 
     private final List<PartBatches> parts;
     private final Set<Integer> materialIds;
+    /** The model's vertex-group mask plan (OpenMason #172), or null. */
+    private final com.openmason.engine.format.omo.MaskPlan mask;
+    /** Masked variants of this plan by group mask (a handful per model: one per distinct outfit). */
+    private final java.util.concurrent.ConcurrentHashMap<ModelAppearance.GroupMask, ModelDrawPlan> masked =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private ModelDrawPlan(List<PartBatches> parts, Set<Integer> materialIds) {
+        this(parts, materialIds, null);
+    }
+
+    private ModelDrawPlan(List<PartBatches> parts, Set<Integer> materialIds,
+                          com.openmason.engine.format.omo.MaskPlan mask) {
         this.parts = List.copyOf(parts);
         this.materialIds = Set.copyOf(materialIds);
+        this.mask = mask;
+    }
+
+    /** The vertex-group mask plan the plan's index ranges live in, or null (no vertex groups). */
+    public com.openmason.engine.format.omo.MaskPlan maskPlan() {
+        return mask;
+    }
+
+    /**
+     * The plan to draw for {@code appearance} (OpenMason #172): this plan when the model has no vertex groups or the
+     * appearance hides / keeps none; else the batches cut down to the mask plan's visible ranges for its
+     * {@link ModelAppearance#groupMask()} - resolved natively once per distinct mask and cached (no per-frame CPU
+     * work).
+     */
+    public ModelDrawPlan forAppearance(ModelAppearance appearance) {
+        if (mask == null || appearance == null) return this;
+        ModelAppearance.GroupMask key = appearance.groupMask();
+        if (key == null) return this;
+        ModelDrawPlan cached = masked.get(key);
+        if (cached != null) return cached;
+        return masked.computeIfAbsent(key, k -> masked(mask.ranges(k.hidden(), k.kept())));
+    }
+
+    /**
+     * This plan with every batch cut down to the visible index {@code ranges} ({@code first, count} pairs in buffer
+     * order, as {@link com.openmason.engine.format.omo.MaskPlan#ranges} returns them); materials unchanged.
+     */
+    public ModelDrawPlan masked(int[] ranges) {
+        List<PartBatches> out = new ArrayList<>(parts.size());
+        for (PartBatches p : parts) {
+            out.add(new PartBatches(clip(p.textured(), ranges), clip(p.untextured(), ranges)));
+        }
+        return new ModelDrawPlan(out, materialIds, null);
+    }
+
+    /**
+     * {@code batches} intersected with the visible {@code ranges} ({@code first, count} pairs, sorted, disjoint): each
+     * batch becomes its visible sub-ranges (same material; adjacent pieces merged). Hosts with their own batch lists
+     * use this to honour a mask plan.
+     */
+    public static List<IndexedDrawBatch> clip(List<IndexedDrawBatch> batches, int[] ranges) {
+        var out = new IndexedDrawBatch.Builder();
+        int n = ranges.length / 2;
+        for (IndexedDrawBatch b : batches) {
+            int start = b.indexStart();
+            int end = start + b.indexCount();
+            // First range that ends after the batch starts.
+            int lo = 0, hi = n;
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                if (ranges[mid * 2] + ranges[mid * 2 + 1] <= start) lo = mid + 1;
+                else hi = mid;
+            }
+            for (int r = lo; r < n && ranges[r * 2] < end; r++) {
+                int s = Math.max(start, ranges[r * 2]);
+                int e = Math.min(end, ranges[r * 2] + ranges[r * 2 + 1]);
+                if (e > s) out.add(b.materialId(), s, e - s);
+            }
+        }
+        return out.build();
     }
 
     /** Number of parts the plan covers. */
@@ -91,7 +161,7 @@ public final class ModelDrawPlan {
             }
             parts.add(new PartBatches(textured.build(), untextured.build()));
         }
-        return new ModelDrawPlan(parts, usedMaterials);
+        return new ModelDrawPlan(parts, usedMaterials, geometry.maskPlan());
     }
 
     /** Result of {@link #materialSorted}: the reordered index buffer and its single-part plan. */

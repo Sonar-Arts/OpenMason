@@ -22,6 +22,7 @@ module openmason.engine.modeling {
     exports com.openmason.engine.modeling.notification;
     exports com.openmason.engine.modeling.parts;
     exports com.openmason.engine.modeling.parts.shapes;
+    exports com.openmason.engine.modeling.shading;
     exports com.openmason.engine.modeling.topology;
     exports com.openmason.engine.modeling.uv;
     exports com.openmason.engine.rendering.viewer;

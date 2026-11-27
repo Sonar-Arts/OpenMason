@@ -6,8 +6,7 @@ import org.joml.Vector3f;
  * Per-edge dihedral angles with lazy dirty recomputation.
  *
  * <p>Depends on {@link FaceGeometryCache} (ensures face normals are clean
- * before computing angles) and triggers {@link EdgeClassifier#reclassify}
- * after recomputation so edge classifications stay in sync.
+ * before computing angles).
  *
  * @see MeshTopologyBuilder
  */
@@ -17,7 +16,6 @@ public final class DihedralAngleCache {
     private final float[] dihedralAngles;
     private final boolean[] edgeDirty;
     private final FaceGeometryCache faceGeometryCache;
-    private final EdgeClassifier edgeClassifier;
 
     /**
      * Package-private constructor used by {@link MeshTopologyBuilder}.
@@ -25,15 +23,12 @@ public final class DihedralAngleCache {
      * @param edges             Edge array (shared reference)
      * @param dihedralAngles    Pre-computed dihedral angles (owned by this cache)
      * @param faceGeometryCache Face geometry cache for ensuring normals are clean
-     * @param edgeClassifier    Edge classifier to trigger reclassification after recompute
      */
-    DihedralAngleCache(MeshEdge[] edges, float[] dihedralAngles,
-                       FaceGeometryCache faceGeometryCache, EdgeClassifier edgeClassifier) {
+    DihedralAngleCache(MeshEdge[] edges, float[] dihedralAngles, FaceGeometryCache faceGeometryCache) {
         this.edges = edges;
         this.dihedralAngles = dihedralAngles;
         this.edgeDirty = new boolean[edges.length];
         this.faceGeometryCache = faceGeometryCache;
-        this.edgeClassifier = edgeClassifier;
     }
 
     /**
@@ -53,9 +48,8 @@ public final class DihedralAngleCache {
 
     /**
      * Ensure the dihedral angle for an edge is up-to-date.
-     * Ensures adjacent face normals are clean first, recomputes the angle,
-     * then triggers edge reclassification.
-     * Package-private — called by {@link MeshTopology} before edge classification queries.
+     * Ensures adjacent face normals are clean first, then recomputes the angle.
+     * Package-private.
      */
     void ensureClean(int edgeId) {
         if (edgeId < 0 || edgeId >= edgeDirty.length || !edgeDirty[edgeId]) {
@@ -66,17 +60,7 @@ public final class DihedralAngleCache {
             faceGeometryCache.ensureFaceClean(faceId);
         }
         dihedralAngles[edgeId] = computeDihedralAngleForEdge(edge);
-        edgeClassifier.reclassify(edgeId, dihedralAngles[edgeId]);
         edgeDirty[edgeId] = false;
-    }
-
-    /**
-     * Direct reference to the dihedral angles array.
-     * Package-private — used by {@link MeshTopology#setAutoSharpThreshold}
-     * for bulk reclassification via {@link EdgeClassifier#setThreshold}.
-     */
-    float[] angles() {
-        return dihedralAngles;
     }
 
     private float computeDihedralAngleForEdge(MeshEdge edge) {

@@ -473,6 +473,96 @@ public final class AnimClipDocument implements AutoCloseable {
         }
     }
 
+    // --- Morph tracks (OMANIM 1.3, OpenMason #171) -----------------------------------------------
+
+    /** The clip's morph (shape-key) weight tracks: one per morph channel NAME, scalar keys like a curve. */
+    public List<Curve> morphTracks() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment h = handle();
+            int n = (int) CendaAnimClip.MORPH_COUNT.invokeExact(h);
+            List<Curve> out = new ArrayList<>(n);
+            MemorySegment name = slot(arena), count = arena.allocate(CendaAnimClip.I32);
+            for (int i = 0; i < n; i++) {
+                check((int) CendaAnimClip.MORPH_GET.invokeExact(h, i, name, count), "morph");
+                int k = count.get(CendaAnimClip.I32, 0);
+                MemorySegment keys = arena.allocate(CendaAnimClip.CURVE_KEY_BYTES * Math.max(1, k), 4);
+                int got = (int) CendaAnimClip.MORPH_KEYS.invokeExact(h, i, keys, k);
+                if (got < 0) check(got, "morphKeys");
+                List<CurveKey> list = new ArrayList<>(k);
+                for (int j = 0; j < k; j++) {
+                    long o = CendaAnimClip.CURVE_KEY_BYTES * j;
+                    list.add(new CurveKey(keys.get(CendaAnimClip.F32, o), keys.get(CendaAnimClip.F32, o + 4),
+                        keys.get(CendaAnimClip.F32, o + 8), keys.get(CendaAnimClip.F32, o + 12),
+                        Interp.values()[keys.get(CendaAnimClip.I32, o + 16)]));
+                }
+                out.add(new Curve(read(name), list));
+            }
+            return List.copyOf(out);
+        } catch (Throwable t) {
+            throw CendaAnimClip.rethrow(t);
+        }
+    }
+
+    /**
+     * Adds or replaces a morph track (the curve's name = the morph channel; a leading {@code morph:} is stripped;
+     * keys sorted by time); returns its index. The clip then writes as OMANIM 1.3.
+     */
+    public int setMorphTrack(Curve track) {
+        Objects.requireNonNull(track, "track");
+        if (track.keys().isEmpty()) throw new IllegalArgumentException("a morph track needs keys; use removeMorphTrack");
+        try (Arena arena = Arena.ofConfined()) {
+            List<CurveKey> keys = track.keys();
+            MemorySegment k = arena.allocate(CendaAnimClip.CURVE_KEY_BYTES * keys.size(), 4);
+            for (int j = 0; j < keys.size(); j++) {
+                long o = CendaAnimClip.CURVE_KEY_BYTES * j;
+                CurveKey key = keys.get(j);
+                k.set(CendaAnimClip.F32, o, key.time());
+                k.set(CendaAnimClip.F32, o + 4, key.value());
+                k.set(CendaAnimClip.F32, o + 8, key.inTangent());
+                k.set(CendaAnimClip.F32, o + 12, key.outTangent());
+                k.set(CendaAnimClip.I32, o + 16, key.interp().ordinal());
+            }
+            int rc = (int) CendaAnimClip.MORPH_SET.invokeExact(handle(), cstr(arena, track.name()), k, keys.size());
+            if (rc < 0) check(rc, "setMorphTrack");
+            return rc;
+        } catch (Throwable t) {
+            throw CendaAnimClip.rethrow(t);
+        }
+    }
+
+    public void removeMorphTrack(String name) {
+        try (Arena arena = Arena.ofConfined()) {
+            int rc = (int) CendaAnimClip.MORPH_SET.invokeExact(handle(), cstr(arena, name), MemorySegment.NULL, 0);
+            if (rc < 0) check(rc, "removeMorphTrack");
+        } catch (Throwable t) {
+            throw CendaAnimClip.rethrow(t);
+        }
+    }
+
+    /** A morph track's value at {@code time} (clamped to its keys; what a rig clip carrying it samples). */
+    public float sampleMorph(int index, float time) {
+        try {
+            return (float) CendaAnimClip.MORPH_SAMPLE.invokeExact(handle(), index, time);
+        } catch (Throwable t) {
+            throw CendaAnimClip.rethrow(t);
+        }
+    }
+
+    /** The clip's morph tracks as the runtime reads them ({@link ParsedAnimClip#morphTracks()}). */
+    public List<com.openmason.engine.format.oma.ParsedMorphTrack> parsedMorphTracks() {
+        List<Curve> tracks = morphTracks();
+        List<com.openmason.engine.format.oma.ParsedMorphTrack> out = new ArrayList<>(tracks.size());
+        for (Curve c : tracks) {
+            List<com.openmason.engine.format.oma.ParsedMorphTrack.Key> keys = new ArrayList<>(c.keys().size());
+            for (CurveKey k : c.keys()) {
+                keys.add(new com.openmason.engine.format.oma.ParsedMorphTrack.Key(k.time(), k.value(), k.inTangent(),
+                    k.outTangent(), k.interp().ordinal()));
+            }
+            out.add(new com.openmason.engine.format.oma.ParsedMorphTrack(c.name(), keys));
+        }
+        return out;
+    }
+
     /** Adds or replaces a curve (keys sorted by time); returns its index. */
     public int setCurve(Curve curve) {
         Objects.requireNonNull(curve, "curve");
@@ -674,7 +764,7 @@ public final class AnimClipDocument implements AutoCloseable {
         AnimLayerMeta layer = h.hasLayer()
             ? new AnimLayerMeta(layerType(), mask(), h.fadeInSeconds(), h.fadeOutSeconds(), h.priority())
             : AnimLayerMeta.base();
-        return new ParsedAnimClip(name(), h.fps(), h.duration(), h.loop(), tracks, layer);
+        return new ParsedAnimClip(name(), h.fps(), h.duration(), h.loop(), tracks, layer, parsedMorphTracks());
     }
 
     // --- Marshalling -----------------------------------------------------------------------------

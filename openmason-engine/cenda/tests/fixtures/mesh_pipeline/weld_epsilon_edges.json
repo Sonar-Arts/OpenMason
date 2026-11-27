@@ -1,0 +1,19 @@
+{
+  "format": "openmason.meshPipelineFixture", "version": 1,
+  "name": "weld_epsilon_edges",
+  "javaSource": "VertexWelder.weld (epsilon 1e-4, cell 2e-4)",
+  "notes": "s1 is within eps of s0 -> v0. s2 is 1.1e-4 from s0 (no) but 2e-5 from s1 (yes) -> v0: first match in cell insertion order, so a chain welds beyond eps of the representative. s4 is EXACTLY eps (in float) from s3: dz*dz == eps*eps is not < -> new v2. s5 -> v1 (s3 is first in the chain). s6 is 1.5e-4 from s3 (no), 5e-5 from s4 (yes) -> v2. s7 sits in cell x=-1 and matches s0 in cell 0 -> v0.",
+  "tolerance": 0,
+  "input": {
+    "kind": "weld",
+    "epsilon": 1e-4,
+    "vertices": [0,0,0, 0.00009,0,0, 0.00011,0,0, 0,5,0, 0,5,0.0001, 0,5,0.00005, 0,5,0.00015, -0.00005,0,0]
+  },
+  "expected": {
+    "weld": {
+      "soupToVertex": [0,0,0,1,2,1,2,0],
+      "positions": [0,0,0, 0,5,0, 0,5,0.0001],
+      "vertexToSoup": [[0,1,2,7],[3,5],[4,6]]
+    }
+  }
+}

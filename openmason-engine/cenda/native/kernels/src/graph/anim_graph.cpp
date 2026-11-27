@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <new>
 #include <string>
 #include <unordered_map>
@@ -283,6 +284,15 @@ struct cg_instance {
     std::vector<std::pair<std::string, std::string>> lock_markers;  // per channel: (down, up)
     std::vector<double> lock_acc;
     float facing_x = 0.f, facing_z = -1.f;
+    // morph drives (#171): per resolved drive, its channel and params; values = one NaN-filled row per drive
+    struct MorphDriveRt {
+        int channel = -1;
+        int param = -1;
+        int weight_param = -1;
+        float weight = 1.f;
+    };
+    std::vector<MorphDriveRt> morph_drives;
+    std::vector<float> morph_values;  // drives x morph channel count
     // scratch
     std::vector<cm_sync_member> sync_members;
     std::vector<int> sync_nodes;
@@ -1154,6 +1164,12 @@ int32_t bind_clip_to(cg_instance& inst, const cm_clip* clip, const cc_char* char
         b.release();
         return fail(CG_ERR_ARG, "binding a clip: " + why);
     }
+    // Morph tracks (OMANIM 1.3, #171) ride along, bound to the rig's morph channels by name.
+    if (cm_clip_apply_morphs(b.doc, b.rig_clip) != CM_OK) {
+        const std::string why = cm_last_error();
+        b.release();
+        return fail(CG_ERR_ARG, "binding a clip: " + why);
+    }
     const char* root = nullptr;
     uint32_t axes = 0;
     cm_clip_root_motion_get(b.doc, &root, &axes);
@@ -1226,6 +1242,16 @@ int32_t retarget_into(cg_instance& inst, BoundClip& b, float time, int32_t slot)
         }
     }
     cr_poses_set(inst.poses, slot, b.dst_local.data(), b.driven.data());
+    // Morph tracks pass through by name (#171): the clip's morph tracks onto THIS rig's channels.
+    if (cr_rig_morph_count(inst.rig) > 0) {
+        cr_pose_op mop{};
+        mop.op = CR_OP_SAMPLE;
+        mop.dst = slot;
+        mop.object = b.rig_clip;
+        mop.time = time;
+        mop.flags = CR_POSE_MORPHS_ONLY;
+        cr_poses_run(inst.poses, &mop, 1);
+    }
     return CG_OK;
 }
 
@@ -1830,7 +1856,14 @@ cg_instance* cg_instance_create(const cg_graph* g, const cr_rig* rig, const cc_c
         cr_mask* mask = cr_mask_create(rig, 0.f);
         for (const og::MaskEntry& e : m.entries) {
             const uint32_t flags = e.branch ? static_cast<uint32_t>(CR_MASK_BRANCH) : 0u;
-            if (!e.role.empty()) {
+            if (!e.morph.empty()) {  // a morph channel (#171), "*" = every channel
+                const int32_t ch = e.morph == "*" ? -1 : cr_rig_morph_find(rig, e.morph.c_str());
+                if (e.morph != "*" && ch < 0) {
+                    ++unresolved;
+                } else {
+                    cr_mask_set_morph(mask, ch, e.weight);
+                }
+            } else if (!e.role.empty()) {
                 if (character == nullptr
                     || cc_char_mask_role(character, rig, mask, e.role.c_str(), e.weight, flags, e.depth) != CC_OK) {
                     ++unresolved;
@@ -1868,6 +1901,22 @@ cg_instance* cg_instance_create(const cg_graph* g, const cr_rig* rig, const cc_c
         cr_poses_set(inst->poses, g->ref_slot, local.data(), nullptr);
     }
     unresolved += build_modifiers(*inst);
+    // Morph drives (#171): channel by name; a drive whose channel the rig lacks is left out (counted).
+    const auto channels = static_cast<size_t>(cr_rig_morph_count(rig));
+    for (const og::MorphDrive& md : g->doc.morph_drives) {
+        cg_instance::MorphDriveRt d;
+        d.channel = cr_rig_morph_find(rig, md.morph.c_str());
+        if (d.channel < 0) {
+            ++unresolved;
+            continue;
+        }
+        d.param = g->doc.find_param(md.param);
+        d.weight_param = md.weight_param.empty() ? -1 : g->doc.find_param(md.weight_param);
+        d.weight = md.weight;
+        inst->morph_drives.push_back(d);
+    }
+    inst->morph_values.assign(inst->morph_drives.size() * channels, std::numeric_limits<float>::quiet_NaN());
+    inst->ops.reserve(static_cast<size_t>(g->max_ops) + inst->morph_drives.size());
     set_out(out_unresolved, unresolved);
     reset_instance(*inst);
     return inst;
@@ -2482,6 +2531,21 @@ int32_t cg_instance_evaluate(cg_instance* inst, float dt, const cr_joint_extra* 
         op.object = inst->mods;
         op.param = dt;
     }
+    // Morph drives (#171): each an override of its channel toward its parameter, after the modifiers (both views).
+    if (!inst->morph_drives.empty()) {
+        const size_t channels = inst->morph_values.size() / inst->morph_drives.size();
+        for (size_t k = 0; k < inst->morph_drives.size(); ++k) {
+            const cg_instance::MorphDriveRt& d = inst->morph_drives[k];
+            float w = d.weight;
+            if (d.weight_param >= 0) w *= static_cast<float>(inst->params[static_cast<size_t>(d.weight_param) * 2]);
+            if (!(w > 0.f)) continue;
+            float* row = inst->morph_values.data() + k * channels;
+            row[static_cast<size_t>(d.channel)] = static_cast<float>(inst->params[static_cast<size_t>(d.param) * 2]);
+            cr_pose_op& op = push(*inst, CR_OP_MORPH, g.nodes[static_cast<size_t>(g.root)].out_slot);
+            op.object = row;
+            op.weight = w;
+        }
+    }
     emit_first_person(*inst);
     const int32_t rc = cr_poses_evaluate(inst->poses, inst->ops.data(), static_cast<int32_t>(inst->ops.size()),
                                          g.nodes[static_cast<size_t>(g.root)].out_slot, extras, extra_count,
@@ -2547,6 +2611,18 @@ int32_t cg_instance_compose_view(const cg_instance* inst, int32_t view, const cr
         return fail(CG_ERR_ARG, std::string("cg_instance_compose_view: ") + cr_last_error());
     }
     return CG_OK;
+}
+
+int32_t cg_instance_morph_weights(const cg_instance* inst, int32_t view, float* out, int32_t capacity) {
+    if (inst == nullptr || (view != CG_VIEW_BODY && view != CG_VIEW_FIRST_PERSON) || capacity < 0) {
+        return fail(CG_ERR_ARG, "cg_instance_morph_weights: bad arguments");
+    }
+    const cg_graph& g = *inst->g;
+    const int32_t slot = view == CG_VIEW_FIRST_PERSON && g.fp_slot >= 0 ? g.fp_slot
+                                                                         : g.nodes[static_cast<size_t>(g.root)].out_slot;
+    const int32_t n = cr_poses_morph_weights(inst->poses, slot, out, nullptr, capacity);
+    if (n < 0) return fail(CG_ERR_ARG, std::string("cg_instance_morph_weights: ") + cr_last_error());
+    return n;
 }
 
 int32_t cg_graph_first_person_layer_count(const cg_graph* g) {

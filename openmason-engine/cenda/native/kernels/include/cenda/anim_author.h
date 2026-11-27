@@ -59,6 +59,11 @@ const char* cm_author_view(const cm_author* a);
 
 /* The pose at `time` (wrapped like playback): joint_count*9 local floats (pos, rot degrees, scale). */
 int32_t cm_author_pose(const cm_author* a, float time, int32_t stage, float* out_local);
+/* The morph (shape key) weights of the pose at `time` (#171): the rig's channels (cr_rig_morph_count), composed by
+ * the layers like the joints (layer masks do not filter channels); writes min(count, capacity) and returns the
+ * count. Keys are set with the morph_key / morph operations (omanim_author.hpp); the baked clip carries the composed
+ * morph tracks (a channel only the base layer keys stays as authored). */
+int32_t cm_author_morph_weights(const cm_author* a, float time, int32_t stage, float* out, int32_t capacity);
 /* The pose composed (cr_rig_pose_locals outputs; any may be NULL). */
 int32_t cm_author_compose(const cm_author* a, float time, int32_t stage, const float* base_matrix, float* out_skin,
                           float* out_world);

@@ -213,6 +213,30 @@ Binding make_binding(const cr_rig& rig, const cr_clip& clip) {
         }
         b.masked[i] = masked ? 1 : 0;
     }
+    // Morph channels (#171): a track by exact name, else case-insensitive; covered by the clip mask when it is empty
+    // or lists the channel (or "morph:<channel>").
+    const size_t m = rig.morph_names.size();
+    b.morph_track.assign(m, -1);
+    b.morph_masked.assign(m, 0);
+    for (size_t c = 0; c < m; ++c) {
+        int32_t t = -1;
+        if (auto it = clip.morph_by_name.find(rig.morph_names[c]); it != clip.morph_by_name.end()) {
+            t = it->second;
+        } else if (auto it2 = clip.morph_by_lower.find(rig.morph_lower[c]); it2 != clip.morph_by_lower.end()) {
+            t = it2->second;
+        }
+        if (t >= 0 && clip.morph_tracks[static_cast<size_t>(t)].key_count <= 0) t = -1;
+        b.morph_track[c] = t;
+        bool masked = clip.mask.empty();
+        for (size_t k = 0; !masked && k < clip.mask_lower.size(); ++k) {
+            const std::string& e = clip.mask_lower[k];
+            if (e == rig.morph_lower[c] || (e.size() == rig.morph_lower[c].size() + 6 && e.compare(0, 6, "morph:") == 0
+                                            && e.compare(6, std::string::npos, rig.morph_lower[c]) == 0)) {
+                masked = true;
+            }
+        }
+        b.morph_masked[c] = masked ? 1 : 0;
+    }
     return b;
 }
 
@@ -226,6 +250,9 @@ Binding binding_for(const cr_rig& rig, const cr_clip& clip) {
 }
 
 void binding_into(const cr_rig& rig, const cr_clip& clip, Binding& out) {
+    // From now on the clip's morph tracks and the rig's morph channels are fixed (#171).
+    if (!clip.bound.load(std::memory_order_relaxed)) clip.bound.store(true, std::memory_order_relaxed);
+    if (!rig.morph_frozen.load(std::memory_order_relaxed)) rig.morph_frozen.store(true, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(rig.binding_mutex);
         for (auto it = rig.bindings.begin(); it != rig.bindings.end(); ++it) {
@@ -235,6 +262,8 @@ void binding_into(const cr_rig& rig, const cr_clip& clip, Binding& out) {
                 out.clip_serial = hit.clip_serial;
                 out.track.assign(hit.track.begin(), hit.track.end());
                 out.masked.assign(hit.masked.begin(), hit.masked.end());
+                out.morph_track.assign(hit.morph_track.begin(), hit.morph_track.end());
+                out.morph_masked.assign(hit.morph_masked.begin(), hit.morph_masked.end());
                 return;
             }
         }
@@ -243,6 +272,8 @@ void binding_into(const cr_rig& rig, const cr_clip& clip, Binding& out) {
     out.clip_serial = b.clip_serial;
     out.track.assign(b.track.begin(), b.track.end());
     out.masked.assign(b.masked.begin(), b.masked.end());
+    out.morph_track.assign(b.morph_track.begin(), b.morph_track.end());
+    out.morph_masked.assign(b.morph_masked.begin(), b.morph_masked.end());
     std::lock_guard<std::mutex> lock(rig.binding_mutex);
     rig.bindings.push_front(std::move(b));
     if (rig.bindings.size() > MAX_BINDINGS) rig.bindings.pop_back();
@@ -264,6 +295,40 @@ void pose_rest(const cr_rig& rig, PoseBuf& dst) {
         std::memcpy(dst.v[i].rot, j.rot, sizeof j.rot);
         std::memcpy(dst.v[i].scale, j.scale, sizeof j.scale);
     }
+    dst.mw.assign(rig.morph_defaults.begin(), rig.morph_defaults.end());
+    dst.mdriven.assign(rig.morph_defaults.size(), 0);
+}
+
+void copy_pose(PoseBuf& dst, const PoseBuf& src) {
+    if (&dst == &src) return;
+    dst.v = src.v;
+    dst.driven = src.driven;
+    dst.mw = src.mw;
+    dst.mdriven = src.mdriven;
+}
+
+namespace {
+
+void sample_morph_channels(const cr_rig& rig, const cr_clip& clip, float t, bool clip_mask, PoseBuf& dst,
+                           const Binding& b) {
+    const size_t m = rig.morph_names.size();
+    for (size_t c = 0; c < m; ++c) {
+        if (b.morph_track[c] < 0 || (clip_mask && !b.morph_masked[c])) continue;
+        dst.mw[c] = sample_morph_track(clip, b.morph_track[c], t);
+        dst.mdriven[c] = 1;
+    }
+}
+
+}  // namespace
+
+void pose_sample_morphs(const cr_rig& rig, const cr_clip& clip, float elapsed, bool clip_mask, PoseBuf& dst,
+                        Binding& scratch) {
+    dst.mw.assign(rig.morph_defaults.begin(), rig.morph_defaults.end());
+    dst.mdriven.assign(rig.morph_defaults.size(), 0);
+    if (rig.morph_names.empty()) return;
+    const float t = wrap_time(elapsed, clip.desc.duration, clip.desc.loop);
+    binding_into(rig, clip, scratch);
+    sample_morph_channels(rig, clip, t, clip_mask, dst, scratch);
 }
 
 void pose_sample(const cr_rig& rig, const cr_clip& clip, float elapsed, bool clip_mask, PoseBuf& dst,
@@ -277,6 +342,7 @@ void pose_sample(const cr_rig& rig, const cr_clip& clip, float elapsed, bool cli
         sample_track(clip, scratch.track[i], t, dst.v[i]);
         dst.driven[i] = 1;
     }
+    if (!rig.morph_names.empty()) sample_morph_channels(rig, clip, t, clip_mask, dst, scratch);
 }
 
 namespace {
@@ -293,7 +359,7 @@ Pose rest_of(const Joint& j) {
 }  // namespace
 
 void pose_layer_override(const cr_rig& rig, PoseBuf& dst, const PoseBuf& src, float weight, const float* mask,
-                         uint32_t flags) {
+                         uint32_t flags, const float* morph_mask) {
     const size_t n = rig.joints.size();
     const bool passthrough = (flags & CR_POSE_NO_PASSTHROUGH) == 0;
     const bool quat = (flags & CR_POSE_QUAT) != 0;
@@ -310,6 +376,17 @@ void pose_layer_override(const cr_rig& rig, PoseBuf& dst, const PoseBuf& src, fl
             lerp_pose(dst.v[i], src.v[i], w);
         }
         dst.driven[i] = 1;
+    }
+    // Morph channels (#171): the same lerp per weight.
+    const size_t m = rig.morph_defaults.size();
+    for (size_t c = 0; c < m; ++c) {
+        if (!src.mdriven[c]) continue;
+        float w = morph_mask != nullptr ? weight * morph_mask[c] : weight;
+        w = std::min(w, 1.f);
+        if (w <= 0.f) continue;
+        if (!passthrough) dst.mw[c] = rig.morph_defaults[c];
+        dst.mw[c] = w >= 1.f ? src.mw[c] : dst.mw[c] + (src.mw[c] - dst.mw[c]) * w;
+        dst.mdriven[c] = 1;
     }
 }
 

@@ -551,6 +551,108 @@ float cm_clip_curve_sample(const cm_clip* c, int32_t index, float time) {
     return sample(c->clip.curves[static_cast<std::size_t>(index)], time);
 }
 
+// --- Morph tracks (OMANIM 1.3, #171) -----------------------------------------------------------------------
+
+namespace {
+
+std::string morph_key_name(const char* name) {
+    std::string s = name != nullptr ? name : "";
+    if (s.rfind(oa::kMorphPrefix, 0) == 0) s.erase(0, std::strlen(oa::kMorphPrefix));
+    return s;
+}
+
+}  // namespace
+
+int32_t cm_clip_morph_count(const cm_clip* c) { return c == nullptr ? 0 : static_cast<int32_t>(c->clip.morphs.size()); }
+
+int32_t cm_clip_morph_get(const cm_clip* c, int32_t index, const char** out_name, int32_t* out_key_count) {
+    if (c == nullptr) return fail(CM_ERR_ARG, "cm_clip_morph_get: null clip");
+    if (!in_range(c->clip.morphs, index)) return fail(CM_ERR_RANGE, "cm_clip_morph_get: index out of range");
+    const oa::Curve& cv = c->clip.morphs[static_cast<std::size_t>(index)];
+    set_out(out_name, cv.name.c_str());
+    set_out(out_key_count, static_cast<int32_t>(cv.keys.size()));
+    return CM_OK;
+}
+
+int32_t cm_clip_morph_keys(const cm_clip* c, int32_t index, cm_curve_key* out, int32_t capacity) {
+    if (c == nullptr || capacity < 0) return fail(CM_ERR_ARG, "cm_clip_morph_keys: bad argument");
+    if (!in_range(c->clip.morphs, index)) return fail(CM_ERR_RANGE, "cm_clip_morph_keys: index out of range");
+    const auto& keys = c->clip.morphs[static_cast<std::size_t>(index)].keys;
+    const auto n = static_cast<int32_t>(keys.size());
+    for (int32_t i = 0; out != nullptr && i < std::min(n, capacity); ++i) {
+        const oa::CurveKey& k = keys[static_cast<std::size_t>(i)];
+        out[i] = cm_curve_key{k.time, k.value, k.in_tangent, k.out_tangent, static_cast<int32_t>(k.interp)};
+    }
+    return n;
+}
+
+int32_t cm_clip_morph_set(cm_clip* c, const char* name, const cm_curve_key* keys, int32_t count) {
+    const std::string key = morph_key_name(name);
+    if (c == nullptr || key.empty() || count < 0) return fail(CM_ERR_ARG, "cm_clip_morph_set: bad argument");
+    CM_GUARD_BEGIN
+    g_error.clear();
+    auto& morphs = c->clip.morphs;
+    auto it = std::find_if(morphs.begin(), morphs.end(), [&](const oa::Curve& cv) { return cv.name == key; });
+    if (keys == nullptr || count == 0) {
+        if (it != morphs.end()) morphs.erase(it);
+        return CM_OK;
+    }
+    oa::Curve cv;
+    cv.name = key;
+    for (int32_t i = 0; i < count; ++i) {
+        const cm_curve_key& k = keys[i];
+        if (!finite(k.time) || !finite(k.value) || !finite(k.in_tangent) || !finite(k.out_tangent) ||
+            k.interp < CM_INTERP_LINEAR || k.interp > CM_INTERP_CUBIC) {
+            return fail(CM_ERR_ARG, "cm_clip_morph_set: bad key");
+        }
+        cv.keys.push_back({k.time, k.value, k.in_tangent, k.out_tangent, static_cast<oa::CurveInterp>(k.interp)});
+    }
+    std::stable_sort(cv.keys.begin(), cv.keys.end(), [](const oa::CurveKey& a, const oa::CurveKey& b) { return a.time < b.time; });
+    if (it != morphs.end()) {
+        *it = std::move(cv);
+        return static_cast<int32_t>(it - morphs.begin());
+    }
+    morphs.push_back(std::move(cv));
+    return static_cast<int32_t>(morphs.size() - 1);
+    CM_GUARD_END(CM_ERR_ARG)
+}
+
+int32_t cm_clip_morph_find(const cm_clip* c, const char* name) {
+    if (c == nullptr || name == nullptr) return -1;
+    const std::string key = morph_key_name(name);
+    for (std::size_t i = 0; i < c->clip.morphs.size(); ++i) {
+        if (c->clip.morphs[i].name == key) return static_cast<int32_t>(i);
+    }
+    return -1;
+}
+
+float cm_clip_morph_sample(const cm_clip* c, int32_t index, float time) {
+    if (c == nullptr || !in_range(c->clip.morphs, index) || !finite(time)) return 0.f;
+    return sample(c->clip.morphs[static_cast<std::size_t>(index)], time);
+}
+
+int32_t cm_clip_apply_morphs(const cm_clip* c, cr_clip* rig_clip) {
+    if (c == nullptr || rig_clip == nullptr) return fail(CM_ERR_ARG, "cm_clip_apply_morphs: null argument");
+    if (c->clip.morphs.empty() && cr_clip_morph_track_count(rig_clip) == 0) return CM_OK;
+    CM_GUARD_BEGIN
+    std::vector<const char*> names;
+    std::vector<int32_t> offsets{0};
+    std::vector<cr_morph_key> keys;
+    for (const oa::Curve& cv : c->clip.morphs) {
+        names.push_back(cv.name.c_str());
+        for (const oa::CurveKey& k : cv.keys) {
+            keys.push_back(cr_morph_key{k.time, k.value, k.in_tangent, k.out_tangent, static_cast<int32_t>(k.interp)});
+        }
+        offsets.push_back(static_cast<int32_t>(keys.size()));
+    }
+    if (cr_clip_set_morph_tracks(rig_clip, static_cast<int32_t>(names.size()), names.data(), offsets.data(),
+                                 keys.data()) != CR_OK) {
+        return fail(CM_ERR_ARG, std::string("cm_clip_apply_morphs: ") + cr_last_error());
+    }
+    return CM_OK;
+    CM_GUARD_END(CM_ERR_ARG)
+}
+
 // --- Markers ------------------------------------------------------------------------------------------
 
 int32_t cm_clip_marker_count(const cm_clip* c) { return c == nullptr ? 0 : static_cast<int32_t>(c->clip.markers.size()); }

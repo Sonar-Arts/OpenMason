@@ -46,6 +46,26 @@ public final class ModelFileToolDefinitions {
                 args -> files.open(reqString(args, "file_path"), optInt(args, "timeout_seconds", 0))));
 
         registry.register(new McpTool(
+                "model_import",
+                "Import a .gltf/.glb/.obj (path like model_open) as an unsaved model; returns counts and warnings. "
+                        + "save_clips_to (e.g. project:Animations) writes its animations as .omanim.",
+                McpSchema.of(mapper)
+                        .str("path", "File to import").required("path")
+                        .num("unit_scale", "Source units to Open Mason units (1)")
+                        .bool("keep_axis", "Keep the source axes (default: turn +Z-forward to -Z)")
+                        .bool("merge_quads", "Pair triangles into quads (true)")
+                        .bool("split_parts", "One part per mesh node (true)")
+                        .bool("animations", "Convert animations (true)")
+                        .bool("morphs", "Shape keys (true)")
+                        .bool("vertex_groups", "Vertex groups (true)")
+                        .intg("max_texture_size", "Downscale larger textures, 0 = no limit")
+                        .str("save_clips_to", "Folder for the clips")
+                        .intg("timeout_seconds", "How long to wait for the user (default 60, max 240)")
+                        .build(),
+                args -> files.importModel(reqString(args, "path"), importOptions(args),
+                        optString(args, "save_clips_to"), optInt(args, "timeout_seconds", 0))));
+
+        registry.register(new McpTool(
                 "model_new",
                 "Start a new blank cube model in the editor. Unsaved changes trigger the in-tool "
                         + "approval dialog.",
@@ -53,5 +73,25 @@ public final class ModelFileToolDefinitions {
                         .intg("timeout_seconds", "How long to wait for the user (default 60, max 240)")
                         .build(),
                 args -> files.newModel(optInt(args, "timeout_seconds", 0))));
+    }
+
+    private static com.openmason.engine.format.omo.CendaImport.Options importOptions(
+            com.fasterxml.jackson.databind.JsonNode args) {
+        var d = com.openmason.engine.format.omo.CendaImport.Options.defaults();
+        Float scale = McpArgs.optFloatBoxed(args, "unit_scale");
+        if (scale != null && !(scale > 0f)) {
+            throw new IllegalArgumentException("unit_scale must be > 0");
+        }
+        return new com.openmason.engine.format.omo.CendaImport.Options(
+                scale != null ? scale : d.unitScale(),
+                optBool(args, "keep_axis", d.keepAxis()),
+                optBool(args, "merge_quads", d.mergeQuads()),
+                optBool(args, "split_parts", d.splitParts()),
+                optBool(args, "animations", d.animations()),
+                optBool(args, "morphs", d.morphs()),
+                optBool(args, "vertex_groups", d.vertexGroups()),
+                false,
+                Math.max(0, optInt(args, "max_texture_size", 0)),
+                d.quadAngleDegrees());
     }
 }

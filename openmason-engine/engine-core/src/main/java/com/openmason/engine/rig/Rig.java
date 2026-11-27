@@ -67,6 +67,15 @@ public final class Rig implements AutoCloseable {
      * @throws IllegalArgumentException when the joints are rejected
      */
     public static Rig create(List<RigJoint> joints) {
+        return create(joints, null);
+    }
+
+    /**
+     * Builds a rig whose MORPH CHANNELS are the targets of {@code morphs} (channel i = target i, OpenMason #171;
+     * {@code cr_rig_set_morph_channels_from} right after creation, before anything can pose it). {@code morphs} null
+     * or empty = a rig without channels (it poses bit-identically to before).
+     */
+    public static Rig create(List<RigJoint> joints, RigMorphs morphs) {
         CendaRig.requireAvailable();
         if (joints == null || joints.isEmpty()) {
             throw new IllegalArgumentException("A rig needs at least one joint");
@@ -96,6 +105,14 @@ public final class Rig implements AutoCloseable {
                 CendaRig.strings(arena, ids), CendaRig.strings(arena, names));
             if (handle.equals(MemorySegment.NULL)) {
                 throw new IllegalArgumentException("cr_rig_create: " + CendaRig.lastError());
+            }
+            if (morphs != null && morphs.targetCount() > 0) {
+                int rc = (int) CendaRig.RIG_SET_MORPH_CHANNELS_FROM.invokeExact(handle, morphs.handle());
+                if (rc != CendaRig.OK) {
+                    String why = CendaRig.lastError();
+                    CendaRig.RIG_DESTROY.invokeExact(handle);
+                    throw new IllegalArgumentException("cr_rig_set_morph_channels_from: " + why);
+                }
             }
             return new Rig(joints, handle);
         } catch (RuntimeException e) {
@@ -149,6 +166,35 @@ public final class Rig implements AutoCloseable {
         if (idOrName == null || idOrName.isEmpty()) return -1;
         try (Arena arena = Arena.ofConfined()) {
             return (int) CendaRig.RIG_FIND.invokeExact(handle(), arena.allocateFrom(idOrName));
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+    }
+
+    /** Number of morph channels (shape-key weights every pose carries, OpenMason #171); 0 without. */
+    public int morphCount() {
+        try {
+            return (int) CendaRig.RIG_MORPH_COUNT.invokeExact(handle());
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+    }
+
+    /** A morph channel's name, null for a bad channel. */
+    public String morphName(int channel) {
+        try {
+            MemorySegment name = (MemorySegment) CendaRig.RIG_MORPH_NAME.invokeExact(handle(), channel);
+            return name.equals(MemorySegment.NULL) ? null : name.reinterpret(Integer.MAX_VALUE).getString(0);
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+    }
+
+    /** Morph channel by name (exact, then case-insensitive; a leading {@code morph:} is accepted); -1 when none. */
+    public int findMorph(String name) {
+        if (name == null || name.isEmpty()) return -1;
+        try (Arena arena = Arena.ofConfined()) {
+            return (int) CendaRig.RIG_MORPH_FIND.invokeExact(handle(), arena.allocateFrom(name));
         } catch (Throwable t) {
             throw CendaRig.rethrow(t);
         }

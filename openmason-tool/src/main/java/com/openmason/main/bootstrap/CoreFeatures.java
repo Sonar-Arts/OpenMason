@@ -134,6 +134,16 @@ public final class CoreFeatures {
         context.fileTypes().register(BuiltinFileTypes.PNG);
         context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMO.id(),
                 path -> services.require(ModelOperationService.class).loadOMOModel(path.toString())));
+        // glTF / OBJ (#173): opening one shows File > Import Model's options for it.
+        context.fileTypes().register(BuiltinFileTypes.GLTF);
+        context.fileTypes().register(BuiltinFileTypes.OBJ);
+        for (var type : List.of(BuiltinFileTypes.GLTF, BuiltinFileTypes.OBJ)) {
+            context.fileOpeners().register(new FileOpener(type.id(),
+                    path -> services.require(FileMenuHandler.class).getModelImportDialog().show(path)));
+        }
+        // The importer as an entity-model format: imported models work wherever an attachable model does.
+        com.openmason.engine.format.spi.Formats.register(
+                new com.openmason.main.systems.io.ImportedModelCodec());
         context.fileOpeners().register(new FileOpener(BuiltinFileTypes.OMSC.id(), path -> {
             String dir = services.find(ProjectDirectory.class).map(ProjectDirectory::get).orElse(null);
             services.require(SceneViewerImGuiInterface.class).getSceneService()

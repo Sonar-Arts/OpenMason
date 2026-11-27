@@ -348,6 +348,88 @@ Imported import_file(const fs::path& p, const co_import_options* opt = nullptr) 
     return out;
 }
 
+// ---- morph weight tracks (#171) ----------------------------------------------------------------------------------
+
+// The glTF weights channel's value of target t at time x, evaluated here (glTF 2.0 spec: clamp, step, lerp, Hermite
+// with dt-scaled tangents).
+double gltf_weight(const imp::AnimSampler& smp, std::size_t t, double x) {
+    const std::size_t c = static_cast<std::size_t>(smp.components);
+    const bool cubic = smp.interpolation == imp::Interpolation::CubicSpline;
+    const std::size_t stride = c * (cubic ? 3 : 1);
+    auto v = [&](std::size_t k) { return static_cast<double>(smp.output[k * stride + (cubic ? c : 0) + t]); };
+    const std::size_t n = smp.input.size();
+    if (x <= smp.input[0]) return v(0);
+    if (x >= smp.input[n - 1]) return v(n - 1);
+    std::size_t k = 0;
+    while (k + 2 < n && x >= smp.input[k + 1]) ++k;
+    const double t0 = smp.input[k], t1 = smp.input[k + 1], dt = t1 - t0, u = (x - t0) / dt;
+    if (smp.interpolation == imp::Interpolation::Step) return v(k);
+    if (!cubic) return v(k) + (v(k + 1) - v(k)) * u;
+    const double b = smp.output[k * stride + 2 * c + t], a = smp.output[(k + 1) * stride + t];
+    const double u2 = u * u, u3 = u2 * u;
+    return (2 * u3 - 3 * u2 + 1) * v(k) + (u3 - 2 * u2 + u) * dt * b + (-2 * u3 + 3 * u2) * v(k + 1) + (u3 - u2) * dt * a;
+}
+
+// The OMANIM 1.3 morph track's value at x (the format's curve rule, evaluated here).
+double track_weight(const oa::Curve& cv, double x) {
+    const auto& k = cv.keys;
+    if (x <= k.front().time) return k.front().value;
+    if (x >= k.back().time) return k.back().value;
+    std::size_t i = 0;
+    while (i + 1 < k.size() && k[i + 1].time <= x) ++i;
+    const double dt = static_cast<double>(k[i + 1].time) - k[i].time, u = (x - k[i].time) / dt;
+    if (k[i].interp == oa::CurveInterp::Step) return k[i].value;
+    if (k[i].interp == oa::CurveInterp::Linear) return k[i].value + (static_cast<double>(k[i + 1].value) - k[i].value) * u;
+    const double u2 = u * u, u3 = u2 * u;
+    return (2 * u3 - 3 * u2 + 1) * k[i].value + (u3 - 2 * u2 + u) * dt * k[i].out_tangent +
+           (-2 * u3 + 3 * u2) * k[i + 1].value + (u3 - u2) * dt * k[i + 1].in_tangent;
+}
+
+// Every weights channel of every animation came through as morph tracks equal to the glTF curve. Returns the number
+// of tracks checked.
+int check_morph_tracks(const imp::Scene& s, const Imported& im) {
+    int checked = 0;
+    for (const imp::Animation& a : s.animations) {
+        const oa::Clip* clip = nullptr;
+        for (const auto& [name, c] : im.clips) {
+            if (name == a.name) clip = &c;
+        }
+        for (const imp::AnimChannel& ch : a.channels) {
+            if (ch.path != imp::AnimPath::Weights) continue;
+            CHECK(clip != nullptr);
+            if (clip == nullptr) continue;
+            CHECK(clip->version == "1.3");
+            const imp::AnimSampler& smp = a.samplers[static_cast<std::size_t>(ch.sampler)];
+            const imp::Mesh& mesh = s.meshes[static_cast<std::size_t>(s.nodes[static_cast<std::size_t>(ch.node)].mesh)];
+            for (std::size_t t = 0; t < static_cast<std::size_t>(smp.components); ++t) {
+                const std::string mname = t < mesh.target_names.size() && !mesh.target_names[t].empty()
+                                              ? mesh.target_names[t] : "Key " + std::to_string(t + 1);
+                const oa::Curve* cv = nullptr;
+                for (const oa::Curve& c : clip->morphs) {
+                    if (c.name == mname) cv = &c;
+                }
+                CHECK(cv != nullptr && !cv->keys.empty());
+                if (cv == nullptr || cv->keys.empty()) continue;
+                CHECK(cv->keys.size() <= smp.input.size());
+                const bool cubic = smp.interpolation == imp::Interpolation::CubicSpline;
+                if (cubic) CHECK(cv->keys.size() == smp.input.size());
+                for (const oa::CurveKey& k : cv->keys) {
+                    CHECK(k.interp == (cubic ? oa::CurveInterp::Cubic
+                                             : smp.interpolation == imp::Interpolation::Step ? oa::CurveInterp::Step
+                                                                                              : oa::CurveInterp::Linear));
+                }
+                const double end = smp.input.back();
+                for (int i = -2; i <= 202; ++i) {
+                    const double x = end * i / 200.0;
+                    CHECK_NEAR(track_weight(*cv, x), gltf_weight(smp, t, x), 1e-6);
+                }
+                ++checked;
+            }
+        }
+    }
+    return checked;
+}
+
 bool has_warning(const Imported& im, std::string_view needle) {
     for (const auto& w : im.warnings) {
         if (w.find(needle) != std::string::npos) return true;
@@ -847,9 +929,21 @@ void test_rig() {
         CHECK(m.parts.empty() || m.parts[0].vertices.size() >= 8);  // 4 source vertices, each in >= 2 faces
     }
 
-    // Warnings: the morph weights channel and the non-joint Prop channel are skipped.
-    CHECK(has_warning(im, "morph weight channels skipped"));
+    // The morph weights channel became an OMANIM 1.3 morph track (#171); the non-joint Prop channel is skipped.
+    CHECK(!has_warning(im, "morph weight channels skipped"));
+    CHECK(check_morph_tracks(s, im) == 1);
     CHECK(has_warning(im, "'Prop' skipped"));
+    // A clip without morph tracks is still written as 1.2.
+    for (const auto& [name, clip] : im.clips) CHECK(clip.version == (clip.morphs.empty() ? "1.2" : "1.3"));
+    // Morphs off: the weights channel is skipped with a warning.
+    {
+        co_import_options o;
+        co_import_options_default(&o);
+        o.flags &= ~static_cast<uint32_t>(CO_IMPORT_MORPHS);
+        const Imported nm = import_file(kOwn / "rig.gltf", &o);
+        CHECK(nm.rc == CO_OK && has_warning(nm, "morph weight channels skipped"));
+        for (const auto& [name, clip] : nm.clips) CHECK(clip.morphs.empty() && clip.version == "1.2");
+    }
 
     // Animations: pose the OM rig with each imported clip and compare against the glTF evaluated here.
     CHECK(im.clips.size() == 2 && im.counts.clips == 2);
@@ -1467,10 +1561,16 @@ void test_other_a3_fixtures() {
         CHECK(im.rc == CO_OK);
         if (im.rc == CO_OK) check_layout(im.doc, f);
     }
-    // animation.gltf animates a mesh node (not a joint) + morph weights: no clip, warnings.
+    // animation.gltf animates a mesh node (not a joint: skipped, warning) + CUBICSPLINE morph weights: a clip with only
+    // morph tracks (#171), Hermite keys with the glTF tangents.
     const Imported anim = import_file(kA3 / "animation.gltf");
-    CHECK(anim.rc == CO_OK && anim.clips.empty());
-    CHECK(has_warning(anim, "morph weight channels skipped") && has_warning(anim, "nothing to import"));
+    CHECK(anim.rc == CO_OK && anim.clips.size() == 1);
+    CHECK(!has_warning(anim, "morph weight channels skipped") && !has_warning(anim, "nothing to import"));
+    CHECK(has_warning(anim, "'Mover' skipped"));
+    if (anim.clips.size() == 1) {
+        CHECK(anim.clips[0].second.tracks.empty() && anim.clips[0].second.morphs.size() == 2);
+        CHECK(check_morph_tracks(read_scene(kA3 / "animation.gltf"), anim) == 2);
+    }
     // hierarchy.gltf has no meshes: an empty document, no parts.
     const Imported h = import_file(kA3 / "hierarchy.gltf");
     CHECK(h.rc == CO_OK && h.doc.parts.empty() && !h.doc.mesh);

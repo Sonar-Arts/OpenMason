@@ -1,0 +1,45 @@
+{
+  "format": "openmason.meshPipelineFixture", "version": 1,
+  "name": "concave_l_face",
+  "javaSource": "MeshImporter (4-triangle hexagon) + PolygonTriangulator.triangulate (TestMeshes.lShapeLoop) + RenderMeshBuilder",
+  "notes": "Triangles (0,1,2)(0,2,3)(0,3,5)(3,4,5), face id 7. Interior 2>0/0>2, 3>0/0>3, 3>5/5>3; boundaryNext keys in order 0,1,2,5,3,4; walk 0..5. Triangulation (normalized loop /2, not convex at vertex 3): ear k=0 blocked by vertex 3 on its edge, ear k=1 -> (0,1,2); active 0 2 3 4 5: k=0 blocked by 3, k=1 -> (0,2,3); active 0 3 4 5: k=0 -> (5,0,3); rest (3,4,5). Projected UVs: s = x/2, t = 1 - y/2.",
+  "tolerance": 1e-6,
+  "input": {
+    "kind": "soup",
+    "vertices": [0,0,0, 2,0,0, 2,1,0, 1,1,0, 1,2,0, 0,2,0],
+    "indices": [0,1,2, 0,2,3, 0,3,5, 3,4,5],
+    "triangleToFaceId": [7,7,7,7]
+  },
+  "expected": {
+    "weld": {
+      "soupToVertex": [0,1,2,3,4,5],
+      "positions": [0,0,0, 2,0,0, 2,1,0, 1,1,0, 1,2,0, 0,2,0],
+      "vertexToSoup": [[0],[1],[2],[3],[4],[5]]
+    },
+    "faces": {
+      "faces": [{"id": 7, "loop": [0,1,2,3,4,5], "cornerUVs": null}],
+      "faceIdUpperBound": 8,
+      "warnings": []
+    },
+    "render": {
+      "vertices": [0,0,0, 2,0,0, 2,1,0, 1,1,0, 1,2,0, 0,2,0],
+      "texCoords": [0,1, 1,1, 1,0.5, 0.5,0.5, 0.5,0, 0,0],
+      "indices": [0,1,2, 0,2,3, 5,0,3, 3,4,5],
+      "triangleToFaceId": [7,7,7,7],
+      "cornerToVertexId": [0,1,2,3,4,5],
+      "vertexIdToCorners": [[0],[1],[2],[3],[4],[5]]
+    },
+    "topology": {
+      "edges": [[0,1],[1,2],[2,3],[3,4],[4,5],[0,5]],
+      "edgeFaces": [[7],[7],[7],[7],[7],[7]],
+      "faceEdges": {"7": [0,1,2,3,4,5]},
+      "vertexEdges": [[0,5],[0,1],[1,2],[2,3],[3,4],[4,5]],
+      "vertexFaces": [[7],[7],[7],[7],[7],[7]],
+      "faceAdjacency": {},
+      "faceNormals": {"0": [0,0,0], "6": [0,0,0], "7": [0,0,1]},
+      "faceCentroids": {"7": [1,1,0]},
+      "faceAreas": {"3": 0, "7": 3},
+      "edgeKinds": ["OPEN","OPEN","OPEN","OPEN","OPEN","OPEN"]
+    }
+  }
+}

@@ -26,6 +26,13 @@ public final class PoseProgram {
     public static final int NO_PASSTHROUGH = 1 << 2;
     /** Sample: drive only the joints the clip's name mask covers (an ABI 1 overlay). */
     public static final int CLIP_MASK = 1 << 3;
+    /** Sample: every joint driven, unkeyed joints at rest (a montage; every morph channel too). */
+    public static final int DRIVE_ALL = 1 << 4;
+    /**
+     * Sample (OpenMason #171): only the morph weights (channel defaults, then the clip's morph tracks); joints
+     * untouched.
+     */
+    public static final int MORPHS_ONLY = 1 << 5;
 
     /** Layer modes. */
     public static final int OVERRIDE = 0;

@@ -195,14 +195,6 @@ public final class MeshTopologyBuilder {
             faceAreas[fid] = MeshGeometry.computeArea(verts, uniqueToMeshIndices, vertices);
         }
 
-        // Step 8: Compute per-vertex smooth normals (area-weighted average of adjacent face normals)
-        Vector3f[] vertexNormals = new Vector3f[uniqueVertexCount];
-        for (int v = 0; v < uniqueVertexCount; v++) {
-            vertexNormals[v] = MeshGeometry.computeVertexNormal(
-                immutableVertexToFaces.get(v), faceNormals, faceAreas
-            );
-        }
-
         // Step 9: Construct all 15 sub-services
         Map<Long, Integer> immutableEdgeKeyToId = Collections.unmodifiableMap(edgeKeyToId);
         List<List<Integer>> immutableFaceToAdjacentFaces = Collections.unmodifiableList(faceToAdjacentFaces);
@@ -232,9 +224,8 @@ public final class MeshTopologyBuilder {
                 facesById, uniqueToMeshIndices, faceNormals, faceCentroids,
                 faceAreas, vertices);
 
-        // Edge classifier (needs face normals from FaceGeometryCache)
-        EdgeClassifier edgeClassifier = new EdgeClassifier(
-                edges, EdgeClassifier.DEFAULT_THRESHOLD, faceNormals);
+        // Edge kinds (open / manifold / non-manifold)
+        EdgeClassifier edgeClassifier = new EdgeClassifier(edges);
 
         // Compute initial dihedral angles for DihedralAngleCache
         float[] dihedralAngles = new float[edges.length];
@@ -253,10 +244,7 @@ public final class MeshTopologyBuilder {
         }
 
         DihedralAngleCache dihedralAngleCache = new DihedralAngleCache(
-                edges, dihedralAngles, faceGeometryCache, edgeClassifier);
-
-        VertexNormalCache vertexNormalCache = new VertexNormalCache(
-                vertexNormals, faceGeometryCache, immutableVertexToFaces);
+                edges, dihedralAngles, faceGeometryCache);
 
         VertexClassifier vertexClassifier = new VertexClassifier(
                 edges, immutableVertexToEdges, uniform, firstCount);
@@ -283,7 +271,7 @@ public final class MeshTopologyBuilder {
         MeshTopology topology = new MeshTopology(
                 edges, facesById, immutableEdgeKeyToId,
                 indexMappingQuery, topologyMetadataQuery, elementAdjacencyQuery,
-                faceGeometryCache, dihedralAngleCache, vertexNormalCache,
+                faceGeometryCache, dihedralAngleCache,
                 edgeClassifier, vertexClassifier, faceEdgeTraversal,
                 edgeLoopTracer, faceLoopTracer, faceIslandDetector,
                 vertexRingQuery, vertexAdjacencyQuery, vertexBoundaryWalker);

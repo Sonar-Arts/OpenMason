@@ -93,6 +93,10 @@ public class EditableModel {
 
     // GPU copy: created by initialize(), synced from gpuState at draw time
     private final MeshGpuState gpuState = new MeshGpuState();
+
+    // Smooth shading (#169): one native store per part; corner normals derived per rebuild
+    private final com.openmason.engine.modeling.shading.ModelShading shading;
+    private boolean normalsUploaded;
     private ModelGpuMesh gpuMesh;
     private ModelDrawPlan drawPlan;
     private float[] uploadedUvs;
@@ -184,6 +188,12 @@ public class EditableModel {
         // share vertices across faces — translate before part-range lookups.
         this.partManager.setCombinedVertexResolver(rebuildPipeline::cornerToSoupIndices);
 
+        // Shading stores follow every derivation and report edits as "normals dirty"
+        this.shading = new com.openmason.engine.modeling.shading.ModelShading(
+            rebuildPipeline::getLastRenderMesh, this::partSpans);
+        this.shading.setChangeListener(gpuState::normalsChanged);
+        this.rebuildPipeline.setDeriveHooks(shading::beforeDerive, shading::afterDerive);
+
         logger.debug("EditableModel created with subsystems");
     }
 
@@ -196,6 +206,7 @@ public class EditableModel {
         if (initialized) return;
         gpuMesh = new ModelGpuMesh(true, GpuMemoryTracker.Category.OTHER);
         gpuState.markAll();
+        normalsUploaded = false;
         rebuildPipeline.markDrawBatchesDirty();
         uploadedUvs = null;
         initialized = true;
@@ -214,6 +225,7 @@ public class EditableModel {
         }
         drawPlan = null;
         uploadedUvs = null;
+        normalsUploaded = false;
         initialized = false;
     }
 
@@ -230,7 +242,7 @@ public class EditableModel {
             return;
         }
         syncGpu();
-        renderer.drawLit(gpuMesh, drawPlan, forceUnrendered ? MaterialTextures.UNTEXTURED : this::textureForBatch,
+        renderer.drawLit(gpuMesh, drawPlan, forceUnrendered ? MaterialTextures.UNTEXTURED : batchTextures,
                 PartMatrices.single(modelMatrix), view, projection, lighting, null);
     }
 
@@ -266,7 +278,48 @@ public class EditableModel {
             drawPlan = sorted.plan();
             rebuildPipeline.clearDrawBatchesDirty();
         }
+        refreshBaseColors();
+        if (gpuState.normalsDirty()) {
+            // Corner normals (smooth shading): null = every corner flat, exactly as a mesh without normals.
+            short[] normals = shading.cornerNormals();
+            if (normals != null || normalsUploaded) {
+                gpuMesh.updateNormals(normals);
+                normalsUploaded = normals != null;
+            }
+        }
         gpuState.clear();
+    }
+
+    /** The parts' face ranges in the render mesh (shading store ownership). */
+    private List<com.openmason.engine.modeling.shading.ModelShading.PartSpan> partSpans() {
+        if (partManager == null) {
+            return List.of();
+        }
+        List<com.openmason.engine.modeling.shading.ModelShading.PartSpan> out = new java.util.ArrayList<>();
+        for (com.openmason.engine.modeling.parts.ModelPartDescriptor part : partManager.getAllParts()) {
+            com.openmason.engine.modeling.parts.MeshRange r = part.meshRange();
+            if (r != null) {
+                out.add(new com.openmason.engine.modeling.shading.ModelShading.PartSpan(
+                    part.id(), r.faceStart(), r.faceCount()));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The model's smooth shading (#169): Shade Smooth / Flat / Auto Smooth, sharp edges, custom normals, OMO 1.9
+     * load / save. Edits through it mark the GPU normals dirty; undo snapshots capture it.
+     */
+    public com.openmason.engine.modeling.shading.ModelShading getShading() {
+        return shading;
+    }
+
+    /**
+     * The corner normals the GPU draws with (octahedral snorm16 pairs per render corner, the FLAT marker for flat
+     * corners), or null when nothing is smooth. GL-free (tests, diagnostics).
+     */
+    public short[] getCornerNormals() {
+        return shading.cornerNormals();
     }
 
     /**
@@ -292,6 +345,32 @@ public class EditableModel {
             }
         }
         return keys;
+    }
+
+    // Batch key (a material's texture id) → its OMO 1.9 base colour, refreshed every sync (materials are few).
+    private final Map<Integer, float[]> baseColorByTexture = new java.util.HashMap<>();
+
+    /** The lit pass's textures: texture × base colour, the runtime rule (MaterialTextures.baseColorFor). */
+    private final MaterialTextures batchTextures = new MaterialTextures() {
+        @Override
+        public int textureFor(int materialId) {
+            return textureForBatch(materialId);
+        }
+
+        @Override
+        public float[] baseColorFor(int materialId) {
+            return materialId > 0 ? baseColorByTexture.get(materialId) : null;
+        }
+    };
+
+    private void refreshBaseColors() {
+        baseColorByTexture.clear();
+        for (MaterialDefinition m : faceTextureManager.getAllMaterials()) {
+            float[] base = m.properties().baseColor();
+            if (base != null && m.textureId() > 0) {
+                baseColorByTexture.put(m.textureId(), base);
+            }
+        }
     }
 
     /** Batch key → texture: a material texture, else the model texture, else untextured (0). */
@@ -687,6 +766,7 @@ public class EditableModel {
         // must not carry over. (updateMeshGeometry intentionally preserves them
         // for part-level changes, so the clear must happen here.)
         faceTextureManager.clear();
+        shading.clear();
 
         // Update UV mode before importing (so the rebuild callback uses the right mode)
         if (meshData.uvMode() != null) {
@@ -720,6 +800,7 @@ public class EditableModel {
     // =========================================================================
 
     public void loadMeshData(OMOFormat.MeshData meshData) {
+        shading.clear();
         serializationAdapter.loadMeshData(meshData);
     }
 
@@ -760,7 +841,8 @@ public class EditableModel {
         }
         return com.openmason.engine.modeling.editable.EditableMeshSnapshot.capture(
             rebuildPipeline.getEditableMesh(), mappings, materials,
-            rebuildPipeline.getImportSoupMapping());
+            rebuildPipeline.getImportSoupMapping(),
+            com.openmason.engine.modeling.shading.ModelShading.isAvailable() ? shading.capture() : null);
     }
 
     /**
@@ -783,11 +865,47 @@ public class EditableModel {
         rebuildPipeline.setEditableMesh(snapshot.meshCopy());
         rebuildPipeline.setImportSoupMapping(snapshot.vertexIdToSoupIndices());
         rebuildPipeline.rebuildFromEditable();
+        shading.restore(snapshot.shading());
     }
 
     public void refreshUVs() {
         serializationAdapter.refreshUVs();
     }
+
+    /**
+     * After a model's face mappings were restored from a file: every mapped face whose loaded corner UVs are not
+     * the projection into its region (an imported or hand-authored UV layout) keeps them
+     * ({@link FaceTextureMapping#authoredUVs()}); faces whose UVs ARE the projection (what the texture editor
+     * saves) stay projected, so they keep following later geometry and region edits exactly as before. Call
+     * before {@link #refreshUVs()}.
+     *
+     * @return the number of faces that keep their authored UVs
+     */
+    public int adoptAuthoredUVs() {
+        com.openmason.engine.modeling.editable.EditableMesh mesh = rebuildPipeline.getEditableMesh();
+        int adopted = 0;
+        for (com.openmason.engine.modeling.editable.EditableFace face : mesh.faces()) {
+            if (!face.hasAuthoredUVs()) continue;
+            FaceTextureMapping mapping = faceTextureManager.getFaceMapping(face.faceId());
+            if (mapping == null || mapping.authoredUVs()
+                    || !com.openmason.engine.modeling.editable.RenderMeshBuilder.isExplicit(mapping)) {
+                continue;
+            }
+            if (com.openmason.engine.modeling.editable.RenderMeshBuilder.authoredUVsMatchProjection(
+                    mesh, face, mapping, AUTHORED_UV_TOLERANCE)) {
+                continue;
+            }
+            faceTextureManager.setFaceMapping(mapping.withAuthoredUVs(true));
+            adopted++;
+        }
+        if (adopted > 0) {
+            logger.debug("{} face(s) keep their authored UVs", adopted);
+        }
+        return adopted;
+    }
+
+    /** UV distance under which loaded UVs count as the region projection (about a texel of a 4096 texture). */
+    private static final float AUTHORED_UV_TOLERANCE = 2.5e-4f;
 
     // =========================================================================
     // DATA ACCESS & EXTRACTION

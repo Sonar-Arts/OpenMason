@@ -1,6 +1,6 @@
 #pragma once
 
-// .omanim — Open Mason animation clip (OpenMason #155: version 1.2; reads 1.0 and 1.1 unchanged).
+// .omanim — Open Mason animation clip (OpenMason #155: version 1.2; #171: 1.3 = morph tracks; reads 1.0 - 1.3).
 //
 // A zip archive:
 //   manifest.json        the clip (below)
@@ -19,8 +19,16 @@
 //   syncMarkers          [{name, time}]
 //   rootMotion           {joint, translation: [x, y, z], rotationY}   joint = a track's partId or "role:<role>"
 //   additive             {reference: frame|clip|character, time?, clip?, space?: local|mesh}
+//   -- 1.3 (#171) --
+//   morphs               [{name, keys: [{time, value, interp?: LINEAR|STEP|CUBIC, inTangent?, outTangent?}]}]
+//                        morph (shape key) weight tracks: `name` = the morph channel (the mesh's shape key name,
+//                        bound by name, exact then case-insensitive; addressed as "morph:<name>" where a joint
+//                        reference could also be meant); keys exactly like `curves` (CUBIC = Hermite, tangents in
+//                        value per second; glTF CUBICSPLINE maps 1:1)
 //   <other keys>         unknown sections, kept verbatim
 //
+// The writer writes "1.3" only when the clip has morph tracks, else "1.2" (a clip without morph tracks writes byte for
+// byte what a 1.2 writer did); 1.2 readers keep a 1.3 file's `morphs` as an unknown section.
 // Every 1.2 addition is optional and ignored by 1.1 readers (the Java OMAReader / the tool's deserializer
 // ignore unknown keys). A ROLE-ADDRESSED track carries "role" and, for those older readers, partId and
 // partName "role:<role>" (which bind to no joint, so they skip the track instead of mis-binding it).
@@ -35,7 +43,9 @@
 
 namespace cenda::omformat::omanim {
 
-inline constexpr const char* kWriteVersion = "1.2";
+inline constexpr const char* kWriteVersion = "1.2";        // a clip without morph tracks
+inline constexpr const char* kMorphWriteVersion = "1.3";   // a clip with morph tracks (#171)
+inline constexpr const char* kMorphPrefix = "morph:";
 inline constexpr const char* kManifestEntry = "manifest.json";
 inline constexpr const char* kRolePrefix = "role:";
 
@@ -129,6 +139,7 @@ struct Clip {
     std::vector<Notify> notifies;   // sorted by time (stable)
     std::vector<Curve> curves;
     std::vector<SyncMarker> markers;  // sorted by time (stable)
+    std::vector<Curve> morphs;        // 1.3 (#171): morph weight tracks, unique names, keys sorted by time
     RootMotion root_motion;
     Additive additive;
     std::vector<UnknownSection> unknown_sections;
@@ -139,7 +150,7 @@ struct Clip {
 // file, a non-finite number, or malformed 1.2 sections.
 Clip read(std::span<const std::byte> archive);
 
-// Serializes as 1.2. Deterministic; keys are written as floats (shortest form), so every value read
+// Serializes as 1.2 (1.3 when the clip has morph tracks). Deterministic; keys are written as floats (shortest form), so every value read
 // comes back bit-identical.
 std::vector<std::byte> write(const Clip& clip);
 

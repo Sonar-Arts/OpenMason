@@ -47,11 +47,14 @@ public class PropertyPanelImGui {
     private final TextureChooserSection textureChooserSection;  // For NEW and OMO_FILE models
     private final FaceMaterialSection faceMaterialSection;      // For per-face material assignment
     private final TransformSection transformSection;
+    private final com.openmason.main.systems.menus.panes.propertyPane.sections.ShadingSection shadingSection =
+            new com.openmason.main.systems.menus.panes.propertyPane.sections.ShadingSection();
 
     // Collapsible section headers (Mortar-painted with ImGui fallback)
     private final InspectorFoldout transformFoldout = new InspectorFoldout("Transform", true);
     private final InspectorFoldout textureFoldout = new InspectorFoldout("Texture", true);
     private final InspectorFoldout materialFoldout = new InspectorFoldout("Face Material", true);
+    private final InspectorFoldout shadingFoldout = new InspectorFoldout("Shading", false);
 
     // State
     private boolean initialized = false;
@@ -154,6 +157,10 @@ public class PropertyPanelImGui {
 
             renderSection(materialFoldout, faceMaterialSection);
 
+            if (source != ModelState.ModelSource.BROWSER) {
+                renderSection(shadingFoldout, shadingSection);
+            }
+
             // End bounded child region
             ImGui.endChild();
         }
@@ -188,6 +195,7 @@ public class PropertyPanelImGui {
         // Update sections with viewport connector
         transformSection.setViewportConnector(viewportConnector);
         faceMaterialSection.setViewportConnector(viewportConnector);
+        shadingSection.setViewport(viewport);
     }
 
     /**

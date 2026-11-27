@@ -33,3 +33,13 @@ inner cap outward/inward → scale. Verify with `viewport_capture`.
 `list_parts` (compact rows; `detail:true` for transforms), `get_part`,
 `inspect_part` (bounds, matrix; array flags off by default), and `part_mesh`
 (vertices/edges/faces topology, pick sections with `include`).
+
+## Smooth shading (Blender rules; faces are flat unless shaded smooth)
+- `shading_set {part?, faces?, mode}` — mode `smooth` | `flat` | `auto` (smooth + `angle`: edges sharper than
+  it stay hard) | `clear_custom` (drop imported custom normals). No part = every part, no faces = whole part.
+- `shading_sharp {part, edges: [[a,b],...], sharp}` — mark (default) / clear hard edges by part-local vertex
+  pairs (from `part_mesh`); `sharp:false` without edges clears all. Two sharp edges at a corner split its fan.
+- `shading_get {part?}` — faces, smooth faces, sharp edges, custom normals, auto angle per part.
+Parts shade apart (like separate objects). Shading follows drags, transforms and edits, saves in the .omo, and
+every change is one undo step (domain model).
+

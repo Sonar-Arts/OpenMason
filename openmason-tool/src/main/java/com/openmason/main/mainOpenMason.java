@@ -417,6 +417,12 @@ public class mainOpenMason {
                     "Unsaved Changes Dialog");
         }
 
+        // File > Import Model options / summary (#173)
+        if (mainInterface != null && mainInterface.getFileMenuHandler() != null) {
+            safeRender(() -> mainInterface.getFileMenuHandler().getModelImportDialog().render(),
+                    "Model Import Dialog");
+        }
+
         // Render delete-asset confirmation dialog (must be rendered outside other windows for modal to work)
         if (mainInterface != null && mainInterface.getDeleteAssetDialog() != null) {
             safeRender(() -> mainInterface.getDeleteAssetDialog().render(), "Delete Asset Dialog");

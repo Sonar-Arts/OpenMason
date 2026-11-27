@@ -118,6 +118,28 @@ public final class PoseWorkspace implements AutoCloseable {
         }
     }
 
+    /**
+     * A slot's morph weights (OpenMason #171; one per rig morph channel) into {@code out} (min(channels, length)
+     * written); returns the rig's channel count. Allocation-free once the workspace has grown its scratch.
+     */
+    public int morphWeights(int slot, float[] out) {
+        int n = rig.morphCount();
+        if (n == 0 || out == null) return n;
+        if (morphScratch == null || morphScratch.byteSize() < 4L * n) morphScratch = Arena.ofAuto().allocate(4L * n, 4);
+        try {
+            int rc = (int) CendaRig.POSES_MORPH_WEIGHTS.invokeExact(handle(), slot, morphScratch, MemorySegment.NULL, n);
+            if (rc < 0) throw new IllegalArgumentException("cr_poses_morph_weights: " + CendaRig.lastError());
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+        MemorySegment.copy(morphScratch, CendaRig.F32, 0, out, 0, Math.min(n, out.length));
+        return n;
+    }
+
+    private MemorySegment morphScratch;
+
     /** Runs {@code program} on these slots (no composition; see {@link RigPoser#evaluate}). */
     public void run(PoseProgram program) {
         try {

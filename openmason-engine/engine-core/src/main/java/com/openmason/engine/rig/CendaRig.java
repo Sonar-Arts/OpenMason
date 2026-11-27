@@ -146,6 +146,32 @@ public final class CendaRig {
     static final MethodHandle MOUNTS_TOTAL_POINTS;
     static final MethodHandle MOUNTS_POINT_BASE;
     static final MethodHandle MOUNTS_RESOLVE;
+    // Morph targets / shape keys (rig.h "Morph targets", ABI 3 #171 additions).
+    static final MethodHandle RIG_SET_MORPH_CHANNELS_FROM;
+    static final MethodHandle RIG_MORPH_COUNT;
+    static final MethodHandle RIG_MORPH_NAME;
+    static final MethodHandle RIG_MORPH_FIND;
+    static final MethodHandle CLIP_SET_MORPH_TRACKS;
+    static final MethodHandle CLIP_MORPH_TRACK_COUNT;
+    static final MethodHandle POSES_MORPH_WEIGHTS;
+    static final MethodHandle MORPHS_CREATE;
+    static final MethodHandle MORPHS_REMAP;
+    static final MethodHandle MORPHS_DESTROY;
+    static final MethodHandle MORPHS_VERTEX_COUNT;
+    static final MethodHandle MORPHS_TARGET_COUNT;
+    static final MethodHandle MORPHS_ROW_COUNT;
+    static final MethodHandle MORPHS_HAS_NORMALS;
+    static final MethodHandle MORPHS_TARGET_NAME;
+    static final MethodHandle MORPHS_TARGET_PARAMS;
+    static final MethodHandle MORPHS_FIND;
+    static final MethodHandle MORPHS_TARGET_ROWS;
+    static final MethodHandle MORPHS_CLAMP_WEIGHTS;
+    static final MethodHandle MORPH_APPLY;
+    static final MethodHandle SKIN_DEFORM_MORPHED;
+    static final MethodHandle MORPHS_PACK_SIZE;
+    static final MethodHandle MORPHS_PACK;
+    /** {@code cr_morph_key} (20 bytes). */
+    static final long MORPH_KEY_BYTES = 20;
     /** {@code cr_first_person_desc} / {@code cr_stabilizer_desc} sizes. */
     static final long FIRST_PERSON_DESC_BYTES = 32;
     static final long STABILIZER_DESC_BYTES = 16;
@@ -288,6 +314,37 @@ public final class CendaRig {
         MOUNTS_POINT_BASE = handle(lookup, "cr_mounts_point_base", FunctionDescriptor.of(I32, ADDR, I32), critical);
         MOUNTS_RESOLVE = handle(lookup, "cr_mounts_resolve",
             FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, ADDR, ADDR, ADDR, ADDR, ADDR), critical);
+        RIG_SET_MORPH_CHANNELS_FROM = handle(lookup, "cr_rig_set_morph_channels_from",
+            FunctionDescriptor.of(I32, ADDR, ADDR));
+        RIG_MORPH_COUNT = handle(lookup, "cr_rig_morph_count", FunctionDescriptor.of(I32, ADDR), critical);
+        RIG_MORPH_NAME = handle(lookup, "cr_rig_morph_name", FunctionDescriptor.of(ADDR, ADDR, I32));
+        RIG_MORPH_FIND = handle(lookup, "cr_rig_morph_find", FunctionDescriptor.of(I32, ADDR, ADDR));
+        CLIP_SET_MORPH_TRACKS = handle(lookup, "cr_clip_set_morph_tracks",
+            FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR));
+        CLIP_MORPH_TRACK_COUNT = handle(lookup, "cr_clip_morph_track_count", FunctionDescriptor.of(I32, ADDR));
+        POSES_MORPH_WEIGHTS = handle(lookup, "cr_poses_morph_weights",
+            FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, I32), critical);
+        MORPHS_CREATE = handle(lookup, "cr_morphs_create",
+            FunctionDescriptor.of(ADDR, I32, I32, ADDR, ADDR, ADDR, ADDR, ADDR, ADDR));
+        MORPHS_REMAP = handle(lookup, "cr_morphs_remap", FunctionDescriptor.of(ADDR, ADDR, I32, ADDR));
+        MORPHS_DESTROY = handle(lookup, "cr_morphs_destroy", FunctionDescriptor.ofVoid(ADDR));
+        MORPHS_VERTEX_COUNT = handle(lookup, "cr_morphs_vertex_count", FunctionDescriptor.of(I32, ADDR), critical);
+        MORPHS_TARGET_COUNT = handle(lookup, "cr_morphs_target_count", FunctionDescriptor.of(I32, ADDR), critical);
+        MORPHS_ROW_COUNT = handle(lookup, "cr_morphs_row_count", FunctionDescriptor.of(I32, ADDR), critical);
+        MORPHS_HAS_NORMALS = handle(lookup, "cr_morphs_has_normals", FunctionDescriptor.of(I32, ADDR), critical);
+        MORPHS_TARGET_NAME = handle(lookup, "cr_morphs_target_name", FunctionDescriptor.of(ADDR, ADDR, I32));
+        MORPHS_TARGET_PARAMS = handle(lookup, "cr_morphs_target_params", FunctionDescriptor.of(I32, ADDR, I32, ADDR));
+        MORPHS_FIND = handle(lookup, "cr_morphs_find", FunctionDescriptor.of(I32, ADDR, ADDR));
+        MORPHS_TARGET_ROWS = handle(lookup, "cr_morphs_target_rows",
+            FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR, I32));
+        MORPHS_CLAMP_WEIGHTS = handle(lookup, "cr_morphs_clamp_weights",
+            FunctionDescriptor.of(I32, ADDR, ADDR, I32, ADDR), critical);
+        MORPH_APPLY = handle(lookup, "cr_morph_apply",
+            FunctionDescriptor.of(I32, ADDR, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
+        SKIN_DEFORM_MORPHED = handle(lookup, "cr_skin_deform_morphed",
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, I32, ADDR, I32, ADDR, I32, ADDR));
+        MORPHS_PACK_SIZE = handle(lookup, "cr_morphs_pack_size", FunctionDescriptor.of(I32, ADDR));
+        MORPHS_PACK = handle(lookup, "cr_morphs_pack", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR));
     }
 
     private CendaRig() {

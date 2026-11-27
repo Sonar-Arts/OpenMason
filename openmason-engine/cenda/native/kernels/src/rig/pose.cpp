@@ -100,6 +100,7 @@ struct cr_poses {
 struct cr_mask {
     const cr_rig* rig = nullptr;
     std::vector<float> w;
+    std::vector<float> mw;       // per morph channel (#171)
     std::vector<int32_t> depth;  // scratch for branch sets
 };
 
@@ -115,6 +116,10 @@ struct cr_inertia {
     double duration = 0.0;
     std::vector<JointInertia> joints;
     std::vector<uint8_t> moving;  // per joint: any live curve
+    // Morph channels (#171): last two outputs, a curve + sign per channel.
+    std::vector<float> mprev, mprev2;
+    std::vector<Curve> mcurve;
+    std::vector<double> msign;
 };
 
 namespace cenda::rig {
@@ -163,8 +168,7 @@ void op_blend(cr_poses& p, int32_t dst, int32_t first, int32_t count, const floa
         }
     }
     if (positive == 1) {
-        out.v = p.slots[static_cast<size_t>(only)].v;
-        out.driven = p.slots[static_cast<size_t>(only)].driven;
+        copy_pose(out, p.slots[static_cast<size_t>(only)]);
     } else if (positive > 1) {
         const bool quat = (flags & CR_POSE_QUAT) != 0;
         for (size_t i = 0; i < n; ++i) {
@@ -240,10 +244,42 @@ void op_blend(cr_poses& p, int32_t dst, int32_t first, int32_t count, const floa
             }
             out.driven[i] = driven;
         }
+        // Morph channels (#171): like a joint translation component.
+        for (size_t c = 0; c < out.mw.size(); ++c) {
+            uint8_t driven = 0;
+            if (!quat) {
+                bool started = false;
+                float acc = 0.f, r = 0.f;
+                for (int32_t k = 0; k < count; ++k) {
+                    const float w = weights[k];
+                    if (w <= 0.f) continue;
+                    const PoseBuf& s = p.slots[static_cast<size_t>(first + k)];
+                    driven |= s.mdriven[c];
+                    if (!started) {
+                        r = s.mw[c];
+                        acc = w;
+                        started = true;
+                        continue;
+                    }
+                    acc += w;
+                    r = r + (s.mw[c] - r) * (w / acc);
+                }
+                out.mw[c] = r;
+            } else {
+                double sum = 0.0;
+                for (int32_t k = 0; k < count; ++k) {
+                    const float w = weights[k];
+                    if (w <= 0.f) continue;
+                    const PoseBuf& s = p.slots[static_cast<size_t>(first + k)];
+                    driven |= s.mdriven[c];
+                    sum += s.mw[c] * (w / total);
+                }
+                out.mw[c] = static_cast<float>(sum);
+            }
+            out.mdriven[c] = driven;
+        }
     }
-    PoseBuf& d = p.slots[static_cast<size_t>(dst)];
-    d.v = out.v;
-    d.driven = out.driven;
+    copy_pose(p.slots[static_cast<size_t>(dst)], out);
 }
 
 void op_make_additive(cr_poses& p, int32_t dst, int32_t src, int32_t ref, uint32_t flags) {
@@ -289,13 +325,24 @@ void op_make_additive(cr_poses& p, int32_t dst, int32_t src, int32_t ref, uint32
         // its own mesh-space delta); local: what either pose drives.
         out.driven[i] = mesh ? 1 : static_cast<uint8_t>(a.driven[i] | b.driven[i]);
     }
-    PoseBuf& d = p.slots[static_cast<size_t>(dst)];
-    d.v = out.v;
-    d.driven = out.driven;
+    // Morph channels (#171): a difference in either space.
+    const size_t m = a.mw.size();
+    out.mw.resize(m);
+    out.mdriven.resize(m);
+    for (size_t c = 0; c < m; ++c) {
+        out.mw[c] = a.mw[c] - b.mw[c];
+        out.mdriven[c] = static_cast<uint8_t>(a.mdriven[c] | b.mdriven[c]);
+    }
+    copy_pose(p.slots[static_cast<size_t>(dst)], out);
 }
 
 float joint_weight(float weight, const cr_mask* mask, size_t i) {
     float w = mask != nullptr ? weight * mask->w[i] : weight;
+    return std::min(w, 1.f);
+}
+
+float morph_weight(float weight, const cr_mask* mask, size_t c) {
+    float w = mask != nullptr ? weight * mask->mw[c] : weight;
     return std::min(w, 1.f);
 }
 
@@ -321,6 +368,14 @@ void op_layer_additive(cr_poses& p, int32_t dst, const PoseBuf& delta, float wei
             to_euler_deg(qmul(from_euler_deg(o.rot), step), o.rot);
         }
         out.driven[i] = 1;
+    }
+    // Morph channels (#171): dst += delta x w.
+    for (size_t c = 0; c < delta.mw.size(); ++c) {
+        if (!delta.mdriven[c]) continue;
+        const float w = morph_weight(weight, mask, c);
+        if (w <= 0.f) continue;
+        if (delta.mw[c] != 0.f) out.mw[c] = out.mw[c] + delta.mw[c] * w;
+        out.mdriven[c] = 1;
     }
     if (!mesh) return;
     // Mesh space: Q'(j) = slerp(I, D(j), w)·Q(j); local'(j) = Q'(parent)^-1·Q'(j), only where the joint or an
@@ -406,6 +461,17 @@ void inertia_start(cr_inertia& in, const PoseBuf& target) {
         in.moving[i] = live ? 1 : 0;
         any |= live;
     }
+    // Morph channels (#171): the offset magnitude of each weight, its sign kept.
+    for (size_t c = 0; c < in.mprev.size(); ++c) {
+        in.mcurve[c] = Curve{};
+        in.msign[c] = 0.0;
+        const double d = static_cast<double>(in.mprev[c]) - target.mw[c];
+        if (d == 0.0) continue;
+        in.msign[c] = d > 0.0 ? 1.0 : -1.0;
+        const double v = velocity ? (static_cast<double>(in.mprev[c]) - in.mprev2[c]) * inv_dt * in.msign[c] : 0.0;
+        in.mcurve[c].fit(std::fabs(d), v, blend);
+        any |= in.mcurve[c].live();
+    }
     in.active = any;
     in.elapsed = 0.0;
 }
@@ -442,8 +508,13 @@ void inertia_apply(cr_inertia& in, PoseBuf& pose, float dt) {
                     if (j.scale[c].live()) o.scale[c] = static_cast<float>(o.scale[c] + j.scale_sign[c] * j.scale[c].at(t));
                 }
             }
+            for (size_t c = 0; c < in.mprev.size(); ++c) {
+                if (in.mcurve[c].live()) pose.mw[c] = static_cast<float>(pose.mw[c] + in.msign[c] * in.mcurve[c].at(t));
+            }
         }
     }
+    in.mprev2.swap(in.mprev);
+    in.mprev = pose.mw;  // same size: no allocation
     in.prev2.swap(in.prev);
     in.prev = pose.v;  // same size: no allocation
     in.prev_dt = dt;
@@ -511,16 +582,22 @@ int32_t run_ops(cr_poses& p, const cr_pose_op* ops, int32_t count) {
             break;
         case CR_OP_SAMPLE:
             if (op.object == nullptr) return op_fail(CR_ERR_ARG, k, "SAMPLE needs a clip");
+            if ((op.flags & CR_POSE_MORPHS_ONLY) != 0) {
+                pose_sample_morphs(rig, *static_cast<const cr_clip*>(op.object), op.time,
+                                   (op.flags & CR_POSE_CLIP_MASK) != 0, dst, p.binding);
+                if ((op.flags & CR_POSE_DRIVE_ALL) != 0) std::fill(dst.mdriven.begin(), dst.mdriven.end(), uint8_t{1});
+                break;
+            }
             pose_sample(rig, *static_cast<const cr_clip*>(op.object), op.time, (op.flags & CR_POSE_CLIP_MASK) != 0,
                         dst, p.binding);
-            if ((op.flags & CR_POSE_DRIVE_ALL) != 0) std::fill(dst.driven.begin(), dst.driven.end(), uint8_t{1});
+            if ((op.flags & CR_POSE_DRIVE_ALL) != 0) {
+                std::fill(dst.driven.begin(), dst.driven.end(), uint8_t{1});
+                std::fill(dst.mdriven.begin(), dst.mdriven.end(), uint8_t{1});
+            }
             break;
         case CR_OP_COPY:
             if (bad_slot(p, op.a)) return op_fail(CR_ERR_RANGE, k, "COPY source slot out of range");
-            if (op.a != op.dst) {
-                dst.v = p.slots[static_cast<size_t>(op.a)].v;
-                dst.driven = p.slots[static_cast<size_t>(op.a)].driven;
-            }
+            if (op.a != op.dst) copy_pose(dst, p.slots[static_cast<size_t>(op.a)]);
             break;
         case CR_OP_BLEND:
             if (op.b < 1 || bad_slot(p, op.a) || bad_slot(p, op.a + op.b - 1)) {
@@ -537,16 +614,15 @@ int32_t run_ops(cr_poses& p, const cr_pose_op* ops, int32_t count) {
                 const PoseBuf* src = &p.slots[static_cast<size_t>(op.a)];
                 if (op.a == op.dst) {
                     if ((op.flags & CR_POSE_NO_PASSTHROUGH) == 0) break;  // a pose over itself changes nothing
-                    p.scratch.v = src->v;
-                    p.scratch.driven = src->driven;
+                    copy_pose(p.scratch, *src);
                     src = &p.scratch;
                 }
-                pose_layer_override(rig, dst, *src, op.weight, mask != nullptr ? mask->w.data() : nullptr, op.flags);
+                pose_layer_override(rig, dst, *src, op.weight, mask != nullptr ? mask->w.data() : nullptr, op.flags,
+                                    mask != nullptr ? mask->mw.data() : nullptr);
             } else if (op.mode == CR_BLEND_ADDITIVE) {
                 const PoseBuf* src = &p.slots[static_cast<size_t>(op.a)];
                 if (op.a == op.dst) {  // the delta must not change under us
-                    p.scratch.v = src->v;
-                    p.scratch.driven = src->driven;
+                    copy_pose(p.scratch, *src);
                     src = &p.scratch;
                 }
                 op_layer_additive(p, op.dst, *src, op.weight, mask, op.flags);
@@ -594,6 +670,19 @@ int32_t run_ops(cr_poses& p, const cr_pose_op* ops, int32_t count) {
             if (rc != CR_OK) return op_fail(rc, k, cr_last_error());
             break;
         }
+        case CR_OP_MORPH: {
+            const float* values = static_cast<const float*>(op.object);
+            if (values == nullptr) return op_fail(CR_ERR_ARG, k, "MORPH needs values");
+            const float w = std::min(op.weight, 1.f);
+            if (w <= 0.f) break;
+            for (size_t c = 0; c < dst.mw.size(); ++c) {
+                const float v = values[c];
+                if (std::isnan(v)) continue;
+                dst.mw[c] = w >= 1.f ? v : dst.mw[c] + (v - dst.mw[c]) * w;
+                dst.mdriven[c] = 1;
+            }
+            break;
+        }
         default:
             return op_fail(CR_ERR_ARG, k, "unknown op");
         }
@@ -616,6 +705,7 @@ cr_poses* cr_poses_create(const cr_rig* rig, int32_t slot_count) {
         return nullptr;
     }
     p->rig = rig;
+    rig->morph_frozen.store(true, std::memory_order_relaxed);
     const size_t n = rig->joints.size();
     p->slots.resize(static_cast<size_t>(slot_count));
     for (PoseBuf& s : p->slots) pose_rest(*rig, s);
@@ -692,6 +782,61 @@ int32_t cr_poses_evaluate(cr_poses* poses, const cr_pose_op* ops, int32_t op_cou
     return cr_poses_compose(poses, slot, extras, extra_count, base_matrix, out_skin, out_world, out_child);
 }
 
+// ---- morph weights (#171) ----------------------------------------------------------------------------
+
+int32_t cr_poses_morph_weights(const cr_poses* poses, int32_t slot, float* out_weights, uint8_t* out_driven,
+                               int32_t capacity) {
+    if (poses == nullptr || bad_slot(*poses, slot)) {
+        set_error("cr_poses_morph_weights: bad poses/slot");
+        return CR_ERR_ARG;
+    }
+    const PoseBuf& s = poses->slots[static_cast<size_t>(slot)];
+    const auto m = static_cast<int32_t>(s.mw.size());
+    for (int32_t c = 0; c < std::min(m, capacity); ++c) {
+        if (out_weights != nullptr) out_weights[c] = s.mw[static_cast<size_t>(c)];
+        if (out_driven != nullptr) out_driven[c] = s.mdriven[static_cast<size_t>(c)];
+    }
+    return m;
+}
+
+int32_t cr_poses_set_morph_weights(cr_poses* poses, int32_t slot, const float* weights, const uint8_t* driven) {
+    if (poses == nullptr || bad_slot(*poses, slot) || (weights == nullptr && !poses->rig->morph_defaults.empty())) {
+        set_error("cr_poses_set_morph_weights: bad poses/slot/weights");
+        return CR_ERR_ARG;
+    }
+    PoseBuf& s = poses->slots[static_cast<size_t>(slot)];
+    for (size_t c = 0; c < s.mw.size(); ++c) {
+        s.mw[c] = weights[c];
+        s.mdriven[c] = driven == nullptr ? 1 : (driven[c] != 0 ? 1 : 0);
+    }
+    return CR_OK;
+}
+
+int32_t cr_mask_morph_count(const cr_mask* mask) { return mask == nullptr ? 0 : static_cast<int32_t>(mask->mw.size()); }
+
+int32_t cr_mask_set_morph(cr_mask* mask, int32_t channel, float weight) {
+    if (mask == nullptr || channel < -1 || channel >= static_cast<int32_t>(mask->mw.size())) {
+        set_error("cr_mask_set_morph: bad mask/channel");
+        return mask == nullptr ? CR_ERR_ARG : CR_ERR_RANGE;
+    }
+    const float w = std::clamp(weight, 0.f, 1.f);
+    if (channel < 0) {
+        std::fill(mask->mw.begin(), mask->mw.end(), w);
+    } else {
+        mask->mw[static_cast<size_t>(channel)] = w;
+    }
+    return CR_OK;
+}
+
+int32_t cr_mask_get_morph(const cr_mask* mask, float* out_weights) {
+    if (mask == nullptr || (out_weights == nullptr && !mask->mw.empty())) {
+        set_error("cr_mask_get_morph: bad arguments");
+        return CR_ERR_ARG;
+    }
+    if (!mask->mw.empty()) std::memcpy(out_weights, mask->mw.data(), mask->mw.size() * sizeof(float));
+    return CR_OK;
+}
+
 // ---- masks -----------------------------------------------------------------------------------------
 
 cr_mask* cr_mask_create(const cr_rig* rig, float fill) {
@@ -705,7 +850,9 @@ cr_mask* cr_mask_create(const cr_rig* rig, float fill) {
         return nullptr;
     }
     m->rig = rig;
+    rig->morph_frozen.store(true, std::memory_order_relaxed);
     m->w.assign(rig->joints.size(), std::clamp(fill, 0.f, 1.f));
+    m->mw.assign(rig->morph_defaults.size(), std::clamp(fill, 0.f, 1.f));
     m->depth.assign(rig->joints.size(), -1);
     return m;
 }
@@ -720,6 +867,7 @@ int32_t cr_mask_fill(cr_mask* mask, float weight) {
         return CR_ERR_ARG;
     }
     std::fill(mask->w.begin(), mask->w.end(), std::clamp(weight, 0.f, 1.f));
+    std::fill(mask->mw.begin(), mask->mw.end(), std::clamp(weight, 0.f, 1.f));
     return CR_OK;
 }
 
@@ -780,6 +928,7 @@ int32_t cr_mask_from_clip(cr_mask* mask, const cr_clip* clip) {
     }
     const Binding b = binding_for(*mask->rig, *clip);
     for (size_t i = 0; i < mask->w.size(); ++i) mask->w[i] = b.masked[i] ? 1.f : 0.f;
+    for (size_t c = 0; c < mask->mw.size(); ++c) mask->mw[c] = b.morph_masked[c] ? 1.f : 0.f;
     return CR_OK;
 }
 
@@ -797,6 +946,12 @@ cr_inertia* cr_inertia_create(const cr_rig* rig) {
     }
     const size_t n = rig->joints.size();
     in->rig = rig;
+    rig->morph_frozen.store(true, std::memory_order_relaxed);
+    const size_t m = rig->morph_defaults.size();
+    in->mprev.assign(m, 0.f);
+    in->mprev2.assign(m, 0.f);
+    in->mcurve.assign(m, Curve{});
+    in->msign.assign(m, 0.0);
     in->prev.resize(n);
     in->prev2.resize(n);
     in->joints.resize(n);

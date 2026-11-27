@@ -232,7 +232,8 @@ struct Evaluator {
             ids.emplace_back(rig->joints[static_cast<size_t>(j)].id);
             names.emplace_back(rig->joints[static_cast<size_t>(j)].name);
         }
-        if (tracks.empty()) return nullptr;
+        // A layer that only keys morph channels (#171) still needs a clip - when the rig has channels to drive.
+        if (tracks.empty() && (c.morphs.empty() || cr_rig_morph_count(rig) == 0)) return nullptr;
         std::vector<const char*> idp, namep;
         for (size_t i = 0; i < ids.size(); ++i) {
             idp.push_back(ids[i].c_str());
@@ -242,6 +243,24 @@ struct Evaluator {
         cr_clip* out = cr_clip_create(&desc, tracks.data(), static_cast<int32_t>(tracks.size()), keys.data(),
                                       static_cast<int32_t>(keys.size()), idp.data(), namep.data(), nullptr, 0);
         if (out == nullptr) raise(std::string("layer clip: ") + cr_last_error());
+        if (!c.morphs.empty()) {  // morph tracks (#171), bound to the rig's channels by name
+            std::vector<const char*> mnames;
+            std::vector<int32_t> offsets{0};
+            std::vector<cr_morph_key> mkeys;
+            for (const oa::Curve& cv : c.morphs) {
+                mnames.push_back(cv.name.c_str());
+                for (const oa::CurveKey& k : cv.keys) {
+                    mkeys.push_back(cr_morph_key{k.time, k.value, k.in_tangent, k.out_tangent, static_cast<int32_t>(k.interp)});
+                }
+                offsets.push_back(static_cast<int32_t>(mkeys.size()));
+            }
+            if (cr_clip_set_morph_tracks(out, static_cast<int32_t>(mnames.size()), mnames.data(), offsets.data(),
+                                         mkeys.data()) != CR_OK) {
+                const std::string why = cr_last_error();
+                cr_clip_destroy(out);
+                raise("layer clip: " + why);
+            }
+        }
         return out;
     }
 
@@ -257,6 +276,7 @@ struct Evaluator {
     cr_mask* mask_of(const std::vector<oz::MaskEntry>& entries) const {
         if (entries.empty()) return nullptr;
         cr_mask* m = cr_mask_create(rig, 0.f);
+        cr_mask_set_morph(m, -1, 1.f);  // authoring masks name joints; morph channels pass (#171)
         for (const oz::MaskEntry& e : entries) {
             const int32_t j = resolve(e.role.empty() ? e.joint : "role:" + e.role);
             if (j < 0) continue;
@@ -465,10 +485,98 @@ struct Evaluator {
     }
 };
 
+// A morph track's value at t (anim_clip.cpp's curve sampler: clamped, Hermite for CUBIC, double, one float cast).
+float morph_at(const oa::Curve& cv, float t) {
+    const auto& k = cv.keys;
+    if (k.empty()) return 0.f;
+    if (t <= k.front().time) return k.front().value;
+    if (t >= k.back().time) return k.back().value;
+    std::size_t i = 0;
+    while (i + 1 < k.size() && k[i + 1].time <= t) ++i;
+    const oa::CurveKey& a = k[i];
+    const oa::CurveKey& b = k[i + 1];
+    const double dt = static_cast<double>(b.time) - a.time;
+    if (dt <= 0.0) return b.value;
+    const double u = (static_cast<double>(t) - a.time) / dt;
+    switch (a.interp) {
+    case oa::CurveInterp::Step: return a.value;
+    case oa::CurveInterp::Cubic: {
+        const double u2 = u * u, u3 = u2 * u;
+        return static_cast<float>((2 * u3 - 3 * u2 + 1) * a.value + (u3 - 2 * u2 + u) * dt * a.out_tangent +
+                                  (-2 * u3 + 3 * u2) * b.value + (u3 - u2) * dt * b.in_tangent);
+    }
+    default: return static_cast<float>(a.value + (static_cast<double>(b.value) - a.value) * u);
+    }
+}
+
+const oa::Curve* morph_of(const oa::Clip& c, const std::string& name) {
+    for (const oa::Curve& cv : c.morphs) {
+        if (cv.name == name) return &cv;
+    }
+    return nullptr;
+}
+
+// Bakes the layers' morph tracks (#171; omanim_author.hpp "MORPH TRACKS"): a channel only the base layer keys is
+// copied as it is; one an upper layer keys is composed at the bake times (the pose operations' scalar rules).
+std::vector<oa::Curve> bake_morphs(const oz::Session& s, const cr_rig* rig, const std::vector<float>& times) {
+    std::vector<std::string> names;
+    for (const oz::AuthorLayer& l : s.layers) {
+        for (const oa::Curve& cv : l.clip.morphs) {
+            if (std::find(names.begin(), names.end(), cv.name) == names.end()) names.push_back(cv.name);
+        }
+    }
+    bool solo = false;
+    for (size_t i = 1; i < s.layers.size(); ++i) solo |= s.layers[i].solo;
+    const oz::AuthorLayer& base = s.layers.front();
+    std::vector<oa::Curve> out;
+    for (const std::string& name : names) {
+        bool upper = false;
+        for (size_t i = 1; i < s.layers.size(); ++i) upper |= morph_of(s.layers[i].clip, name) != nullptr;
+        const oa::Curve* bc = base.mute ? nullptr : morph_of(base.clip, name);
+        if (!upper) {
+            if (bc != nullptr) out.push_back(*bc);  // lossless
+            continue;
+        }
+        const int32_t ch = cr_rig_morph_find(rig, name.c_str());
+        const float def = ch >= 0 ? cr_rig_morph_default(rig, ch) : 0.f;
+        oa::Curve baked;
+        baked.name = name;
+        for (float t : times) {
+            // The time each layer's clip is sampled at: wrapped like the pose (Evaluator::clip_of's duration).
+            auto at = [&](const oz::AuthorLayer& l) {
+                return cr_wrap_time(t, std::max(l.clip.duration, s.clip.duration), s.clip.loop ? 1 : 0);
+            };
+            float v = bc != nullptr ? morph_at(*bc, at(base)) : def;
+            for (size_t i = 1; i < s.layers.size(); ++i) {
+                const oz::AuthorLayer& l = s.layers[i];
+                const oa::Curve* lc = morph_of(l.clip, name);
+                if (lc == nullptr || l.mute || (solo && !l.solo)) continue;
+                const float w = std::clamp(l.weight * Evaluator::curve_at(l.clip, "weight", t, 1.f), 0.f, 1.f);
+                if (w <= 0.f) continue;
+                const float lv = morph_at(*lc, at(l));
+                if (l.mode == oz::LayerMode::Additive) {
+                    const float d = lv - def;
+                    if (d != 0.f) v = v + d * w;
+                } else {
+                    if (!l.passthrough) v = def;
+                    v = w >= 1.f ? lv : v + (lv - v) * w;
+                }
+            }
+            oa::CurveKey k;
+            k.time = t;
+            k.value = v;
+            baked.keys.push_back(k);
+        }
+        out.push_back(std::move(baked));
+    }
+    return out;
+}
+
 // Bakes the session's tracks (when not trivial): FINAL poses at k / fps and the last frame, Euler unwrapped.
 void bake(oz::Session& s, const cr_rig* rig, const cc_char* character) {
     if (oz::trivial(s)) {
         s.clip.tracks = s.layers.front().clip.tracks;
+        s.clip.morphs = s.layers.front().clip.morphs;
         return;
     }
     Evaluator ev(s, rig, character);
@@ -541,6 +649,7 @@ void bake(oz::Session& s, const cr_rig* rig, const cc_char* character) {
         }
     }
     s.clip.tracks = std::move(tracks);
+    s.clip.morphs = bake_morphs(s, rig, times);
 }
 
 // ---- host (joint resolution, sampling, matching) ------------------------------------------------------------------
@@ -874,6 +983,20 @@ int32_t cm_author_pose(const cm_author* a, float time, int32_t stage, float* out
         const float* v = m->evaluator->pose(time, stage);
         std::memcpy(out_local, v, static_cast<size_t>(cr_rig_joint_count(a->rig)) * 9 * sizeof(float));
         return CM_OK;
+    } catch (const std::exception& e) {
+        return fail(CM_ERR_ARG, e.what());
+    }
+}
+
+int32_t cm_author_morph_weights(const cm_author* a, float time, int32_t stage, float* out, int32_t capacity) {
+    if (a == nullptr || capacity < 0) return fail(CM_ERR_ARG, "cm_author_morph_weights: bad argument");
+    try {
+        auto* m = const_cast<cm_author*>(a);
+        m->refresh();
+        m->evaluator->pose(time, stage);
+        const int32_t n = cr_poses_morph_weights(m->evaluator->poses, SLOT_OUT, out, nullptr, capacity);
+        if (n < 0) return fail(CM_ERR_ARG, std::string("cm_author_morph_weights: ") + cr_last_error());
+        return n;
     } catch (const std::exception& e) {
         return fail(CM_ERR_ARG, e.what());
     }

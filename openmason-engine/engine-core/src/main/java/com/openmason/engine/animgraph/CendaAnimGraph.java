@@ -133,6 +133,7 @@ public final class CendaAnimGraph {
     static final MethodHandle DOC_STEP_COUNT;
     static final MethodHandle DOC_RESET;
     static final MethodHandle DEBUG_WEIGHTS;
+    static final MethodHandle MORPH_WEIGHTS;
 
     static {
         String failure = null;
@@ -246,6 +247,7 @@ public final class CendaAnimGraph {
         DOC_STEP_COUNT = handle(lookup, "cg_doc_step_count", FunctionDescriptor.of(I32, ADDR));
         DOC_RESET = handle(lookup, "cg_doc_reset", FunctionDescriptor.of(I32, ADDR));
         DEBUG_WEIGHTS = handle(lookup, "cg_instance_debug_weights", FunctionDescriptor.of(I32, ADDR, I32, ADDR, I32));
+        MORPH_WEIGHTS = handle(lookup, "cg_instance_morph_weights", FunctionDescriptor.of(I32, ADDR, I32, ADDR, I32));
     }
 
     private CendaAnimGraph() {

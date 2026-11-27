@@ -1,0 +1,44 @@
+{
+  "format": "openmason.meshPipelineFixture", "version": 1,
+  "name": "nonmanifold_fin_hash_order",
+  "javaSource": "MeshTopologyBuilder (HashSet<Integer> edge faces and face adjacency) + EdgeClassifier",
+  "notes": "Three triangles share edge (0,1); face ids 20, 3, 35 in insertion order. HashSet<Integer> iterates by bucket (id & 15: 20->4, 3->3, 35->3), insertion order inside a bucket: edge faces [3,35,20]. Adjacency pairs (i<j over that order): 3+=35,20 -> [35,20]; 20+=3,35 -> [3,35] (same bucket, insertion order); 35+=3,20 -> [3,20].",
+  "tolerance": 1e-6,
+  "input": {
+    "kind": "editable",
+    "positions": [0,0,0, 1,0,0, 0.5,1,0, 0.5,0,1, 0.5,-1,0],
+    "faces": [
+      {"id": 20, "loop": [0,1,2]},
+      {"id": 3, "loop": [1,0,3]},
+      {"id": 35, "loop": [1,0,4]}
+    ]
+  },
+  "expected": {
+    "faces": {
+      "faces": [{"id": 20, "loop": [0,1,2], "cornerUVs": null}, {"id": 3, "loop": [1,0,3], "cornerUVs": null},
+                {"id": 35, "loop": [1,0,4], "cornerUVs": null}],
+      "faceIdUpperBound": 36,
+      "warnings": []
+    },
+    "render": {
+      "indices": [0,1,2, 3,4,5, 6,7,8],
+      "triangleToFaceId": [20,3,35],
+      "cornerToVertexId": [0,1,2, 1,0,3, 1,0,4],
+      "vertexIdToCorners": [[0,4,7],[1,3,6],[2],[5],[8]]
+    },
+    "topology": {
+      "edges": [[0,1],[1,2],[0,2],[0,3],[1,3],[0,4],[1,4]],
+      "edgeFaces": [[3,35,20],[20],[20],[3],[3],[35],[35]],
+      "faceEdges": {"20": [0,1,2], "3": [0,3,4], "35": [0,5,6]},
+      "vertexEdges": [[0,2,3,5],[0,1,4,6],[1,2],[3,4],[5,6]],
+      "vertexFaces": [[20,3,35],[20,3,35],[20],[3],[35]],
+      "faceAdjacency": {"3": {"faces": [35,20], "edges": [0,0]}, "20": {"faces": [3,35], "edges": [0,0]},
+                        "35": {"faces": [3,20], "edges": [0,0]}},
+      "faceNormals": {"0": [0,0,0], "3": [0,1,0], "20": [0,0,1], "35": [0,0,1]},
+      "faceCentroids": {"3": [0.5,0,0.33333334], "20": [0.5,0.33333334,0], "35": [0.5,-0.33333334,0]},
+      "faceAreas": {"3": 0.5, "20": 0.5, "35": 0.5},
+      "edgeKinds": ["NON_MANIFOLD","OPEN","OPEN","OPEN","OPEN","OPEN","OPEN"],
+      "edgeDihedral": [null,null,null,null,null,null,null]
+    }
+  }
+}

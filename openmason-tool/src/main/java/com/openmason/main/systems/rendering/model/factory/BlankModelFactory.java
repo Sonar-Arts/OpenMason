@@ -69,6 +69,19 @@ public class BlankModelFactory {
     }
 
     /**
+     * The bytes of the blank model's 16x16 solid gray {@code texture.omt} (an archive needs one; models whose faces
+     * all carry materials, e.g. imported ones, never draw it).
+     */
+    public static byte[] blankTextureOmt() throws IOException {
+        Path file = new BlankModelFactory().createSolidGrayTexture();
+        try {
+            return Files.readAllBytes(file);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    /**
      * Creates a 16x16 solid gray texture saved as a temporary .OMT file.
      */
     private Path createSolidGrayTexture() throws IOException {

@@ -20,6 +20,8 @@ import java.util.Map;
  * @param tracks   per-part keyframe tracks
  * @param layer    layering metadata for animation mixing; never null
  *                 (clips without an authored layer are full-body BASE)
+ * @param morphTracks OMANIM 1.3 morph (shape-key) weight tracks, bound to a rig's morph channels by name (OpenMason
+ *                 #171); empty for every older clip
  */
 public record ParsedAnimClip(
         String name,
@@ -27,11 +29,24 @@ public record ParsedAnimClip(
         float duration,
         boolean loop,
         List<ParsedAnimTrack> tracks,
-        AnimLayerMeta layer
+        AnimLayerMeta layer,
+        List<ParsedMorphTrack> morphTracks
 ) {
     public ParsedAnimClip {
         tracks = tracks == null ? Collections.emptyList() : List.copyOf(tracks);
         layer = layer == null ? AnimLayerMeta.base() : layer;
+        morphTracks = morphTracks == null ? List.of() : List.copyOf(morphTracks);
+    }
+
+    /** A clip without morph tracks. */
+    public ParsedAnimClip(String name, float fps, float duration, boolean loop, List<ParsedAnimTrack> tracks,
+                          AnimLayerMeta layer) {
+        this(name, fps, duration, loop, tracks, layer, List.of());
+    }
+
+    /** This clip with {@code morphTracks} (a new record; this one is unchanged). */
+    public ParsedAnimClip withMorphTracks(List<ParsedMorphTrack> morphTracks) {
+        return new ParsedAnimClip(name, fps, duration, loop, tracks, layer, morphTracks);
     }
 
     /** Convenience constructor for clips with no layering metadata (v1.0 files, tests). */

@@ -20,12 +20,20 @@ import java.util.Map;
  * @param materials           Material id → definition (immutable records)
  * @param vertexIdToSoupIndices ALL combined-soup vertex indices per editable
  *                              vertex id at capture time, or null
+ * @param shading               the model's shading stores at capture time (#169), or null = not captured
  */
 public record EditableMeshSnapshot(
     EditableMesh mesh,
     Map<Integer, FaceTextureMapping> faceMappings,
     Map<Integer, MaterialDefinition> materials,
-    int[][] vertexIdToSoupIndices) {
+    int[][] vertexIdToSoupIndices,
+    com.openmason.engine.modeling.shading.ModelShading.Snapshot shading) {
+
+    /** A snapshot without shading. */
+    public EditableMeshSnapshot(EditableMesh mesh, Map<Integer, FaceTextureMapping> faceMappings,
+                                Map<Integer, MaterialDefinition> materials, int[][] vertexIdToSoupIndices) {
+        this(mesh, faceMappings, materials, vertexIdToSoupIndices, null);
+    }
 
     /**
      * Capture a snapshot. The mesh is deep-copied; mapping/material maps are
@@ -35,11 +43,21 @@ public record EditableMeshSnapshot(
                                                Map<Integer, FaceTextureMapping> faceMappings,
                                                Map<Integer, MaterialDefinition> materials,
                                                int[][] vertexIdToSoupIndices) {
+        return capture(mesh, faceMappings, materials, vertexIdToSoupIndices, null);
+    }
+
+    /** {@link #capture(EditableMesh, Map, Map, int[][])} plus the model's shading (already an independent copy). */
+    public static EditableMeshSnapshot capture(EditableMesh mesh,
+                                               Map<Integer, FaceTextureMapping> faceMappings,
+                                               Map<Integer, MaterialDefinition> materials,
+                                               int[][] vertexIdToSoupIndices,
+                                               com.openmason.engine.modeling.shading.ModelShading.Snapshot shading) {
         return new EditableMeshSnapshot(
             mesh.deepCopy(),
             new LinkedHashMap<>(faceMappings),
             new LinkedHashMap<>(materials),
-            deepCopy(vertexIdToSoupIndices));
+            deepCopy(vertexIdToSoupIndices),
+            shading);
     }
 
     private static int[][] deepCopy(int[][] mapping) {
@@ -70,6 +88,13 @@ public record EditableMeshSnapshot(
             && mesh.contentEquals(other.mesh)
             && faceMappings.equals(other.faceMappings)
             && materials.equals(other.materials)
-            && java.util.Arrays.deepEquals(vertexIdToSoupIndices, other.vertexIdToSoupIndices);
+            && java.util.Arrays.deepEquals(vertexIdToSoupIndices, other.vertexIdToSoupIndices)
+            && shadingEquals(shading, other.shading);
+    }
+
+    private static boolean shadingEquals(com.openmason.engine.modeling.shading.ModelShading.Snapshot a,
+                                         com.openmason.engine.modeling.shading.ModelShading.Snapshot b) {
+        if (a == null) return b == null || b.isEmpty();
+        return a.contentEquals(b);
     }
 }

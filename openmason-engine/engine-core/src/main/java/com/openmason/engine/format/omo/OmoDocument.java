@@ -65,6 +65,7 @@ public final class OmoDocument implements AutoCloseable {
 
     // --- Lifetime and I/O ------------------------------------------------------------------------------------
 
+
     /** An empty document (version "1.8", no mesh, no texture). */
     public static OmoDocument create() {
         CendaOmo.requireAvailable();
@@ -127,7 +128,7 @@ public final class OmoDocument implements AutoCloseable {
         }
     }
 
-    private static byte[] takeBytes(MemorySegment bytes, String what) throws IOException {
+    static byte[] takeBytes(MemorySegment bytes, String what) throws IOException {
         if (bytes.equals(MemorySegment.NULL)) throw new IOException(what + ": " + CendaOmo.lastError());
         try {
             long size = (long) CendaOmo.BYTES_SIZE.invokeExact(bytes);
@@ -149,7 +150,8 @@ public final class OmoDocument implements AutoCloseable {
         cleanable.clean();
     }
 
-    private MemorySegment h() {
+    /** The native handle (package: the {@code co_shading} binding hands documents to native calls). */
+    MemorySegment h() {
         MemorySegment h = state.handle;
         if (h == null) throw new IllegalStateException("OmoDocument is closed");
         return h;

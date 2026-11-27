@@ -17,6 +17,11 @@
 // A clip WITHOUT an authoring section opens as one base layer holding its tracks; a session that is still just
 // that (one layer at full weight, no mask, no effectors) writes no authoring section and its tracks unbaked
 // (lossless). Joint references are a joint id, a joint name or "role:<role>" (resolved by the host).
+// MORPH TRACKS (#171) live on layers like joint tracks (a layer clip's OMANIM 1.3 `morphs`). Baking composes them per
+// channel the way the pose operations do: the base layer's value (else the channel default), then each active layer
+// above in order with its keyed weight w: override v += (layer - v) w (passthrough off: from the default), additive
+// v += (layer - default) w. Layer MASKS name joints and do not filter morph channels. A channel only the base layer
+// keys is copied unbaked (lossless).
 //
 // Operations (apply; one JSON array, in order; the caller makes the batch atomic):
 //   header        name?, fps?, duration?, loop?, modelRef? (string | null)
@@ -37,6 +42,11 @@
 //   additive      reference: none|frame|clip|character, time?, clip?, space?: local|mesh
 //   effector      name, kind?, upper?, mid?, end?, joints?, axis?, rename?, remove?
 //   effector_key  effector, time, pos?, rot?, weight?, pole?  |  remove: true
+//   morph_key     layer?, morph, time, value, interp? (LINEAR|STEP|CUBIC), inTangent?, outTangent?  |  remove: true
+//                 (#171: a shape-key weight key on the layer's morph track `morph` - a channel name, "morph:" optional;
+//                 members left out keep the replaced key's)
+//   morph         layer?, morph, keys: [{time, value, interp?, inTangent?, outTangent?}] | null   (#171: the whole
+//                 morph track replaced / removed)
 //   match         effector, time, to: ik | fk, layer?  (switch-and-match; host. fk keys the limb on `layer`, or -
 //                 none given - on the topmost layer that holds the pose; refused when the layer cannot hold it)
 //   bake          (re-bake now; host)
@@ -68,7 +78,7 @@ struct AuthorLayer {
     bool passthrough = true;
     bool mesh_space = false;
     std::vector<MaskEntry> mask;
-    Clip clip;  // its keys; curve "weight" = the keyed weight
+    Clip clip;  // its keys (joint tracks + morph tracks); curve "weight" = the keyed weight
 };
 
 struct EffectorKey {

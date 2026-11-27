@@ -16,7 +16,8 @@ import static org.lwjgl.system.MemoryUtil.memFree;
 /**
  * An upload-once model on the GPU: its static {@link ModelGpuMesh}, the
  * {@link ModelDrawPlan} and one texture per referenced material — everything
- * {@link ModelRenderer} needs to draw a loaded entity model (skin, corner normals, material base colours).
+ * {@link ModelRenderer} needs to draw a loaded entity model (skin, corner normals, shape keys, material base colours; the plan carries
+ * the model's vertex-group mask plan, its index buffer is the plan's reordered one).
  *
  * <p>Only materials the plan's textured batches reference get a texture (model
  * files can retain many unused editor materials). Textures are nearest-filtered
@@ -42,6 +43,7 @@ public final class UploadedModel implements AutoCloseable, MaterialTextures {
         mesh.upload(geometry.vertices(), geometry.texCoords(), geometry.indices());
         mesh.updateSkin(geometry.rig().packed());
         mesh.updateNormals(geometry.normals());
+        mesh.updateMorphs(geometry.morphs());
         UploadedModel model = new UploadedModel(mesh, plan);
         for (int materialId : plan.materialIds()) {
             MaterialImage image = geometry.materials().get(materialId);

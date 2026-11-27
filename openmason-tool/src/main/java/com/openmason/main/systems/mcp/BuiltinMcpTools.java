@@ -33,8 +33,12 @@ public final class BuiltinMcpTools {
             c -> new ProjectToolDefinitions(new ProjectSessionService(McpSharedServices.of(c).editor()), c.mapper())
                     .registerAll(c.registry()));
 
-    public static final McpToolContribution MODEL = new McpToolContribution("core.model",
-            c -> new OpenMasonToolDefinitions(McpSharedServices.of(c).model(), c.mapper()).registerAll(c.registry()));
+    public static final McpToolContribution MODEL = new McpToolContribution("core.model", c -> {
+        new OpenMasonToolDefinitions(McpSharedServices.of(c).model(), c.mapper()).registerAll(c.registry());
+        // Smooth shading (#169): shading_set / shading_sharp / shading_get.
+        new ShadingToolDefinitions(new ShadingEditingService(McpSharedServices.of(c).editor()), c.mapper())
+                .registerAll(c.registry());
+    });
 
     public static final McpToolContribution BONES = new McpToolContribution("core.bones",
             c -> new BoneToolDefinitions(McpSharedServices.of(c).bones(), c.mapper()).registerAll(c.registry()));

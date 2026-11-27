@@ -203,7 +203,8 @@ public final class OmoExportAssembler {
                     textureFile,
                     mat.renderLayer().name(),
                     mat.properties().emissive(),
-                    mat.properties().tintColor()
+                    mat.properties().tintColor(),
+                    mat.properties().baseColor() // OMO 1.9 base colour (null = none), multiplies the texture
             ));
         }
 

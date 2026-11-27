@@ -61,6 +61,11 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
     // Cached model bounds — nulled on geometry changes, recomputed lazily by EditableModel
     private Runnable boundsInvalidator;
 
+    // Shading stores follow every derivation (#169): before = catch up with the outgoing mesh, after = follow
+    // the new one (moved positions or a new topology).
+    private Runnable beforeDerive = () -> { };
+    private Runnable afterDerive = () -> { };
+
     public MeshRebuildPipeline(
             IVertexDataManager vertexManager,
             EditableMeshVertexMapper vertexMapper,
@@ -85,6 +90,12 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
      */
     public void setBoundsInvalidator(Runnable boundsInvalidator) {
         this.boundsInvalidator = boundsInvalidator;
+    }
+
+    /** Hooks run around every derivation (the shading stores keep their keys in step with the mesh). */
+    public void setDeriveHooks(Runnable before, Runnable after) {
+        this.beforeDerive = before != null ? before : () -> { };
+        this.afterDerive = after != null ? after : () -> { };
     }
 
     // ── Editable mesh ownership ─────────────────────────────────────────────
@@ -152,6 +163,7 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
      * (loop/face changes); otherwise only the vertex data (positions + UVs).
      */
     private void derive(boolean structural) {
+        beforeDerive.run();
         invalidateBounds();
 
         RenderMesh rm = RenderMeshBuilder.build(editableMesh, faceTextureManager);
@@ -176,6 +188,8 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
             gpuSync.verticesChanged();
         }
         drawBatchesDirty = true;
+
+        afterDerive.run();
 
         // Notify listeners
         changeNotifier.notifyTopologyRebuilt(topology);

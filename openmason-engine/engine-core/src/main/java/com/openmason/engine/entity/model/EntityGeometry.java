@@ -35,6 +35,11 @@ import java.util.Map;
  *                   ({@link com.openmason.engine.rendering.model.draw.ModelNormalGlsl#FLAT}) marks a flat-shaded
  *                   corner, lit with its drawn face's exact normal. Null = every corner flat (a model without
  *                   smooth faces or custom normals: every OMO before 1.9)
+ * @param maskPlan   the vertex-group mask plan (OMO 1.9 {@code vertexGroups}, OpenMason #172), or null when the model
+ *                   has no vertex groups. When present, {@code indices} IS its reordered buffer (triangles moved only
+ *                   inside their part x material draw batch, so every face's index range is unchanged); hosts hide
+ *                   groups through {@code ModelAppearance} and draw {@code ModelDrawPlan.forAppearance}'s ranges.
+ *                   The model's morph targets (shape keys, #171) ride its rig: {@link #morphs()}
  */
 public record EntityGeometry(
         float[] vertices,
@@ -45,7 +50,8 @@ public record EntityGeometry(
         float restMinY,
         List<EntityAttachmentPoint> attachmentPoints,
         RigModel rig,
-        short[] normals
+        short[] normals,
+        com.openmason.engine.format.omo.MaskPlan maskPlan
 ) {
     public EntityGeometry {
         parts = parts == null ? List.of() : List.copyOf(parts);
@@ -60,11 +66,23 @@ public record EntityGeometry(
         }
     }
 
+    /** Geometry without vertex groups. */
+    public EntityGeometry(float[] vertices, float[] texCoords, int[] indices, List<EntityPart> parts,
+                          Map<Integer, MaterialImage> materials, float restMinY,
+                          List<EntityAttachmentPoint> attachmentPoints, RigModel rig, short[] normals) {
+        this(vertices, texCoords, indices, parts, materials, restMinY, attachmentPoints, rig, normals, null);
+    }
+
+    /** The model's morph targets (shape keys, OpenMason #171; its rig's morph channels), or null without. */
+    public com.openmason.engine.rig.RigMorphs morphs() {
+        return rig.morphs();
+    }
+
     /** Geometry without normals (every corner flat). */
     public EntityGeometry(float[] vertices, float[] texCoords, int[] indices, List<EntityPart> parts,
                           Map<Integer, MaterialImage> materials, float restMinY,
                           List<EntityAttachmentPoint> attachmentPoints, RigModel rig) {
-        this(vertices, texCoords, indices, parts, materials, restMinY, attachmentPoints, rig, null);
+        this(vertices, texCoords, indices, parts, materials, restMinY, attachmentPoints, rig, null, null);
     }
 
     /** True when some corner has its own (smooth or custom) normal. */
@@ -80,7 +98,7 @@ public record EntityGeometry(
     public EntityGeometry(float[] vertices, float[] texCoords, int[] indices, List<EntityPart> parts,
                           Map<Integer, MaterialImage> materials, float restMinY,
                           List<EntityAttachmentPoint> attachmentPoints) {
-        this(vertices, texCoords, indices, parts, materials, restMinY, attachmentPoints, null, null);
+        this(vertices, texCoords, indices, parts, materials, restMinY, attachmentPoints, null, null, null);
     }
 
     /** The parts as rig joints (joint i = part i). */

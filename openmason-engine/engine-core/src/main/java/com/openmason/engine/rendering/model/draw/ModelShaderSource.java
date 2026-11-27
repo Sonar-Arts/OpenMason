@@ -12,7 +12,8 @@ public final class ModelShaderSource {
     private ModelShaderSource() {}
 
     /**
-     * Vertex stage of the lit pass ({@code model · skinPosition(aPos)}, see {@link ModelSkinGlsl}; the corner normal
+     * Vertex stage of the lit pass ({@code model · skinPosition(morphPosition(aPos))}: shape keys, then skinning, see
+     * {@link ModelMorphGlsl} / {@link ModelSkinGlsl}; the corner normal
      * through the same skin matrix and the normal matrix of {@code model}, see {@link ModelNormalGlsl}).
      */
     public static final String LIT_VERTEX = """
@@ -31,7 +32,7 @@ public final class ModelShaderSource {
 
             void main() {
                 mat4 skin = skinMatrix();
-                vec4 worldPos = model * skinPosition(skin, aPos);
+                vec4 worldPos = model * skinPosition(skin, morphPosition(aPos));
                 FragWorldPos = worldPos.xyz;
                 ViewDepth = -(view * worldPos).z;
                 gl_Position = projection * view * worldPos;
@@ -134,7 +135,7 @@ public final class ModelShaderSource {
             uniform mat4 projection;
 
             void main() {
-                gl_Position = projection * view * model * skinPosition(aPos);
+                gl_Position = projection * view * model * skinPosition(morphPosition(aPos));
             }
             """;
 

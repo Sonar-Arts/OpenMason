@@ -145,7 +145,8 @@ int32_t cc_retarget_pose(cc_retargeter* rt, const float* source_local, float* ou
 /* Bakes a source clip (joint- or role-addressed for the source character) for the target: sampled at fps (keys at
  * k / fps and at the duration), one track per driven target joint (keyed by joint id; Euler keys continuous: the
  * dual angle nearer the previous key), the clip's notifies, curves, sync markers and timing kept; root motion
- * moves to the target hips when it was on the source hips (the baked hips translation is already scaled).
+ * moves to the target hips when it was on the source hips (the baked hips translation is already scaled); morph
+ * (shape key) tracks (OMANIM 1.3, #171) are copied unchanged - they bind to the target's morph channels by name.
  * Additive clips are refused. NULL on failure (*out_result = CC_ERR_*). Free with cm_clip_destroy. */
 cm_clip* cc_retarget_bake(cc_retargeter* rt, const cm_clip* source_clip, float fps, int32_t* out_result);
 

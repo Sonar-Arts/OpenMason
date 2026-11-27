@@ -85,6 +85,7 @@ public final class ModelRenderer {
             litShader.setVec4("u_materialColor", WHITE);
             litShader.setInt("u_dyeMode", 0);
             litShader.setInt("u_dyeMask", ModelAppearance.MASK_UNIT);
+            ModelMorphGlsl.bindSamplerUnits(litShader);
             currentUseTexture = true;
             ShadowUniforms.applyDisabled(litShader, extension.shadowTextureUnit());
             litShader.unbind();
@@ -98,6 +99,7 @@ public final class ModelRenderer {
             flatShader.setUniform("u_jointPalette", JointPaletteTexture.DEFAULT_UNIT);
             flatShader.setUniform("u_skinned", false);
             flatShader.setUniform("u_skinInfluences", ModelSkinGlsl.INFLUENCES_UNIT);
+            ModelMorphGlsl.bindSamplerUnits(flatShader);
             flatShader.unbind();
         }
         initialized = true;
@@ -157,7 +159,9 @@ public final class ModelRenderer {
 
     /**
      * Lit pass posed by a palette with an appearance (OpenMason #162): hidden parts issue no draw call, dyed
-     * materials are tinted (see {@link ModelAppearance}). {@code appearance} null = the plain pass.
+     * materials are tinted, hidden / kept vertex groups cut the batches down to their visible ranges (#172) and the
+     * appearance's morph weights deform the mesh (#171; see {@link ModelAppearance}). {@code appearance} null = the
+     * plain pass (a mesh with shape keys draws its default weights).
      */
     public void drawLit(ModelGpuMesh mesh, ModelDrawPlan plan, MaterialTextures textures,
                         JointPalette palette, Matrix4f view, Matrix4f projection,
@@ -174,6 +178,8 @@ public final class ModelRenderer {
                          PartMatrices parts, JointPalette skinPalette, Matrix4f view, Matrix4f projection,
                          ModelLighting lighting, Consumer<ShaderProgram> stateHook, ModelAppearance appearance) {
         if (!initialized || litShader == null || !drawable(mesh, plan)) return;
+        plan = plan.forAppearance(appearance);
+        ModelDrawPlan drawPlan = plan;
 
         int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
         int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
@@ -204,6 +210,7 @@ public final class ModelRenderer {
         }
 
         beginSkin(shader, skinPalette, mesh);
+        boolean morphed = mesh.beginMorphs(shader, appearance != null ? appearance.morphWeights() : null);
         shader.setBool("u_hasNormals", mesh.hasNormals());
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL30.glBindVertexArray(mesh.vao());
@@ -215,7 +222,7 @@ public final class ModelRenderer {
         parts.forEachPart((partIndex, partMatrix) -> {
             if (appearance != null && !appearance.partVisible(partIndex)) return;
             shader.setUniform("model", partMatrix);
-            for (IndexedDrawBatch batch : plan.forPart(partIndex).textured()) {
+            for (IndexedDrawBatch batch : drawPlan.forPart(partIndex).textured()) {
                 int texture = textures.textureFor(batch.materialId());
                 if (texture < 0) continue;
                 setUseTexture(shader, texture > 0);
@@ -236,6 +243,7 @@ public final class ModelRenderer {
         }
         setUseTexture(shader, true);
         applyMaterialColor(shader, null);
+        if (morphed) ModelGpuMesh.endMorphs(shader);
         endSkin(shader, skinPalette);
 
         GL30.glBindVertexArray(0);
@@ -298,7 +306,7 @@ public final class ModelRenderer {
      */
     public void drawFlat(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts,
                          Matrix4f view, Matrix4f projection, Vector4f color) {
-        drawFlat(mesh, plan, parts, null, view, projection, color);
+        drawFlat(mesh, plan, parts, null, view, projection, color, null);
     }
 
     /** Flat-colour pass posed by a native rig's palette (see the lit overload). */
@@ -312,7 +320,8 @@ public final class ModelRenderer {
                          Matrix4f view, Matrix4f projection, Vector4f color, ModelAppearance appearance) {
         PartMatrices parts = mesh != null && mesh.hasSkin() ? everyPart(plan) : rigidParts(plan, palette);
         if (appearance != null) parts = visibleOnly(parts, appearance);
-        drawFlat(mesh, plan, parts, mesh != null && mesh.hasSkin() ? palette : null, view, projection, color);
+        drawFlat(mesh, plan, parts, mesh != null && mesh.hasSkin() ? palette : null, view, projection, color,
+                appearance);
     }
 
     private static PartMatrices visibleOnly(PartMatrices parts, ModelAppearance appearance) {
@@ -322,7 +331,7 @@ public final class ModelRenderer {
     }
 
     private void drawFlat(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts, JointPalette skinPalette,
-                          Matrix4f view, Matrix4f projection, Vector4f color) {
+                          Matrix4f view, Matrix4f projection, Vector4f color, ModelAppearance appearance) {
         if (!initialized || flatShader == null || !drawable(mesh, plan)) return;
 
         int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -333,7 +342,7 @@ public final class ModelRenderer {
         GL11.glDepthFunc(GL11.GL_LESS);
         GL11.glDisable(GL11.GL_CULL_FACE);
 
-        drawUntextured(mesh, plan, parts, skinPalette, view, projection, color);
+        drawUntextured(mesh, plan, parts, skinPalette, view, projection, color, appearance);
 
         if (wasCullFaceEnabled) {
             GL11.glEnable(GL11.GL_CULL_FACE);
@@ -348,21 +357,26 @@ public final class ModelRenderer {
      */
     public void drawWireframe(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts,
                               Matrix4f view, Matrix4f projection, Vector4f color) {
-        drawWireframe(mesh, plan, parts, null, view, projection, color);
+        drawWireframe(mesh, plan, parts, null, view, projection, color, null);
     }
 
     /** Wireframe overlay posed by a native rig's palette (see the lit overload). */
     public void drawWireframe(ModelGpuMesh mesh, ModelDrawPlan plan, JointPalette palette,
                               Matrix4f view, Matrix4f projection, Vector4f color) {
-        if (mesh != null && mesh.hasSkin()) {
-            drawWireframe(mesh, plan, everyPart(plan), palette, view, projection, color);
-        } else {
-            drawWireframe(mesh, plan, rigidParts(plan, palette), null, view, projection, color);
-        }
+        drawWireframe(mesh, plan, palette, view, projection, color, null);
+    }
+
+    /** Wireframe overlay posed by a palette with an appearance (hidden parts / groups, morph weights). */
+    public void drawWireframe(ModelGpuMesh mesh, ModelDrawPlan plan, JointPalette palette,
+                              Matrix4f view, Matrix4f projection, Vector4f color, ModelAppearance appearance) {
+        PartMatrices parts = mesh != null && mesh.hasSkin() ? everyPart(plan) : rigidParts(plan, palette);
+        if (appearance != null) parts = visibleOnly(parts, appearance);
+        drawWireframe(mesh, plan, parts, mesh != null && mesh.hasSkin() ? palette : null, view, projection, color,
+                appearance);
     }
 
     private void drawWireframe(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts, JointPalette skinPalette,
-                               Matrix4f view, Matrix4f projection, Vector4f color) {
+                               Matrix4f view, Matrix4f projection, Vector4f color, ModelAppearance appearance) {
         if (!initialized || flatShader == null || !drawable(mesh, plan)) return;
 
         int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -378,7 +392,7 @@ public final class ModelRenderer {
         GL11.glPolygonMode(GL11.GL_FRONT_AND_BACK, GL11.GL_LINE);
         GL11.glLineWidth(1.5f);
 
-        drawUntextured(mesh, plan, parts, skinPalette, view, projection, color);
+        drawUntextured(mesh, plan, parts, skinPalette, view, projection, color, appearance);
 
         GL11.glPolygonMode(GL11.GL_FRONT_AND_BACK, previousPolygonMode[0]);
         GL11.glLineWidth(previousLineWidth);
@@ -393,22 +407,25 @@ public final class ModelRenderer {
     }
 
     private void drawUntextured(ModelGpuMesh mesh, ModelDrawPlan plan, PartMatrices parts, JointPalette skinPalette,
-                                Matrix4f view, Matrix4f projection, Vector4f color) {
+                                Matrix4f view, Matrix4f projection, Vector4f color, ModelAppearance appearance) {
         ShaderProgram shader = flatShader;
+        ModelDrawPlan drawPlan = plan.forAppearance(appearance);
         shader.bind();
         shader.setUniform("view", view);
         shader.setUniform("projection", projection);
         shader.setUniform("color", color);
         beginSkin(shader, skinPalette, mesh);
+        boolean morphed = mesh.beginMorphs(shader, appearance != null ? appearance.morphWeights() : null);
 
         GL30.glBindVertexArray(mesh.vao());
         parts.forEachPart((partIndex, partMatrix) -> {
             shader.setUniform("model", partMatrix);
-            for (IndexedDrawBatch batch : plan.forPart(partIndex).untextured()) {
+            for (IndexedDrawBatch batch : drawPlan.forPart(partIndex).untextured()) {
                 GL11.glDrawElements(GL11.GL_TRIANGLES, batch.indexCount(),
                         GL11.GL_UNSIGNED_INT, batch.byteOffset());
             }
         });
+        if (morphed) ModelGpuMesh.endMorphs(shader);
         endSkin(shader, skinPalette);
         GL30.glBindVertexArray(0);
         shader.unbind();

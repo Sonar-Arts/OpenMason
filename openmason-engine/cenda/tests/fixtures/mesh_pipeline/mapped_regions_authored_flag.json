@@ -1,0 +1,44 @@
+{
+  "format": "openmason.meshPipelineFixture", "version": 1,
+  "name": "mapped_regions_authored_flag",
+  "javaSource": "RenderMeshBuilder.emitFaceUVs (authored != null && (!explicit || mapping.authoredUVs())) / projectFaceUVs (FaceTextureMapping region + UVRotation) + MeshTopologyBuilder",
+  "notes": "Face 1 has authored UVs AND an explicit mapping (material 2) with authoredUVs = true (FaceTextureMapping.authoredUVs, set by EditableModel.adoptAuthoredUVs on load): the authored UVs are drawn. Base projection of every quad (normal +Z): s = dx, t = 1 - dy from loop[0]. Face 0: region (0,0,0.5,1) material 0 (explicit by region), CW_90: rs = t, rt = 1 - s. Face 1: region (0.5,0.25,1,0.75), CW_180: (1 - s, 1 - t). Face 2: material 0 FULL region (NOT explicit) with CW_270: (1 - t, s). Topology: e1 shared by faces 0/1, e5 by faces 1/2, both manifold, dihedral 0.",
+  "tolerance": 1e-6,
+  "input": {
+    "kind": "editable",
+    "positions": [0,0,0, 1,0,0, 1,1,0, 0,1,0, 2,0,0, 2,1,0, 3,0,0, 3,1,0],
+    "faces": [
+      {"id": 0, "loop": [0,1,2,3]},
+      {"id": 1, "loop": [1,4,5,2], "cornerUVs": [0.125,0.125, 0.25,0.125, 0.25,0.25, 0.125,0.25]},
+      {"id": 2, "loop": [4,6,7,5]}
+    ],
+    "faceMappings": [
+      {"faceId": 0, "materialId": 0, "u0": 0, "v0": 0, "u1": 0.5, "v1": 1, "rotation": 90},
+      {"faceId": 1, "materialId": 2, "u0": 0.5, "v0": 0.25, "u1": 1, "v1": 0.75, "rotation": 180, "authoredUVs": true},
+      {"faceId": 2, "materialId": 0, "u0": 0, "v0": 0, "u1": 1, "v1": 1, "rotation": 270}
+    ]
+  },
+  "expected": {
+    "render": {
+      "vertices": [0,0,0, 1,0,0, 1,1,0, 0,1,0, 1,0,0, 2,0,0, 2,1,0, 1,1,0, 2,0,0, 3,0,0, 3,1,0, 2,1,0],
+      "texCoords": [0.5,1, 0.5,0, 0,0, 0,1, 0.125,0.125, 0.25,0.125, 0.25,0.25, 0.125,0.25, 0,0, 0,1, 1,1, 1,0],
+      "indices": [0,1,2, 0,2,3, 4,5,6, 4,6,7, 8,9,10, 8,10,11],
+      "triangleToFaceId": [0,0,1,1,2,2],
+      "cornerToVertexId": [0,1,2,3, 1,4,5,2, 4,6,7,5],
+      "vertexIdToCorners": [[0],[1,4],[2,7],[3],[5,8],[6,11],[9],[10]]
+    },
+    "topology": {
+      "edges": [[0,1],[1,2],[2,3],[0,3],[1,4],[4,5],[2,5],[4,6],[6,7],[5,7]],
+      "edgeFaces": [[0],[0,1],[0],[0],[1],[1,2],[1],[2],[2],[2]],
+      "faceEdges": {"0": [0,1,2,3], "1": [4,5,6,1], "2": [7,8,9,5]},
+      "vertexEdges": [[0,3],[0,1,4],[1,2,6],[2,3],[4,5,7],[5,6,9],[7,8],[8,9]],
+      "vertexFaces": [[0],[0,1],[0,1],[0],[1,2],[1,2],[2],[2]],
+      "faceAdjacency": {"0": {"faces": [1], "edges": [1]}, "1": {"faces": [0,2], "edges": [1,5]}, "2": {"faces": [1], "edges": [5]}},
+      "faceNormals": {"0": [0,0,1], "1": [0,0,1], "2": [0,0,1]},
+      "faceCentroids": {"0": [0.5,0.5,0], "1": [1.5,0.5,0], "2": [2.5,0.5,0]},
+      "faceAreas": {"0": 1, "1": 1, "2": 1},
+      "edgeKinds": ["OPEN","MANIFOLD","OPEN","OPEN","OPEN","MANIFOLD","OPEN","OPEN","OPEN","OPEN"],
+      "edgeDihedral": [null,0,null,null,null,0,null,null,null,null]
+    }
+  }
+}

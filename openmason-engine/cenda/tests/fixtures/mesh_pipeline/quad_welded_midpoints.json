@@ -1,0 +1,33 @@
+{
+  "format": "openmason.meshPipelineFixture", "version": 1,
+  "name": "quad_welded_midpoints",
+  "javaSource": "MeshImporterTest.coincidentDuplicateMidpointsWeldIntoOneVertex + RenderMeshBuilder.projectFaceUVs",
+  "notes": "Soup 3 and 4 duplicate soup 0 and 2. No texCoords: UVs are projected (normal +Z, tangent +X, bitangent +Y, ref = loop[0]); s = x, t = 1 - y (V flip).",
+  "tolerance": 1e-6,
+  "input": {
+    "kind": "soup",
+    "vertices": [0,0,0, 1,0,0, 1,1,0, 0,0,0, 1,1,0, 0,1,0],
+    "indices": [0,1,2, 3,4,5],
+    "triangleToFaceId": [0,0]
+  },
+  "expected": {
+    "weld": {
+      "soupToVertex": [0,1,2,0,2,3],
+      "positions": [0,0,0, 1,0,0, 1,1,0, 0,1,0],
+      "vertexToSoup": [[0,3],[1],[2,4],[5]]
+    },
+    "faces": {
+      "faces": [{"id": 0, "loop": [0,1,2,3], "cornerUVs": null}],
+      "faceIdUpperBound": 1,
+      "warnings": []
+    },
+    "render": {
+      "vertices": [0,0,0, 1,0,0, 1,1,0, 0,1,0],
+      "texCoords": [0,1, 1,1, 1,0, 0,0],
+      "indices": [0,1,2, 0,2,3],
+      "triangleToFaceId": [0,0],
+      "cornerToVertexId": [0,1,2,3],
+      "vertexIdToCorners": [[0],[1],[2],[3]]
+    }
+  }
+}
