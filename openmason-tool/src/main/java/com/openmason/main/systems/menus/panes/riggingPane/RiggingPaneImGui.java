@@ -5,8 +5,10 @@ import com.openmason.main.systems.ViewportController;
 import com.openmason.main.systems.menus.panes.riggingPane.sections.AttachmentEditorSection;
 import com.openmason.main.systems.menus.panes.riggingPane.sections.BoneEditorSection;
 import com.openmason.main.systems.menus.panes.riggingPane.sections.HierarchySection;
+import com.openmason.main.systems.menus.panes.riggingPane.sections.ShapeKeysSection;
 import com.openmason.main.systems.menus.panes.riggingPane.sections.SkinSection;
 import com.openmason.main.systems.menus.panes.riggingPane.sections.SocketListSection;
+import com.openmason.main.systems.menus.panes.riggingPane.sections.VertexGroupsSection;
 import com.openmason.main.systems.viewport.ViewportUIState;
 import imgui.ImGui;
 import imgui.flag.ImGuiWindowFlags;
@@ -16,7 +18,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Rigging pane — a single docked window containing a unified parts+bones
  * hierarchy tree, with a bone inspector that appears below the tree when a
- * bone is selected, and the Skin section (weights, weight paint) below that.
+ * bone is selected, the Skin section (weights, weight paint) below that, then the Shape Keys (#171) and Vertex
+ * Groups (#172) sections.
  */
 public class RiggingPaneImGui {
 
@@ -28,6 +31,8 @@ public class RiggingPaneImGui {
     private final BoneEditorSection boneInspector = new BoneEditorSection();
     private final AttachmentEditorSection attachmentInspector = new AttachmentEditorSection();
     private final SkinSection skinSection = new SkinSection();
+    private final ShapeKeysSection shapeKeysSection = new ShapeKeysSection();
+    private final VertexGroupsSection vertexGroupsSection = new VertexGroupsSection();
 
     private com.openmason.main.systems.menus.dialogs.FileDialogService fileDialogService;
     private com.openmason.main.systems.skeleton.AttachmentPreviewStore attachmentPreviewStore;
@@ -66,6 +71,8 @@ public class RiggingPaneImGui {
         attachmentInspector.setOnAttachmentsChanged(viewport::invalidateSubRenderers);
 
         skinSection.setViewport(viewport);
+        shapeKeysSection.setViewport(viewport);
+        vertexGroupsSection.setViewport(viewport);
 
         // Socket list clicks route through the hierarchy's socket-select so
         // part/bone selection clears and the gizmo target swaps identically.
@@ -168,6 +175,16 @@ public class RiggingPaneImGui {
             ImGui.separator();
             ImGui.spacing();
             skinSection.render();
+
+            ImGui.spacing();
+            ImGui.separator();
+            ImGui.spacing();
+            shapeKeysSection.render();
+
+            ImGui.spacing();
+            ImGui.separator();
+            ImGui.spacing();
+            vertexGroupsSection.render();
 
             ImGui.endChild();
         }

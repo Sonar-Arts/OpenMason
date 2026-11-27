@@ -75,6 +75,10 @@ public class ModelOperationService {
      */
     public void setViewport(ViewportController viewport) {
         this.viewport = viewport;
+        if (viewport != null) {
+            // Shape keys / vertex groups live in the .omo: an edit, undo or redo dirties the model (#171 / #172).
+            viewport.getVertexData().history().setOnChange(() -> modelState.setUnsavedChanges(true));
+        }
         logger.debug("Viewport reference set in ModelOperationService");
     }
 
@@ -145,7 +149,7 @@ public class ModelOperationService {
                 if (viewport.getModelRenderer() != null) {
                     viewport.getModelRenderer().getShading().clear();
                 }
-                carriedVertexData = com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry.EMPTY;
+                viewport.getVertexData().clear();
                 statusService.updateStatus("Blank model created and loaded: " + currentEditableModel.getName());
             } else {
                 statusService.updateStatus("Blank model created: " + currentEditableModel.getName() +
@@ -322,8 +326,10 @@ public class ModelOperationService {
                     }
                 }
 
-                // OMO 1.9: shading resolved against the exact mesh being written; vertex groups / morphs carried
-                // from the load, remapped to the written layout like the skin.
+                // OMO 1.9: shading resolved against the exact mesh being written; vertex groups / morphs from the
+                // editor's stores (#171 / #172), remapped to the written layout like the skin.
+                com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry carriedVertexData =
+                        viewport.getVertexData().carry();
                 EditableModel model = viewport.getModelRenderer();
                 if (model != null && meshData != null) {
                     OMOFormat.ShadingData shading = model.getShading().toSavedLayout(meshData,
@@ -533,13 +539,13 @@ public class ModelOperationService {
                         bonesRestored = true;
 
                         // Parts + face textures derive the mesh ONCE, at the end of this bracket (#175)
+                        List<OMOFormat.PartEntry> partEntries = omoDeserializer.getLastLoadedPartEntries();
                         EditableModel deferred = viewport.getModelRenderer();
                         if (deferred != null) {
                             deferred.beginDeferredRebuild();
                         }
                         try {
                         // Check for multi-part model (v1.3+)
-                        List<OMOFormat.PartEntry> partEntries = omoDeserializer.getLastLoadedPartEntries();
                         Map<Integer, Integer> restoredFaceIds = null;
                         if (partEntries != null && !partEntries.isEmpty()) {
                             // MULTI-PART: Reconstruct individual parts from combined mesh + part entries.
@@ -673,12 +679,11 @@ public class ModelOperationService {
 
     /**
      * OMO 1.9 data of the model just loaded: shading into the editor's per-part stores, vertex groups and morphs
-     * into {@link #carriedVertexData} (kept for the next save).
+     * (shape keys) into the viewport's editable stores (#171 / #172; written back on save).
      */
     private void restoreVertexData(OMOFormat.MeshData meshData, List<OMOFormat.PartEntry> partEntries) {
         EditableModel renderer = viewport.getModelRenderer();
-        carriedVertexData = com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry.load(
-                omoDeserializer.getLastLoadedVertexGroups(), omoDeserializer.getLastLoadedMorphs());
+        viewport.getVertexData().load(omoDeserializer.getLastLoadedVertexGroups(), omoDeserializer.getLastLoadedMorphs());
         if (renderer == null) {
             return;
         }
@@ -691,10 +696,6 @@ public class ModelOperationService {
             statusService.updateStatus("Model loaded, but its smooth shading could not be read: " + e.getMessage());
         }
     }
-
-    // Vertex groups / morphs of the loaded file, written back on save (the editor does not edit them yet).
-    private com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry carriedVertexData =
-            com.openmason.main.systems.rendering.model.io.omo.OmoVertexDataCarry.EMPTY;
 
     // =========================================================================
     // FACE TEXTURE DATA EXTRACTION (save path)

@@ -1,3 +1,6 @@
+morph_capture
+morph_list
+morph_set
 skin_auto_weights
 skin_clear
 skin_get_weights
@@ -7,3 +10,5 @@ skin_normalize
 skin_paint
 skin_prune
 skin_set_weights
+vgroup_list
+vgroup_set

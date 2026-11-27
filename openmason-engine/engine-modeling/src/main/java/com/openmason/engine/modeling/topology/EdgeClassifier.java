@@ -12,12 +12,9 @@ public final class EdgeClassifier {
 
     private final EdgeKind[] kinds;
 
-    /** Package-private constructor used by {@link MeshTopologyBuilder}. */
-    EdgeClassifier(MeshEdge[] edges) {
-        this.kinds = new EdgeKind[edges.length];
-        for (int i = 0; i < edges.length; i++) {
-            kinds[i] = EdgeKind.fromAdjacentFaceCount(edges[i].adjacentFaceCount());
-        }
+    /** Package-private constructor used by {@link MeshTopologyBuilder}: the kinds per edge id (native). */
+    EdgeClassifier(EdgeKind[] kinds) {
+        this.kinds = kinds;
     }
 
     /** The kind of an edge, or null when out of range. */

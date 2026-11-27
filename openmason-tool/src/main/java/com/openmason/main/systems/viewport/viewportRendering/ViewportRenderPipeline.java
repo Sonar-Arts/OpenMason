@@ -224,8 +224,16 @@ public class ViewportRenderPipeline implements ViewerPass {
         // they need no signature changes.
         this.context = frame.context();
 
+        closeFinishedTransformInteraction();
+
         // PASS 2: Render content (block/item/model)
         renderContent(viewportState, renderingState, transformState);
+
+        // While a part / bone gizmo drag or a preview pose moves the model through its GPU palette (#175 F2),
+        // the CPU-side element overlays (and the weight heat map) still hold the baked positions: hide them until
+        // the release re-bakes, whose rebuild notifications refresh them.
+        boolean modelDeformed = renderingState.getMode() == RenderingMode.BLOCK_MODEL
+                && modelRenderer != null && modelRenderer.isDisplayDeformed();
 
         // PASS 2.5: Socket test models — accessory previews posed at their
         // socket's world frame (normal depth-tested geometry, not overlay)
@@ -238,7 +246,7 @@ public class ViewportRenderPipeline implements ViewerPass {
         // PASS 3: Render mesh (vertices + edges + faces, debug overlay, Blender-style)
         // Element visibility follows Blender's edit modes: vertex mode shows dots +
         // wire, edge mode shows wire only, face mode shows wire + fills + face dots.
-        if (viewportState.getShowVertices().get()) {
+        if (viewportState.getShowVertices().get() && !modelDeformed) {
             EditMode editMode = EditModeManager.getInstance().getCurrentMode();
             // Always runs the mesh-data sync/wiring; skips the dots in EDGE/FACE modes
             renderVertices(renderingState, transformState,
@@ -253,7 +261,7 @@ public class ViewportRenderPipeline implements ViewerPass {
 
         // PASS 3.5: Weight paint heat map + brush cursor (over the model, under the gizmo)
         if (weightPaintState != null && weightPaintState.isActive() && skinAuthoring != null
-                && renderingState.getMode() == RenderingMode.BLOCK_MODEL) {
+                && renderingState.getMode() == RenderingMode.BLOCK_MODEL && !modelDeformed) {
             renderWeightHeat(transformState);
         }
 
@@ -271,6 +279,20 @@ public class ViewportRenderPipeline implements ViewerPass {
             if (attachmentStore != null && !attachmentStore.isEmpty()) {
                 renderAttachmentGizmos(transformState);
             }
+        }
+    }
+
+    /**
+     * Ends a part manager transform interaction the gizmo no longer drives (#175 F2): a model-level group drag
+     * reports no end to its target, so the re-bake runs on the first frame after the gizmo stopped dragging.
+     */
+    private void closeFinishedTransformInteraction() {
+        if (modelRenderer == null || modelRenderer.getPartManager() == null) return;
+        var parts = modelRenderer.getPartManager();
+        if (!parts.isTransformInteractionActive()) return;
+        if (gizmoRenderer != null && gizmoRenderer.isInitialized() && gizmoRenderer.isDragging()) return;
+        while (parts.isTransformInteractionActive()) {
+            parts.endTransformInteraction();
         }
     }
 

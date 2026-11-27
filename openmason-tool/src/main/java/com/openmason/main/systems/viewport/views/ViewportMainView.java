@@ -128,6 +128,10 @@ public class ViewportMainView {
         // Render edit mode overlay in top-left corner
         renderEditModeOverlay(imagePos);
 
+        // Edit-cost stats (View > Edit Stats Overlay, #175) in the top-right corner
+        EditStatsOverlay.render(ImGui.getWindowDrawList(), imagePos.x, imagePos.y, viewportSize.x,
+                viewport.getModelRenderer());
+
         // Check if the viewport window itself is being hovered
         boolean viewportHovered = ImGui.isWindowHovered();
 

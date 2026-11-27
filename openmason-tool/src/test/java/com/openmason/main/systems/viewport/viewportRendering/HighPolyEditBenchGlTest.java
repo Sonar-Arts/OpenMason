@@ -17,7 +17,6 @@ import com.openmason.engine.rendering.shaders.ShaderType;
 import com.openmason.engine.rendering.viewer.ViewerRenderContext;
 import com.openmason.engine.rendering.viewer.camera.ViewerCamera;
 import com.openmason.engine.rendering.viewer.transform.TransformState;
-import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeHoverDetector;
 import com.openmason.main.systems.rendering.model.editing.subrenders.edge.EdgeRenderer;
 import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceRenderer;
 import com.openmason.main.systems.rendering.model.editing.subrenders.face.FaceTranslationHandler;
@@ -454,15 +453,11 @@ class HighPolyEditBenchGlTest {
         faceRenderer.handleMouseMove(mx, my, camera.getViewMatrix(), camera.getProjectionMatrix(), m, W, H);
     }
 
-    /** The edge controller's hover query (EdgeInputController.updateEdgeHover). */
+    /** The edge controller's hover query (EdgeInputController.updateEdgeHover -> EdgeRenderer.updateHover). */
     static final class HoverBench {
         static void edge(EdgeRenderer edges, float mx, float my, Matrix4f view, Matrix4f proj, Matrix4f model,
                          int w, int h) {
-            long t = EditCostStats.begin();
-            int hit = EdgeHoverDetector.detectHoveredEdge(mx, my, w, h, view, proj, model,
-                    edges.getEdgePositions(), edges.getEdgeCount(), edges.getLineWidth());
-            edges.setHoveredEdgeIndex(hit);
-            EditCostStats.end(Span.HOVER, t);
+            edges.updateHover(mx, my, view, proj, model, w, h);
         }
     }
 
@@ -471,12 +466,17 @@ class HighPolyEditBenchGlTest {
         static void run(EditableModel model, BoneStore bones, List<ModelPartDescriptor> parts,
                         Map<String, PartMeshRebuilder.PartGeometry> geometry,
                         java.util.function.Consumer<FaceTextureManager> faceTextures) {
-            model.getPartManager().replaceAllParts(parts, geometry);
-            faceTextures.accept(model.getFaceTextureManager());
-            model.adoptAuthoredUVs();
-            model.markDrawBatchesDirty();
-            model.refreshUVs();
-            bones.load(List.of());
+            bones.load(List.of(), false); // skeleton first, quietly
+            model.beginDeferredRebuild();
+            try {
+                model.getPartManager().replaceAllParts(parts, geometry);
+                faceTextures.accept(model.getFaceTextureManager());
+                model.adoptAuthoredUVs();
+                model.markDrawBatchesDirty();
+                model.refreshUVs();
+            } finally {
+                model.endDeferredRebuild();
+            }
         }
     }
 }

@@ -77,11 +77,20 @@ public class ModelPartManager implements IModelPartManager {
     // Mesh consumer callback (set by EditableModel or similar)
     private MeshConsumer meshConsumer;
 
-    // Optional post-bake step (skinned preview) run before the consumer sees a rebuild
+    // Optional post-bake step run before the consumer sees a rebuild
     private CombinedMeshDeformer combinedMeshDeformer;
 
     // Counter for generating unique part names
     private int partNameCounter = 0;
+
+    // GPU palette path (#175 F2): the matrices each visible part was baked with at the last rebuild, their
+    // inverses, the open transform interactions (gizmo drags) that defer re-baking, and the skin source.
+    private final Map<String, Matrix4f> bakedMatrices = new HashMap<>();
+    private final Map<String, Matrix4f> bakedInverses = new HashMap<>();
+    private int transformInteractionDepth;
+    private boolean bakePending;
+    private long rebuildCount;
+    private PartSkinSource partSkinSource;
 
     // Cache of effective (hierarchical) world matrices, keyed by partId.
     // Cleared on any structural or transform change.
@@ -132,8 +141,8 @@ public class ModelPartManager implements IModelPartManager {
      * effective matrix was baked into {@link PartMeshRebuilder.RebuildResult#combinedVertices()}
      * and before the {@link MeshConsumer} sees the result. It may rewrite vertex positions in
      * place (the array is owned by this rebuild); it must not change counts, indices or ranges.
-     * The editor's skinned animation preview deforms weighted vertices here (the math is the
-     * native rig's, {@code com.openmason.engine.rig}).
+     * The editor keeps its skins in step with edited parts here; its skinned preview no longer
+     * deforms baked vertices (it draws through the GPU palette, {@link PartSkinSource}, #175 F2).
      */
     @FunctionalInterface
     public interface CombinedMeshDeformer {
@@ -467,8 +476,7 @@ public class ModelPartManager implements IModelPartManager {
         }
 
         parts.put(id, existing.withTransform(transform));
-        invalidateEffectiveMatrixCache();
-        rebuildCombinedMesh();
+        transformsChanged();
         notifyTransformChanged(id, transform);
     }
 
@@ -483,8 +491,11 @@ public class ModelPartManager implements IModelPartManager {
      * (no listener fires). At least one descriptor change triggers exactly one
      * rebuild.
      *
-     * @param updates Map of partId → new transform
-     * @return true when at least one part changed (and the mesh was rebuilt)
+     * <p>Inside a {@link #beginTransformInteraction() transform interaction} the rebuild is deferred to its end
+     * like every other transform change (the editor draws the new matrices through the GPU palette).
+     *
+     * @param updates Map of partId → new transform (iteration order = notification order)
+     * @return true when at least one part changed (and the mesh was rebuilt or the re-bake scheduled)
      */
     public boolean setPartTransformsBatch(Map<String, PartTransform> updates) {
         if (updates == null || updates.isEmpty()) return false;
@@ -504,8 +515,7 @@ public class ModelPartManager implements IModelPartManager {
         }
         if (!anyChanged) return false;
 
-        invalidateEffectiveMatrixCache();
-        rebuildCombinedMesh();
+        transformsChanged();
         for (int i = 0; i < changedIds.size(); i++) {
             notifyTransformChanged(changedIds.get(i), changedTransforms.get(i));
         }
@@ -521,8 +531,7 @@ public class ModelPartManager implements IModelPartManager {
 
         PartTransform newTransform = existing.transform().withTranslation(delta);
         parts.put(id, existing.withTransform(newTransform));
-        invalidateEffectiveMatrixCache();
-        rebuildCombinedMesh();
+        transformsChanged();
         notifyTransformChanged(id, newTransform);
     }
 
@@ -535,8 +544,7 @@ public class ModelPartManager implements IModelPartManager {
 
         PartTransform newTransform = existing.transform().withRotation(eulerDelta);
         parts.put(id, existing.withTransform(newTransform));
-        invalidateEffectiveMatrixCache();
-        rebuildCombinedMesh();
+        transformsChanged();
         notifyTransformChanged(id, newTransform);
     }
 
@@ -549,8 +557,7 @@ public class ModelPartManager implements IModelPartManager {
 
         PartTransform newTransform = existing.transform().withScale(scaleFactors);
         parts.put(id, existing.withTransform(newTransform));
-        invalidateEffectiveMatrixCache();
-        rebuildCombinedMesh();
+        transformsChanged();
         notifyTransformChanged(id, newTransform);
     }
 
@@ -687,7 +694,11 @@ public class ModelPartManager implements IModelPartManager {
                 PartMeshRebuilder.PartGeometry geo = partGeometry.get(entry.getKey());
                 if (geo == null || geo.vertices() == null) break;
 
-                Matrix4f inv = new Matrix4f(getEffectiveWorldMatrix(entry.getKey())).invert();
+                // The combined mesh holds positions baked with the part's BAKED matrix (it differs from the
+                // current one while a preview pose or a gizmo drag draws through the GPU palette).
+                Matrix4f baked = bakedInverses.get(entry.getKey());
+                Matrix4f inv = baked != null ? new Matrix4f(baked)
+                        : new Matrix4f(getEffectiveWorldMatrix(entry.getKey())).invert();
                 Vector4f local = new Vector4f(newWorldPos.x, newWorldPos.y, newWorldPos.z, 1f);
                 inv.transform(local);
 
@@ -763,15 +774,31 @@ public class ModelPartManager implements IModelPartManager {
             int count = updateCounts.get(e.getKey());
             float[] list = e.getValue();
             float[] olds = new float[count * 3];
-            for (int u = 0; u < count; u++) System.arraycopy(list, u * 6, olds, u * 3, 3);
+            float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY, minZ = Float.POSITIVE_INFINITY;
+            float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
+            for (int u = 0; u < count; u++) {
+                System.arraycopy(list, u * 6, olds, u * 3, 3);
+                minX = Math.min(minX, olds[u * 3]);
+                minY = Math.min(minY, olds[u * 3 + 1]);
+                minZ = Math.min(minZ, olds[u * 3 + 2]);
+                maxX = Math.max(maxX, olds[u * 3]);
+                maxY = Math.max(maxY, olds[u * 3 + 1]);
+                maxZ = Math.max(maxZ, olds[u * 3 + 2]);
+            }
+            float pad = ModelingConstants.POSITION_EPSILON;
+            minX -= pad; minY -= pad; minZ -= pad;
+            maxX += pad; maxY += pad; maxZ += pad;
             com.openmason.engine.modeling.core.PointGrid grid = new com.openmason.engine.modeling.core.PointGrid(
                     olds, null, ModelingConstants.POSITION_EPSILON);
             float[] verts = partGeometry.get(e.getKey()).vertices();
             int[] winner = new int[1];
             for (int i = 0, vc = verts.length / 3; i < vc; i++) {
+                float vx = verts[i * 3], vy = verts[i * 3 + 1], vz = verts[i * 3 + 2];
+                // outside the updates' box: cannot match (cheap reject before the grid lookups)
+                if (vx < minX || vx > maxX || vy < minY || vy > maxY || vz < minZ || vz > maxZ) continue;
                 winner[0] = -1;
                 // the last update (call order) whose old position matches wins, as sequential calls would
-                grid.query(verts[i * 3], verts[i * 3 + 1], verts[i * 3 + 2], epsSq - Math.ulp(epsSq),
+                grid.query(vx, vy, vz, epsSq - Math.ulp(epsSq),
                         (u, d) -> winner[0] = Math.max(winner[0], u));
                 if (winner[0] < 0) continue;
                 int o = winner[0] * 6;
@@ -879,11 +906,109 @@ public class ModelPartManager implements IModelPartManager {
     /**
      * Notify the manager that the external hierarchy (bones, etc.) has changed.
      * Invalidates the effective-matrix cache and rebuilds the combined mesh so the
-     * vertex buffer reflects the new world transforms.
+     * vertex buffer reflects the new world transforms (deferred to the end of an open
+     * {@link #beginTransformInteraction() transform interaction}).
      */
     public void notifyExternalHierarchyChanged() {
+        transformsChanged();
+    }
+
+    /**
+     * Notify the manager that an external PREVIEW pose moved matrices (the skeleton's pose layer): the
+     * effective-matrix cache is invalidated and nothing is re-baked; the editor draws the pose through the GPU
+     * palette ({@link PartPalette}). The baked vertices keep their rest placement.
+     */
+    public void notifyExternalPoseChanged() {
         invalidateEffectiveMatrixCache();
+    }
+
+    // ========== GPU palette path (#175 F2) ==========
+
+    /**
+     * Open a transform interaction (a gizmo drag): until the matching {@link #endTransformInteraction()}, part
+     * transform changes and external hierarchy changes update the descriptors, the matrices and the listeners but
+     * do NOT rebuild the combined mesh; the editor draws them through the GPU palette. Nested calls count.
+     */
+    public void beginTransformInteraction() {
+        transformInteractionDepth++;
+    }
+
+    /**
+     * Close a transform interaction: when it was the outermost and anything changed during it, the combined mesh
+     * is rebuilt once with the final matrices (the same vertices the per-change rebuilds used to end with).
+     *
+     * @return true when the mesh was re-baked
+     */
+    public boolean endTransformInteraction() {
+        if (transformInteractionDepth == 0) return false;
+        if (--transformInteractionDepth > 0) return false;
+        if (!bakePending) return false;
         rebuildCombinedMesh();
+        return true;
+    }
+
+    /** True while a transform interaction defers re-baking. */
+    public boolean isTransformInteractionActive() {
+        return transformInteractionDepth > 0;
+    }
+
+    /** True when transforms changed since the last bake (only inside an interaction). */
+    public boolean isBakePending() {
+        return bakePending;
+    }
+
+    /**
+     * Re-bake when any visible part's current effective matrix differs from the one its vertices were baked with
+     * (e.g. a rebuild happened while a preview pose was active and the pose was then cleared).
+     *
+     * @return true when the mesh was rebuilt
+     */
+    public boolean rebakeIfStale() {
+        for (ModelPartDescriptor part : parts.values()) {
+            Matrix4f baked = bakedMatrices.get(part.id());
+            if (baked != null && !baked.equals(getEffectiveWorldMatrix(part.id()))) {
+                rebuildCombinedMesh();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The world matrix the part's vertices were baked with at the last rebuild (a copy), or null (hidden). */
+    public Matrix4f getBakedWorldMatrix(String partId) {
+        Matrix4f m = bakedMatrices.get(partId);
+        return m != null ? new Matrix4f(m) : null;
+    }
+
+    /** The inverse of {@link #getBakedWorldMatrix} into {@code dest} (identity when not baked). */
+    public Matrix4f getBakedInverse(String partId, Matrix4f dest) {
+        Matrix4f m = bakedInverses.get(partId);
+        return m != null ? dest.set(m) : dest.identity();
+    }
+
+    /** Combined-mesh rebuilds since creation (diagnostics and tests). */
+    public long getRebuildCount() {
+        return rebuildCount;
+    }
+
+    /** The source of the GPU skinned preview's skins and pose (null = every part rigid). */
+    public void setPartSkinSource(PartSkinSource source) {
+        this.partSkinSource = source;
+    }
+
+    /** See {@link #setPartSkinSource}. */
+    public PartSkinSource getPartSkinSource() {
+        return partSkinSource;
+    }
+
+    /** A transform-only change: rebuild now, or schedule the re-bake inside an interaction. */
+    private void transformsChanged() {
+        invalidateEffectiveMatrixCache();
+        if (transformInteractionDepth > 0) {
+            bakePending = true;
+        } else {
+            rebuildCombinedMesh();
+        }
     }
 
     /**
@@ -975,6 +1100,9 @@ public class ModelPartManager implements IModelPartManager {
         selectedPartIds.clear();
         invalidateEffectiveMatrixCache();
         partNameCounter = 0;
+        bakedMatrices.clear();
+        bakedInverses.clear();
+        bakePending = false;
 
         if (meshConsumer != null) {
             meshConsumer.accept(PartMeshRebuilder.RebuildResult.empty());
@@ -1076,6 +1204,17 @@ public class ModelPartManager implements IModelPartManager {
             effectiveMatrices.put(part.id(), getEffectiveWorldMatrix(part.id()));
         }
 
+        // The palette path draws later matrix changes relative to these (PartPalette).
+        rebuildCount++;
+        bakePending = false;
+        bakedMatrices.clear();
+        bakedInverses.clear();
+        for (var e : effectiveMatrices.entrySet()) {
+            if (partGeometry.get(e.getKey()) == null) continue;
+            bakedMatrices.put(e.getKey(), new Matrix4f(e.getValue()));
+            bakedInverses.put(e.getKey(), new Matrix4f(e.getValue()).invert());
+        }
+
         // Rebuild with stable face offsets so face IDs don't shift on hide/show
         PartMeshRebuilder.RebuildResult result = rebuilder.rebuildWithFaceOffsets(
                 visibleParts, geoMap, stableFaceOffsets, effectiveMatrices);
@@ -1122,7 +1261,7 @@ public class ModelPartManager implements IModelPartManager {
             }
         }
 
-        // Post-bake step (skinned preview) — positions only, in place
+        // Post-bake step — positions only, in place
         if (combinedMeshDeformer != null && result.totalVertexCount() > 0) {
             try {
                 combinedMeshDeformer.deform(result);

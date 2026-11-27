@@ -3,11 +3,12 @@ package com.openmason.engine.modeling.topology;
 import org.joml.Vector3f;
 
 /**
- * Per-face normals, centroids, and areas with lazy dirty recomputation.
+ * Per-face normals, centroids, and areas, by face id (gaps: null / 0).
  *
- * <p>Root of the dirty-tracking dependency chain. When a vertex moves,
- * affected faces are marked dirty here. {@link DihedralAngleCache} calls {@link #ensureFaceClean(int)} before reading
- * face geometry data.
+ * <p>The values are the native mesh pipeline's ({@code co_mesh_*} TOPOLOGY stage, OpenMason #175 F3). A positions-only
+ * refresh ({@code RenderMeshBuilder.Derivation.movePositions}) copies the touched faces' new values in through
+ * {@link MeshTopologyBuilder#refreshMoved}; the Java dirty-recompute this class used to carry is gone (it was never
+ * triggered: every edit rebuilt the topology).
  *
  * @see MeshTopologyBuilder
  */
@@ -18,7 +19,6 @@ public final class FaceGeometryCache {
     private final Vector3f[] faceNormals;
     private final Vector3f[] faceCentroids;
     private final float[] faceAreas;
-    private final boolean[] faceDirty;
     private float[] verticesRef;
 
     /**
@@ -32,12 +32,11 @@ public final class FaceGeometryCache {
         this.faceNormals = faceNormals;
         this.faceCentroids = faceCentroids;
         this.faceAreas = faceAreas;
-        this.faceDirty = new boolean[faces.length];
         this.verticesRef = vertices;
     }
 
     /**
-     * Get the cached normal for a face. Lazily recomputes if dirty.
+     * Get the cached normal for a face.
      *
      * @param faceId Face identifier
      * @return The face normal (unit vector), or null if out of range
@@ -46,12 +45,11 @@ public final class FaceGeometryCache {
         if (faceId < 0 || faceId >= faceNormals.length) {
             return null;
         }
-        ensureFaceClean(faceId);
         return faceNormals[faceId];
     }
 
     /**
-     * Get the cached centroid for a face. Lazily recomputes if dirty.
+     * Get the cached centroid for a face.
      *
      * @param faceId Face identifier
      * @return The face centroid, or null if out of range
@@ -60,12 +58,11 @@ public final class FaceGeometryCache {
         if (faceId < 0 || faceId >= faceCentroids.length) {
             return null;
         }
-        ensureFaceClean(faceId);
         return faceCentroids[faceId];
     }
 
     /**
-     * Get the cached area for a face. Lazily recomputes if dirty.
+     * Get the cached area for a face.
      *
      * @param faceId Face identifier
      * @return The face area, or {@code Float.NaN} if out of range
@@ -74,7 +71,6 @@ public final class FaceGeometryCache {
         if (faceId < 0 || faceId >= faceAreas.length) {
             return Float.NaN;
         }
-        ensureFaceClean(faceId);
         return faceAreas[faceId];
     }
 
@@ -96,31 +92,29 @@ public final class FaceGeometryCache {
         if (face.vertexCount() <= 3) {
             return true;
         }
-        ensureFaceClean(faceId);
         float maxDist = MeshGeometry.computeMaxDistanceToPlane(
                 face.vertexIndices(), uniqueToMeshIndices, verticesRef,
                 faceNormals[faceId], faceCentroids[faceId]);
         return maxDist <= tolerance;
     }
 
-    /**
-     * Ensure face geometry is up-to-date, recomputing if dirty.
-     * Package-private — called by sibling caches before reading face data.
-     */
-    void ensureFaceClean(int faceId) {
-        if (faceId >= 0 && faceId < faceDirty.length && faceDirty[faceId] && verticesRef != null
-                && faces[faceId] != null) {
-            int[] verts = faces[faceId].vertexIndices();
-            faceNormals[faceId] = MeshGeometry.computeNormal(verts, uniqueToMeshIndices, verticesRef);
-            faceCentroids[faceId] = MeshGeometry.computeCentroid(verts, uniqueToMeshIndices, verticesRef);
-            faceAreas[faceId] = MeshGeometry.computeArea(verts, uniqueToMeshIndices, verticesRef);
-            faceDirty[faceId] = false;
+    /** Replaces one face's geometry (a positions-only refresh). Package-private. */
+    void update(int faceId, Vector3f normal, Vector3f centroid, float area) {
+        if (faceId >= 0 && faceId < faceNormals.length && faces[faceId] != null) {
+            faceNormals[faceId] = normal;
+            faceCentroids[faceId] = centroid;
+            faceAreas[faceId] = area;
         }
+    }
+
+    /** The corner positions the planarity check reads (a positions-only refresh). Package-private. */
+    void setVertices(float[] vertices) {
+        this.verticesRef = vertices;
     }
 
     /**
      * Direct reference to the face normals array.
-     * Package-private — used by {@link DihedralAngleCache}.
+     * Package-private.
      */
     Vector3f[] normals() {
         return faceNormals;

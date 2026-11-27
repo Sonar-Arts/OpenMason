@@ -57,10 +57,13 @@ class McpToolsListSnapshotTest {
      * tools (2026-11-25, OM #163 Character workspace, ~3.5k; budget raise
      * approved with the #163 design) — measured 96.4k at the raise. Raised
      * 98k -> 102k for the 9 animgraph_* tools (2026-11-25, OM #164 Animation
-     * Graph workspace, ~3.4k) — measured 99.8k at the raise; growing past the
-     * budget must stay a conscious decision, not drift.
+     * Graph workspace, ~3.4k) — measured 99.8k at the raise. Raised 102k ->
+     * 103k for the 5 morph_* / vgroup_* tools (2026-11-27, OM #171 / #172
+     * shape keys + vertex groups, ~2.1k after trimming; reorder and preview
+     * members left to the rigging pane) — measured 102.3k at the raise; growing
+     * past the budget must stay a conscious decision, not drift.
      */
-    private static final int TOOLS_LIST_BYTE_BUDGET = 102_000;
+    private static final int TOOLS_LIST_BYTE_BUDGET = 103_000;
 
     private static McpToolRegistry buildRealRegistry() {
         ObjectMapper mapper = new ObjectMapper();

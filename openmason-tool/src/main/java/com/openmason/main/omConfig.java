@@ -162,6 +162,15 @@ public class omConfig {
         properties.setProperty("viewport.vertex.point.size", String.valueOf(size));
     }
 
+    /** View > Edit Stats Overlay (#175 instrumentation): off by default. */
+    public boolean isEditStatsOverlayEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("viewport.edit.stats.overlay", "false"));
+    }
+
+    public void setEditStatsOverlayEnabled(boolean enabled) {
+        properties.setProperty("viewport.edit.stats.overlay", String.valueOf(enabled));
+    }
+
     /**
      * Returns the base folder scanned by the Project Hub for projects; new projects are
      * created here by default. Falls back to the platform-native appdata location if unset.

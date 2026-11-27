@@ -13,7 +13,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -24,6 +26,10 @@ import java.util.Set;
  * <p>Supports single and multi-part selection. When multiple parts are selected,
  * the gizmo centers on the combined centroid and transforms are applied to all
  * selected parts as a group (using relative deltas from drag start).
+ *
+ * <p>Every drag is one transform interaction of the part manager (OpenMason #175 F2): transform changes during
+ * it draw through the editable model's GPU palette and the mesh is re-baked once at release; a multi-part or
+ * group move changes all its parts in one {@link ModelPartManager#setPartTransformsBatch} per update.
  *
  * <p>The world center computation accounts for both the part's local transform
  * and the model-level {@link TransformState} transform, ensuring the gizmo
@@ -38,6 +44,9 @@ public class PartTransformTarget implements ITransformTarget {
 
     // Snapshot of each selected part's transform at drag start (for multi-part relative transforms)
     private final List<PartDragSnapshot> dragSnapshots = new ArrayList<>();
+
+    // True while this target holds the part manager's transform interaction open (a drag in progress)
+    private boolean interactionOpen;
 
     public PartTransformTarget(ModelPartManager partManager, TransformState transformState) {
         this.partManager = partManager;
@@ -252,6 +261,9 @@ public class PartTransformTarget implements ITransformTarget {
         for (ModelPartDescriptor part : partManager.getAllParts()) {
             modelDragSnapshots.put(part.id(), part.transform());
         }
+        // The gizmo reports no end for a group drag; the viewport closes the interaction once the gizmo stops
+        // dragging (ViewportRenderPipeline), and a new drag closes a stale one first.
+        openInteraction();
     }
 
     /**
@@ -259,18 +271,19 @@ public class PartTransformTarget implements ITransformTarget {
      */
     @Override
     public void applyGroupTranslationDelta(Vector3f delta) {
+        Map<String, PartTransform> updates = new LinkedHashMap<>();
         for (ModelPartDescriptor part : partManager.getAllParts()) {
             if (part.locked()) continue;
             PartTransform snap = modelDragSnapshots.get(part.id());
             if (snap == null) snap = part.transform();
-            PartTransform updated = new PartTransform(
+            updates.put(part.id(), new PartTransform(
                     snap.origin(),
                     new Vector3f(snap.position()).add(delta),
                     new Vector3f(snap.rotation()),
                     new Vector3f(snap.scale())
-            );
-            partManager.setPartTransform(part.id(), updated);
+            ));
         }
+        partManager.setPartTransformsBatch(updates);
     }
 
     /**
@@ -278,18 +291,19 @@ public class PartTransformTarget implements ITransformTarget {
      */
     @Override
     public void applyGroupRotation(Vector3f rotation) {
+        Map<String, PartTransform> updates = new LinkedHashMap<>();
         for (ModelPartDescriptor part : partManager.getAllParts()) {
             if (part.locked()) continue;
             PartTransform snap = modelDragSnapshots.get(part.id());
             if (snap == null) snap = part.transform();
-            PartTransform updated = new PartTransform(
+            updates.put(part.id(), new PartTransform(
                     snap.origin(),
                     new Vector3f(snap.position()),
                     new Vector3f(rotation),
                     new Vector3f(snap.scale())
-            );
-            partManager.setPartTransform(part.id(), updated);
+            ));
         }
+        partManager.setPartTransformsBatch(updates);
     }
 
     /**
@@ -297,18 +311,19 @@ public class PartTransformTarget implements ITransformTarget {
      */
     @Override
     public void applyGroupScale(float sx, float sy, float sz) {
+        Map<String, PartTransform> updates = new LinkedHashMap<>();
         for (ModelPartDescriptor part : partManager.getAllParts()) {
             if (part.locked()) continue;
             PartTransform snap = modelDragSnapshots.get(part.id());
             if (snap == null) snap = part.transform();
-            PartTransform updated = new PartTransform(
+            updates.put(part.id(), new PartTransform(
                     snap.origin(),
                     new Vector3f(snap.position()),
                     new Vector3f(snap.rotation()),
                     new Vector3f(sx, sy, sz)
-            );
-            partManager.setPartTransform(part.id(), updated);
+            ));
         }
+        partManager.setPartTransformsBatch(updates);
     }
 
     @Override
@@ -330,6 +345,11 @@ public class PartTransformTarget implements ITransformTarget {
      */
     @Override
     public void beginDrag() {
+        openInteraction();
+        snapshotSelection();
+    }
+
+    private void snapshotSelection() {
         dragSnapshots.clear();
         for (ModelPartDescriptor part : getSelectedParts()) {
             dragSnapshots.add(new PartDragSnapshot(
@@ -347,13 +367,33 @@ public class PartTransformTarget implements ITransformTarget {
     @Override
     public void endDrag() {
         dragSnapshots.clear();
+        closeInteraction();
+    }
+
+    /**
+     * Opens the part manager's transform interaction for this drag (OpenMason #175 F2): every transform change
+     * during it draws through the editable model's GPU palette, and the mesh is re-baked once when it closes.
+     */
+    private void openInteraction() {
+        closeInteraction();
+        partManager.beginTransformInteraction();
+        interactionOpen = true;
+    }
+
+    /** Closes this target's open interaction (the deferred re-bake runs now), if any. */
+    private void closeInteraction() {
+        if (!interactionOpen) return;
+        interactionOpen = false;
+        if (partManager.isTransformInteractionActive()) {
+            partManager.endTransformInteraction();
+        }
     }
 
     // ========== Multi-Part Transform Helpers ==========
 
     private void applyMultiPartTranslation(List<ModelPartDescriptor> selected, float newX, float newY, float newZ) {
         if (dragSnapshots.isEmpty()) {
-            beginDrag();
+            snapshotSelection();
         }
 
         // The gizmo reports the new "group average" position.
@@ -361,45 +401,47 @@ public class PartTransformTarget implements ITransformTarget {
         Vector3f startAvg = computeSnapshotAveragePosition();
         Vector3f delta = new Vector3f(newX - startAvg.x, newY - startAvg.y, newZ - startAvg.z);
 
+        Map<String, PartTransform> updates = new LinkedHashMap<>();
         for (PartDragSnapshot snapshot : dragSnapshots) {
             ModelPartDescriptor part = partManager.getPartById(snapshot.partId).orElse(null);
             if (part == null || part.locked()) continue;
 
             Vector3f newPos = new Vector3f(snapshot.startPosition).add(delta);
             PartTransform current = part.transform();
-            PartTransform updated = new PartTransform(
+            updates.put(part.id(), new PartTransform(
                     current.origin(), newPos,
                     new Vector3f(current.rotation()), new Vector3f(current.scale())
-            );
-            partManager.setPartTransform(part.id(), updated);
+            ));
         }
+        partManager.setPartTransformsBatch(updates);
     }
 
     private void applyMultiPartRotation(List<ModelPartDescriptor> selected, float newX, float newY, float newZ) {
         if (dragSnapshots.isEmpty()) {
-            beginDrag();
+            snapshotSelection();
         }
 
         Vector3f startAvg = computeSnapshotAverageRotation();
         Vector3f delta = new Vector3f(newX - startAvg.x, newY - startAvg.y, newZ - startAvg.z);
 
+        Map<String, PartTransform> updates = new LinkedHashMap<>();
         for (PartDragSnapshot snapshot : dragSnapshots) {
             ModelPartDescriptor part = partManager.getPartById(snapshot.partId).orElse(null);
             if (part == null || part.locked()) continue;
 
             Vector3f newRot = new Vector3f(snapshot.startRotation).add(delta);
             PartTransform current = part.transform();
-            PartTransform updated = new PartTransform(
+            updates.put(part.id(), new PartTransform(
                     current.origin(), new Vector3f(current.position()),
                     newRot, new Vector3f(current.scale())
-            );
-            partManager.setPartTransform(part.id(), updated);
+            ));
         }
+        partManager.setPartTransformsBatch(updates);
     }
 
     private void applyMultiPartScale(List<ModelPartDescriptor> selected, float newX, float newY, float newZ) {
         if (dragSnapshots.isEmpty()) {
-            beginDrag();
+            snapshotSelection();
         }
 
         Vector3f startAvg = computeSnapshotAverageScale();
@@ -408,6 +450,7 @@ public class PartTransformTarget implements ITransformTarget {
         float ratioY = startAvg.y > 0.0001f ? newY / startAvg.y : 1.0f;
         float ratioZ = startAvg.z > 0.0001f ? newZ / startAvg.z : 1.0f;
 
+        Map<String, PartTransform> updates = new LinkedHashMap<>();
         for (PartDragSnapshot snapshot : dragSnapshots) {
             ModelPartDescriptor part = partManager.getPartById(snapshot.partId).orElse(null);
             if (part == null || part.locked()) continue;
@@ -418,12 +461,12 @@ public class PartTransformTarget implements ITransformTarget {
                     snapshot.startScale.z * ratioZ
             );
             PartTransform current = part.transform();
-            PartTransform updated = new PartTransform(
+            updates.put(part.id(), new PartTransform(
                     current.origin(), new Vector3f(current.position()),
                     new Vector3f(current.rotation()), newScale
-            );
-            partManager.setPartTransform(part.id(), updated);
+            ));
         }
+        partManager.setPartTransformsBatch(updates);
     }
 
     // ========== Snapshot Helpers ==========

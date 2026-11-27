@@ -227,6 +227,13 @@ final class AnimationPanels {
                 ops.add(o);
             }
             apply(s, "delete effector keys", null, ops.toArray(ObjectNode[]::new));
+        } else if (keyRow.startsWith("k:")) {
+            List<ObjectNode> ops = new ArrayList<>();
+            for (float t : keyTimes) {
+                ops.add(op("morph_key").put("layer", layerName(s)).put("morph", keyRow.substring(2)).put("time", t)
+                        .put("remove", true));
+            }
+            apply(s, "delete shape key keys", null, ops.toArray(ObjectNode[]::new));
         } else if (keyRow.equals("w")) {
             List<ObjectNode> ops = new ArrayList<>();
             for (float t : keyTimes) {
@@ -316,6 +323,13 @@ final class AnimationPanels {
             String label = tr.has("role") ? "role:" + tr.path("role").asText() : tr.path("name").asText(tr.path("joint").asText());
             String ref = tr.has("role") ? "role:" + tr.path("role").asText() : tr.path("joint").asText();
             rows.add(new Row("t:" + ref, label, tt, false));
+        }
+        // Shape-key weight tracks of the layer (#171, OMANIM 1.3 morph tracks): one row per key name.
+        for (JsonNode mo : l.path("morphs")) {
+            List<Float> mt2 = new ArrayList<>();
+            mo.path("keys").forEach(k -> mt2.add((float) k.path(0).asDouble()));
+            String name = mo.path("name").asText();
+            rows.add(new Row("k:" + name, "shape " + name, mt2, false));
         }
         return rows;
     }
@@ -420,7 +434,7 @@ final class AnimationPanels {
                 scrubbing = false;
             }
         }
-        if (hoverRow != null && hoverRow.startsWith("t:") && ImGui.isMouseClicked(1)) {
+        if (hoverRow != null && (hoverRow.startsWith("t:") || hoverRow.startsWith("k:")) && ImGui.isMouseClicked(1)) {
             ImGui.openPopup("##keyMenu");
         }
         if (ImGui.beginPopup("##keyMenu")) {
@@ -443,6 +457,13 @@ final class AnimationPanels {
                     keyRow = null;
                     keyTimes.clear();
                 }
+            }
+            if (keyRow != null && keyRow.startsWith("k:") && ImGui.menuItem("Remove shape key track")) {
+                ObjectNode o = op("morph").put("layer", layerName(s)).put("morph", keyRow.substring(2));
+                o.putNull("keys");
+                apply(s, "remove shape key track", null, o);
+                keyRow = null;
+                keyTimes.clear();
             }
             ImGui.endPopup();
         }
@@ -475,6 +496,26 @@ final class AnimationPanels {
             keyTimes.forEach(times::add);
             o.set("times", times);
             if (!apply(s, "move keys", "move:" + keyRow, o)) {
+                draggingKeys = false;
+                return;
+            }
+        } else if (keyRow.startsWith("k:")) {
+            // Shape-key keys: re-key at the new times (the old ones removed) with their values from the view.
+            String name = keyRow.substring(2);
+            List<ObjectNode> ops = new ArrayList<>();
+            List<ObjectNode> adds = new ArrayList<>();
+            for (JsonNode mo : s.view().path("layers").path(layer).path("morphs")) {
+                if (!mo.path("name").asText().equals(name)) continue;
+                for (JsonNode k : mo.path("keys")) {
+                    float kt = (float) k.path(0).asDouble();
+                    if (!keyTimes.contains(kt)) continue;
+                    ops.add(op("morph_key").put("layer", layerName(s)).put("morph", name).put("time", kt).put("remove", true));
+                    adds.add(op("morph_key").put("layer", layerName(s)).put("morph", name).put("time", kt + offset)
+                            .put("value", (float) k.path(1).asDouble()));
+                }
+            }
+            ops.addAll(adds);
+            if (ops.isEmpty() || !apply(s, "move keys", "move:" + keyRow, ops.toArray(ObjectNode[]::new))) {
                 draggingKeys = false;
                 return;
             }
@@ -550,6 +591,69 @@ final class AnimationPanels {
     // Key inspector: the selected joint's value on the selected layer
 
     void renderInspector(AnimationSession s) {
+        renderJointInspector(s);
+        renderShapeKeys(s);
+    }
+
+    private final float[] shapeValue = {0f};
+
+    /**
+     * Shape keys (#171): one slider per shape key of the model (and per morph track the layer keys that the model
+     * lacks) showing the baked weight at the playhead; dragging keys it on the selected layer (OMANIM 1.3 morph
+     * track, op {@code morph_key}; one undo step per drag). Rows appear in the dope sheet as "shape name".
+     */
+    private void renderShapeKeys(AnimationSession s) {
+        List<com.openmason.engine.rig.RigMorphs.Target> keys = s.shapeKeys();
+        java.util.LinkedHashMap<String, float[]> rows = new java.util.LinkedHashMap<>();
+        float[] weights = keys.isEmpty() ? null : s.morphWeights(s.time());
+        for (int i = 0; i < keys.size(); i++) {
+            var k = keys.get(i);
+            rows.put(k.name(), new float[] {weights[i], k.min(), k.max()});
+        }
+        java.util.Set<String> keyed = new java.util.HashSet<>();
+        for (JsonNode mo : s.view().path("layers").path(layer).path("morphs")) {
+            String name = mo.path("name").asText();
+            keyed.add(name);
+            rows.putIfAbsent(name, new float[] {lastValue(mo, s.time()), 0f, 1f});
+        }
+        if (rows.isEmpty()) return;
+        ImGui.separator();
+        ImGui.text("Shape keys");
+        ImGui.textDisabled("layer " + layerName(s) + String.format(Locale.ROOT, "  -  t %.3f", s.time()));
+        for (java.util.Map.Entry<String, float[]> e : rows.entrySet()) {
+            String name = e.getKey();
+            float[] r = e.getValue();
+            shapeValue[0] = r[0];
+            ImGui.setNextItemWidth(Math.max(80f, ImGui.getContentRegionAvailX() - 110f));
+            if (ImGui.sliderFloat(name + (keyed.contains(name) ? " *" : "") + "##morph_" + name, shapeValue, r[1], r[2],
+                    "%.3f")) {
+                apply(s, "key shape " + name, "morph:" + layer + ":" + name + ":" + s.time(),
+                        op("morph_key").put("layer", layerName(s)).put("morph", name).put("time", s.time())
+                                .put("value", shapeValue[0]));
+            }
+            hint("The baked weight at the playhead; dragging keys it on the selected layer (* = this layer keys it)");
+            ImGui.sameLine();
+            if (ImGui.smallButton("x##morph_del_" + name)) {
+                apply(s, "delete shape key key", null, op("morph_key").put("layer", layerName(s)).put("morph", name)
+                        .put("time", s.time()).put("remove", true));
+            }
+            hint("Delete this shape key's key at the playhead (selected layer)");
+        }
+        if (keys.isEmpty()) ImGui.textDisabled("The model has no shape keys: tracks are kept by name");
+    }
+
+    /** A view morph track's value at t (its last key at or before t; the first key before it). */
+    private static float lastValue(JsonNode track, float t) {
+        float v = 0f;
+        boolean any = false;
+        for (JsonNode k : track.path("keys")) {
+            if (!any || k.path(0).asDouble() <= t) v = (float) k.path(1).asDouble();
+            any = true;
+        }
+        return v;
+    }
+
+    private void renderJointInspector(AnimationSession s) {
         if (joint < 0 || joint >= s.model().rig().jointCount()) {
             ImGui.textWrapped("Pick a joint in the viewport or the Joints list.");
             return;

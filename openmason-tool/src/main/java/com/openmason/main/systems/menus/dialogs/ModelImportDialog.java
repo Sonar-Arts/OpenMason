@@ -24,6 +24,7 @@ public final class ModelImportDialog {
 
     private static final String OPTIONS_ID = "Import Model##modelImportOptions";
     private static final String SUMMARY_ID = "Import Finished##modelImportSummary";
+    private static final String PROGRESS_ID = "Importing##modelImportProgress";
     private static final float WIDTH = 460f;
     private static final int[] TEXTURE_LIMITS = {0, 256, 512, 1024, 2048, 4096};
     private static final String[] TEXTURE_LIMIT_LABELS = {"Unlimited", "256", "512", "1024", "2048", "4096"};
@@ -33,12 +34,18 @@ public final class ModelImportDialog {
     private final StatusService statusService;
     private Supplier<String> projectDirectory = () -> null;
 
-    private enum Phase { CLOSED, OPTIONS, SUMMARY }
+    private enum Phase { CLOSED, OPTIONS, IMPORTING, SUMMARY }
 
     private Phase phase = Phase.CLOSED;
     private Path source;
     private ModalDialogs.Anchor anchor;
     private ModelImportService.Outcome outcome;
+
+    // The native conversion runs on a worker (#175: it used to block the UI thread); the model opens on the UI
+    // thread once it is done.
+    private java.util.concurrent.CompletableFuture<CendaImport.Result> pending;
+    private Path pendingClipFolder;
+    private long importStartNanos;
 
     // Options (kept between imports, like a file dialog's last folder).
     private final ImFloat unitScale = new ImFloat(1f);
@@ -82,6 +89,9 @@ public final class ModelImportDialog {
         if (phase == Phase.OPTIONS) {
             ModalDialogs.openIfNeeded(OPTIONS_ID);
             renderOptions();
+        } else if (phase == Phase.IMPORTING) {
+            ModalDialogs.openIfNeeded(PROGRESS_ID);
+            renderImporting();
         } else {
             ModalDialogs.openIfNeeded(SUMMARY_ID);
             renderSummary();
@@ -122,7 +132,7 @@ public final class ModelImportDialog {
 
         ModalDialogs.buttonsBegin();
         if (ModalDialogs.primary("Import", true)) {
-            runImport(clipFolder != null && animations.get() && saveClips.get() ? clipFolder : null);
+            startImport(clipFolder != null && animations.get() && saveClips.get() ? clipFolder : null);
             ModalDialogs.close();
         }
         if (ModalDialogs.cancel()) {
@@ -132,11 +142,57 @@ public final class ModelImportDialog {
         ModalDialogs.end();
     }
 
-    private void runImport(Path clipFolder) {
+    /** Starts the native conversion on a worker thread and shows the progress modal. */
+    private void startImport(Path clipFolder) {
         CendaImport.Options options = new CendaImport.Options(unitScale.get(), !openMasonAxis.get(),
                 mergeQuads.get(), splitParts.get(), animations.get(), morphs.get(), vertexGroups.get(), false,
                 TEXTURE_LIMITS[Math.clamp(textureLimit.get(), 0, TEXTURE_LIMITS.length - 1)], 1f);
-        outcome = ModelImportService.importAndOpen(modelOperations, source, options, clipFolder);
+        Path file = source;
+        pendingClipFolder = clipFolder;
+        importStartNanos = System.nanoTime();
+        pending = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<CendaImport.Result> future = pending;
+        Thread worker = new Thread(() -> {
+            try {
+                future.complete(ModelImportService.convert(file, options));
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+        }, "model-import");
+        worker.setDaemon(true);
+        worker.start();
+        if (statusService != null) statusService.updateStatus("Importing " + file.getFileName() + "...");
+        phase = Phase.IMPORTING;
+    }
+
+    /** The progress modal; when the worker is done, opens the model here on the UI thread. */
+    private void renderImporting() {
+        if (!ModalDialogs.begin(PROGRESS_ID, anchor, WIDTH)) return;
+        if (pending != null && pending.isDone()) {
+            finishImport();
+            ModalDialogs.close();
+            ModalDialogs.end();
+            return;
+        }
+        double seconds = (System.nanoTime() - importStartNanos) / 1e9;
+        ImGui.textWrapped("Importing " + source.getFileName() + "...");
+        ImGui.textDisabled(String.format(java.util.Locale.ROOT, "%.1f s", seconds));
+        ModalDialogs.end();
+    }
+
+    private void finishImport() {
+        CendaImport.Result result = null;
+        String failure = null;
+        try {
+            result = pending.join();
+        } catch (java.util.concurrent.CompletionException | java.util.concurrent.CancellationException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            failure = "Import failed: " + cause.getMessage();
+        }
+        pending = null;
+        outcome = result != null
+                ? ModelImportService.open(modelOperations, source, result, pendingClipFolder)
+                : new ModelImportService.Outcome(false, failure, null, null, null, null);
         if (statusService != null) statusService.updateStatus(outcome.message());
         phase = Phase.SUMMARY;
     }

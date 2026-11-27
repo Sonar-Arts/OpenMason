@@ -6,7 +6,6 @@ import com.openmason.engine.rendering.model.draw.ModelDrawPlan;
 import com.openmason.engine.rendering.model.draw.ModelGpuMesh;
 import com.openmason.engine.rendering.model.draw.ModelLighting;
 import com.openmason.engine.rendering.model.draw.ModelRenderer;
-import com.openmason.engine.rendering.model.draw.PartMatrices;
 import com.openmason.engine.modeling.ModelingConstants;
 import com.openmason.engine.modeling.core.MeshGpuState;
 import com.openmason.engine.modeling.core.MeshMutationCoordinator;
@@ -101,6 +100,12 @@ public class EditableModel {
     private ModelDrawPlan drawPlan;
     private float[] uploadedUvs;
     private boolean initialized;
+
+    // Part / bone transforms as GPU matrices (#175 F2): a per-corner skin bound at each structural rebuild and
+    // a palette filled every draw, so a gizmo drag or a preview pose costs a palette upload, not a re-bake.
+    private final com.openmason.engine.modeling.parts.PartPalette partPalette =
+            new com.openmason.engine.modeling.parts.PartPalette();
+    private final com.openmason.engine.rig.JointPalette palette = new com.openmason.engine.rig.JointPalette();
 
     // Engine-level material ID counter (replaces editor-specific FaceMaterialSection.allocateNextMaterialId).
     //
@@ -206,6 +211,7 @@ public class EditableModel {
         if (initialized) return;
         gpuMesh = new ModelGpuMesh(true, GpuMemoryTracker.Category.OTHER);
         gpuState.markAll();
+        uploadedSkinVersion = -1;
         normalsUploaded = false;
         rebuildPipeline.markDrawBatchesDirty();
         uploadedUvs = null;
@@ -226,15 +232,18 @@ public class EditableModel {
         drawPlan = null;
         uploadedUvs = null;
         normalsUploaded = false;
+        partPalette.invalidate();
+        uploadedSkinVersion = -1;
         initialized = false;
     }
 
     /**
-     * Draws the model through the engine {@link ModelRenderer} lit pass with
-     * {@code modelMatrix} (part transforms are baked into the vertices, so the
-     * whole model is one part). Faces without a material texture use the model's
-     * texture, or the lighting's base colour when there is none; in unrendered
-     * mode every face uses the base colour.
+     * Draws the model through the engine {@link ModelRenderer} lit pass. Part transforms are baked into the
+     * vertices at each structural rebuild; every corner is GPU-skinned by its part's palette slot
+     * ({@link com.openmason.engine.modeling.parts.PartPalette}): {@code modelMatrix} while the part sits where it was
+     * baked, {@code modelMatrix · W · B⁻¹} while a gizmo drag moves it, posed skin matrices while a preview pose
+     * deforms a skinned part. Faces without a material texture use the model's texture, or the lighting's base
+     * colour when there is none; in unrendered mode every face uses the base colour.
      */
     public void render(ModelRenderer renderer, Matrix4f modelMatrix, Matrix4f view,
                        Matrix4f projection, ModelLighting lighting) {
@@ -242,8 +251,9 @@ public class EditableModel {
             return;
         }
         syncGpu();
+        fillPalette(modelMatrix);
         renderer.drawLit(gpuMesh, drawPlan, forceUnrendered ? MaterialTextures.UNTEXTURED : batchTextures,
-                PartMatrices.single(modelMatrix), view, projection, lighting, null);
+                palette, view, projection, lighting, null);
     }
 
     /** Draws the model as a see-through wireframe overlay in {@code color}. */
@@ -253,8 +263,65 @@ public class EditableModel {
             return;
         }
         syncGpu();
-        renderer.drawWireframe(gpuMesh, drawPlan, PartMatrices.single(modelMatrix), view, projection, color);
+        fillPalette(modelMatrix);
+        renderer.drawWireframe(gpuMesh, drawPlan, palette, view, projection, color);
     }
+
+    private void fillPalette(Matrix4f modelMatrix) {
+        partPalette.fill(partManager, modelMatrix, palette);
+    }
+
+    /**
+     * GL-free: brings the per-corner skin up to date and fills the joint palette the next draw would use with
+     * {@code modelMatrix} (tests, diagnostics). The returned palette is reused by the next call.
+     */
+    public com.openmason.engine.rig.JointPalette computePalette(Matrix4f modelMatrix) {
+        // GL-free callers never clear the GPU dirty state: a new derivation (a new render mesh) is the signal.
+        if (rebuildPipeline.getLastRenderMesh() != paletteMesh) {
+            partPalette.invalidate();
+        }
+        refreshPartSkin();
+        fillPalette(modelMatrix);
+        return palette;
+    }
+
+    /** The GPU mesh (null before {@link #initialize()}): diagnostics and GL tests read its skin attributes back. */
+    public ModelGpuMesh getGpuMesh() {
+        return gpuMesh;
+    }
+
+    /** The per-corner skin the GPU draws with (null before the first sync / {@link #computePalette}). */
+    public com.openmason.engine.rig.PackedSkin getCornerSkin() {
+        return partPalette.packed();
+    }
+
+    /**
+     * The corner positions as the GPU draws them with {@link #computePalette}'s palette (CPU twin of the vertex
+     * shader's skinning; tests and diagnostics).
+     */
+    public float[] getDisplayedCornerPositions(Matrix4f modelMatrix) {
+        com.openmason.engine.rig.JointPalette p = computePalette(modelMatrix);
+        float[] baked = vertexManager.getVertices();
+        return partPalette.deform(baked != null ? baked : new float[0], p);
+    }
+
+    /**
+     * True while the drawn model differs from its baked vertices (a part / bone gizmo drag, a preview pose): the
+     * CPU-side element overlays and picking still show the baked positions, so viewports hide them meanwhile.
+     */
+    public boolean isDisplayDeformed() {
+        return partManager.isTransformInteractionActive() || partPalette.lastFillDeformed(partManager);
+    }
+
+    /** Rebinds corners to palette slots when the structure or the skins changed; returns the skin to upload. */
+    private com.openmason.engine.rig.PackedSkin refreshPartSkin() {
+        paletteMesh = rebuildPipeline.getLastRenderMesh();
+        return partPalette.refresh(paletteMesh, rebuildPipeline.getImportSoupMapping(), partManager);
+    }
+
+    // The render mesh the corner bindings were last refreshed against, and the binding version on the GPU.
+    private com.openmason.engine.modeling.editable.RenderMesh paletteMesh;
+    private long uploadedSkinVersion = -1;
 
     /**
      * Brings the GPU mesh up to date with the latest derivation: positions only
@@ -271,6 +338,18 @@ public class EditableModel {
                 gpuMesh.updateUvs(uvs);
                 uploadedUvs = uvs != null ? uvs.clone() : null;
             }
+        }
+        if (gpuState.indicesDirty() || drawPlan == null) {
+            partPalette.invalidate();
+        }
+        refreshPartSkin();
+        com.openmason.engine.rig.PackedSkin skin = partPalette.packed();
+        if (skin != null && partPalette.version() != uploadedSkinVersion) {
+            uploadedSkinVersion = partPalette.version();
+            // A skin that does not cover every uploaded corner must not be bound (the range attribute would be
+            // read past its end); without one the palette's slot 0 (the model matrix) draws the whole mesh.
+            boolean covers = skin.vertexCount() > 0 && skin.vertexCount() == vertexManager.getTotalVertexCount();
+            gpuMesh.updateSkin(covers ? skin : null);
         }
         if (gpuState.indicesDirty() || rebuildPipeline.isDrawBatchesDirty() || drawPlan == null) {
             ModelDrawPlan.Sorted sorted = ModelDrawPlan.materialSorted(vertexManager.getIndices(), triangleMaterialKeys());

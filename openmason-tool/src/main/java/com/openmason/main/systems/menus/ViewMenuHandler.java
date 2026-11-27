@@ -73,6 +73,11 @@ public class ViewMenuHandler {
             viewportOperations.toggleUnrendered(viewport);
         }
 
+        if (ImGui.menuItem("Edit Stats Overlay", "",
+                com.openmason.main.systems.viewport.views.EditStatsOverlay.isEnabled())) {
+            com.openmason.main.systems.viewport.views.EditStatsOverlay.toggle();
+        }
+
         ImGui.separator();
 
         // --- Panels ---

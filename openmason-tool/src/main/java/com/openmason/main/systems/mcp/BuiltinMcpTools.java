@@ -43,9 +43,15 @@ public final class BuiltinMcpTools {
     public static final McpToolContribution BONES = new McpToolContribution("core.bones",
             c -> new BoneToolDefinitions(McpSharedServices.of(c).bones(), c.mapper()).registerAll(c.registry()));
 
-    /** Skin weights (rig revamp): info, get/set, auto weights, clean-up, mirror, brush dabs. */
-    public static final McpToolContribution SKIN = new McpToolContribution("core.skin",
-            c -> new SkinToolDefinitions(McpSharedServices.of(c).skin(), c.mapper()).registerAll(c.registry()));
+    /**
+     * Skin weights (rig revamp): info, get/set, auto weights, clean-up, mirror, brush dabs; plus the other
+     * per-vertex deformation data, shape keys ({@code morph_*}, #171) and vertex groups ({@code vgroup_*}, #172).
+     */
+    public static final McpToolContribution SKIN = new McpToolContribution("core.skin", c -> {
+        new SkinToolDefinitions(McpSharedServices.of(c).skin(), c.mapper()).registerAll(c.registry());
+        new VertexDataToolDefinitions(new VertexDataEditingService(McpSharedServices.of(c).editor()), c.mapper())
+                .registerAll(c.registry());
+    });
 
     public static final McpToolContribution ATTACHMENTS = new McpToolContribution("core.attachments",
             c -> new AttachmentToolDefinitions(McpSharedServices.of(c).attachments(), c.mapper()).registerAll(c.registry()));
@@ -69,7 +75,8 @@ public final class BuiltinMcpTools {
     public static final McpToolContribution META = new McpToolContribution("core.meta", c -> {
         McpSharedServices s = McpSharedServices.of(c);
         new MetaToolDefinitions(new ModelSummaryService(s.editor()), s.model(), s.texture(), s.bones(),
-                s.skin(), s.attachments(), s.animation(), c.mapper(), c.services().require(McpGuide.class))
+                s.skin(), s.attachments(), s.animation(), new VertexDataEditingService(s.editor()), c.mapper(),
+                c.services().require(McpGuide.class))
                 .registerAll(c.registry());
     });
 

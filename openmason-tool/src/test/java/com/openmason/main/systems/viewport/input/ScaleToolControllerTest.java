@@ -87,6 +87,19 @@ class ScaleToolControllerTest {
         }
 
         @Override
+        public void moveVertices(int[] uniqueVertexIds, float[] xyz) {
+            // the session's positions-only batch path (#175)
+            for (int i = 0; i < uniqueVertexIds.length; i++) {
+                positions.put(uniqueVertexIds[i], new Vector3f(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]));
+            }
+        }
+
+        @Override
+        public void commitVertexPositions() {
+            // nothing derived in the stub
+        }
+
+        @Override
         public ModelPartManager getPartManager() {
             return null; // Skip part sync in headless tests
         }

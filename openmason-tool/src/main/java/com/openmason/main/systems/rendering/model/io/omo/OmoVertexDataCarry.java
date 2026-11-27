@@ -11,11 +11,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * OMO 1.9 vertex groups and morphs (shape keys) of a loaded model, carried to the next save. The editor does not
- * edit them yet (shape keys: #173 follow-up), but an imported model must not lose them on a save. Rows are kept
- * per part by part-local vertex (the restored part's own vertex order, like the skin) and written back in the
- * layout of the file being written exactly like {@link OmoSkinExport}: every written vertex of a part takes the row
- * of the part vertex it stands for ({@link ModelPartManager#resolveCombinedVertex}). Index marshalling only.
+ * OMO 1.9 vertex groups and morphs (shape keys) on their way to a save: the values of the editor's stores
+ * ({@code skeleton.vertexdata.VertexDataAuthoring#carry}: the rigging pane's Shape Keys / Vertex Groups sections and
+ * the {@code morph_*} / {@code vgroup_*} MCP tools edit them, #171 / #172), or a headless load passed through. Rows
+ * are kept per part by part-local vertex (the restored part's own vertex order, like the skin) and written back in
+ * the layout of the file being written exactly like {@link OmoSkinExport}: every written vertex of a part takes the
+ * row of the part vertex it stands for ({@link ModelPartManager#resolveCombinedVertex}). Index marshalling only.
  */
 public final class OmoVertexDataCarry {
 
@@ -73,7 +74,8 @@ public final class OmoVertexDataCarry {
                 }
                 written.add(new OMOFormat.GroupPart(entry.id(), v, w));
             }
-            if (!written.isEmpty()) out.add(new OMOFormat.VertexGroupData(group.name(), written));
+            // A group keeps its slot even when no row survives (an empty group made in the editor, #172).
+            out.add(new OMOFormat.VertexGroupData(group.name(), written));
         }
         return out.isEmpty() ? null : out;
     }

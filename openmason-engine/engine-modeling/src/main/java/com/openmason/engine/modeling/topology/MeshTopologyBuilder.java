@@ -1,6 +1,6 @@
 package com.openmason.engine.modeling.topology;
 
-import com.openmason.engine.modeling.editable.EditableFace;
+import com.openmason.engine.modeling.editable.CendaMesh;
 import com.openmason.engine.modeling.editable.EditableMesh;
 import com.openmason.engine.modeling.editable.RenderMesh;
 import org.joml.Vector3f;
@@ -14,13 +14,17 @@ import java.util.*;
  * {@link EditableMesh} and its derived {@link RenderMesh}.
  *
  * <p>Face loops and winding come from the editable mesh VERBATIM — nothing is
- * reconstructed from triangles, so the legacy boundary-walk/insertion-order
- * winding hazards and the "drop fan diagonals" edge-filter heuristic are gone:
- * every edge in the topology is a real polygon-boundary edge, including hole
- * outlines on multi-face open meshes (which the legacy filter wrongly dropped).
+ * reconstructed from triangles: every edge in the topology is a real
+ * polygon-boundary edge, including hole outlines on multi-face open meshes.
  *
  * <p>Index-mapping data ("unique" = editable vertex id, "mesh" = render corner
  * index) comes from the render mesh's exact corner maps — no epsilon welding.
+ *
+ * <p>Thin binding over the native mesh pipeline (TOPOLOGY stage of {@code co_mesh_*}, {@link CendaMesh}; OpenMason
+ * #175 F3): edges (ids in first-use order), edge → face lists and face adjacency in {@code java.util.HashSet}
+ * iteration order, face normals / centroids / areas (float Newell), dihedral angles and edge kinds are native, bit for
+ * bit the Java this replaced ({@code MeshPipelineParityTest}; dihedral angles within 1 ulp). This class assembles the
+ * Java query services ({@link MeshTopology}'s sub-services) from those arrays.
  *
  * <p>Thread-safe: stateless factory methods.
  */
@@ -45,133 +49,129 @@ public final class MeshTopologyBuilder {
             logger.debug("Cannot build topology: empty mesh");
             return null;
         }
+        // Face geometry reads each vertex's FIRST render corner (as the Java builder did); a vertex without corners
+        // is in no face, its position does not matter.
+        int vertexCount = mesh.vertexCount();
+        float[] corners = renderMesh.vertices();
+        int[][] vertexToCorners = renderMesh.vertexIdToCorners();
+        float[] positions = new float[vertexCount * 3];
+        Vector3f p = new Vector3f();
+        for (int v = 0; v < vertexCount; v++) {
+            if (v < vertexToCorners.length && vertexToCorners[v].length > 0) {
+                int c = vertexToCorners[v][0];
+                positions[v * 3] = corners[c * 3];
+                positions[v * 3 + 1] = corners[c * 3 + 1];
+                positions[v * 3 + 2] = corners[c * 3 + 2];
+            } else {
+                mesh.position(v, p);
+                positions[v * 3] = p.x;
+                positions[v * 3 + 1] = p.y;
+                positions[v * 3 + 2] = p.z;
+            }
+        }
+        try (CendaMesh m = CendaMesh.create()) {
+            m.setFaces(mesh, positions, CendaMesh.STAGE_TOPOLOGY);
+            return assemble(m, renderMesh);
+        }
+    }
 
-        int faceIdUpperBound = mesh.faceIdUpperBound();
-        int uniqueVertexCount = mesh.vertexCount();
-        float[] vertices = renderMesh.vertices();
+    /**
+     * The topology of a native mesh whose TOPOLOGY stage is current (binding internal, used by
+     * {@code RenderMeshBuilder.derive}); {@code renderMesh} supplies the index mapping. Null for an empty mesh.
+     */
+    public static MeshTopology fromNative(CendaMesh nativeMesh, EditableMesh mesh, RenderMesh renderMesh) {
+        if (mesh == null || renderMesh == null || mesh.faceCount() == 0 || renderMesh.cornerCount() == 0) {
+            return null;
+        }
+        return assemble(nativeMesh, renderMesh);
+    }
+
+    /**
+     * After {@code co_mesh_move_vertices} (binding internal, used by {@code RenderMeshBuilder.Derivation}): copies the
+     * refreshed face normals / centroids / areas of {@code movedFaceIds} and the dihedral angles of their edges into
+     * {@code topology} in place, and points its planarity checks at the new corner positions.
+     */
+    public static void refreshMoved(MeshTopology topology, CendaMesh nativeMesh, int[] movedFaceIds,
+                                    float[] cornerPositions) {
+        FaceGeometryCache geometry = topology.faceGeometryCache();
+        geometry.setVertices(cornerPositions);
+        if (movedFaceIds.length == 0) {
+            return;
+        }
+        float[] normals = nativeMesh.floats(CendaMesh.A_FACE_NORMALS);
+        float[] centroids = nativeMesh.floats(CendaMesh.A_FACE_CENTROIDS);
+        float[] areas = nativeMesh.floats(CendaMesh.A_FACE_AREAS);
+        float[] dihedral = nativeMesh.floats(CendaMesh.A_EDGE_DIHEDRAL);
+        DihedralAngleCache angles = topology.dihedralAngleCache();
+        for (int fid : movedFaceIds) {
+            geometry.update(fid,
+                new Vector3f(normals[fid * 3], normals[fid * 3 + 1], normals[fid * 3 + 2]),
+                new Vector3f(centroids[fid * 3], centroids[fid * 3 + 1], centroids[fid * 3 + 2]),
+                areas[fid]);
+            MeshFace face = topology.getFace(fid);
+            if (face != null) {
+                for (int e : face.edgeIds()) {
+                    if (e >= 0 && e < dihedral.length) {
+                        angles.update(e, dihedral[e]);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Assembles the Java query services from the native TOPOLOGY arrays. */
+    private static MeshTopology assemble(CendaMesh m, RenderMesh renderMesh) {
+        CendaMesh.Info info = m.info();
+        int faceIdUpperBound = info.faceIdUpperBound();
+        int uniqueVertexCount = info.vertexCount();
         int triangleCount = renderMesh.triangleCount();
 
-        // Step 1: Collect edges from face loops (undirected, keyed by vertex ids).
-        Map<Long, Set<Integer>> edgeToFaceIds = new LinkedHashMap<>();
-        Map<Long, int[]> edgeToVertices = new HashMap<>();
-
-        for (EditableFace face : mesh.faces()) {
-            int n = face.loopLength();
-            for (int i = 0; i < n; i++) {
-                int a = face.vertexAt(i);
-                int b = face.vertexAt((i + 1) % n);
-                long key = MeshEdge.canonicalKey(a, b);
-                edgeToFaceIds.computeIfAbsent(key, k -> new HashSet<>()).add(face.faceId());
-                edgeToVertices.putIfAbsent(key, new int[]{Math.min(a, b), Math.max(a, b)});
-            }
-        }
-
-        // Step 2: Build MeshEdge array with stable IDs — every loop edge is real.
-        int edgeCount = edgeToFaceIds.size();
+        // Edges (ids in first-use order) with their face lists (HashSet iteration order).
+        int[] edgeVertices = m.ints(CendaMesh.A_EDGE_VERTICES);
+        int[][] edgeFaces = m.csr(CendaMesh.A_EDGE_FACE_OFFSETS, CendaMesh.A_EDGE_FACES);
+        int edgeCount = edgeFaces.length;
         MeshEdge[] edges = new MeshEdge[edgeCount];
         Map<Long, Integer> edgeKeyToId = new HashMap<>(edgeCount * 2);
-
-        int e = 0;
-        for (Map.Entry<Long, Set<Integer>> entry : edgeToFaceIds.entrySet()) {
-            long key = entry.getKey();
-            int[] verts = edgeToVertices.get(key);
-            int[] adjacentFaceArray = entry.getValue().stream().mapToInt(Integer::intValue).toArray();
-            edges[e] = MeshEdge.of(e, verts[0], verts[1], adjacentFaceArray);
-            edgeKeyToId.put(key, e);
-            e++;
+        for (int e = 0; e < edgeCount; e++) {
+            edges[e] = new MeshEdge(e, edgeVertices[2 * e], edgeVertices[2 * e + 1], edgeFaces[e]);
+            edgeKeyToId.put(MeshEdge.canonicalKey(edgeVertices[2 * e], edgeVertices[2 * e + 1]), e);
         }
 
-        // Step 3: Build MeshFace array directly from authoritative loops.
-        List<MeshFace> faceList = new ArrayList<>(mesh.faceCount());
-        for (EditableFace face : mesh.faces()) {
-            int[] loop = face.loop();
-            int[] faceEdgeIds = new int[loop.length];
-            for (int i = 0; i < loop.length; i++) {
-                long edgeKey = MeshEdge.canonicalKey(loop[i], loop[(i + 1) % loop.length]);
-                Integer edgeId = edgeKeyToId.get(edgeKey);
-                faceEdgeIds[i] = edgeId != null ? edgeId : -1;
-            }
-            faceList.add(new MeshFace(face.faceId(), loop, faceEdgeIds));
-        }
-        MeshFace[] faces = faceList.toArray(new MeshFace[0]);
-
-        // Step 4: Build vertex adjacency indices.
-        List<List<Integer>> vertexToEdges = new ArrayList<>(uniqueVertexCount);
-        List<List<Integer>> vertexToFaces = new ArrayList<>(uniqueVertexCount);
-        for (int i = 0; i < uniqueVertexCount; i++) {
-            vertexToEdges.add(new ArrayList<>());
-            vertexToFaces.add(new ArrayList<>());
+        // Faces from the authoritative loops (insertion order) with their loop edges.
+        int[] faceIds = m.ints(CendaMesh.A_FACE_IDS);
+        int[] loopOffsets = m.ints(CendaMesh.A_LOOP_OFFSETS);
+        int[] loopVertices = m.ints(CendaMesh.A_LOOP_VERTICES);
+        int[] cornerEdges = m.ints(CendaMesh.A_CORNER_EDGES);
+        MeshFace[] faces = new MeshFace[faceIds.length];
+        MeshFace[] facesById = new MeshFace[faceIdUpperBound];
+        for (int f = 0; f < faces.length; f++) {
+            faces[f] = new MeshFace(faceIds[f],
+                Arrays.copyOfRange(loopVertices, loopOffsets[f], loopOffsets[f + 1]),
+                Arrays.copyOfRange(cornerEdges, loopOffsets[f], loopOffsets[f + 1]));
+            facesById[faceIds[f]] = faces[f];
         }
 
-        for (MeshEdge edge : edges) {
-            if (edge.vertexA() >= 0 && edge.vertexA() < uniqueVertexCount) {
-                vertexToEdges.get(edge.vertexA()).add(edge.edgeId());
-            }
-            if (edge.vertexB() >= 0 && edge.vertexB() < uniqueVertexCount) {
-                vertexToEdges.get(edge.vertexB()).add(edge.edgeId());
-            }
-        }
+        // Vertex adjacency.
+        List<List<Integer>> immutableVertexToEdges =
+            unmodifiableRows(m.csr(CendaMesh.A_VERTEX_EDGE_OFFSETS, CendaMesh.A_VERTEX_EDGES));
+        List<List<Integer>> immutableVertexToFaces =
+            unmodifiableRows(m.csr(CendaMesh.A_VERTEX_FACE_OFFSETS, CendaMesh.A_VERTEX_FACES));
 
-        for (MeshFace face : faces) {
-            for (int v : face.vertexIndices()) {
-                if (v >= 0 && v < uniqueVertexCount) {
-                    List<Integer> faceIdsForVertex = vertexToFaces.get(v);
-                    if (!faceIdsForVertex.contains(face.faceId())) {
-                        faceIdsForVertex.add(face.faceId());
-                    }
-                }
-            }
-        }
-
-        // Make adjacency lists unmodifiable
-        List<List<Integer>> immutableVertexToEdges = new ArrayList<>(uniqueVertexCount);
-        List<List<Integer>> immutableVertexToFaces = new ArrayList<>(uniqueVertexCount);
-        for (int i = 0; i < uniqueVertexCount; i++) {
-            immutableVertexToEdges.add(Collections.unmodifiableList(vertexToEdges.get(i)));
-            immutableVertexToFaces.add(Collections.unmodifiableList(vertexToFaces.get(i)));
-        }
-
-        // Step 4b: Build face-to-face adjacency from edge adjacency.
-        // Sized by faceIdUpperBound (not faces.length) to handle non-contiguous face IDs
-        // after face deletion. Gap entries remain as empty sets.
-        List<Set<Integer>> faceAdjSets = new ArrayList<>(faceIdUpperBound);
-        for (int i = 0; i < faceIdUpperBound; i++) {
-            faceAdjSets.add(new HashSet<>());
-        }
+        // Face-to-face adjacency by face id (gaps: empty) + the shared edge per pair.
+        int[][] adjacent = m.csr(CendaMesh.A_FACE_ADJ_OFFSETS, CendaMesh.A_FACE_ADJ);
+        int[][] adjacentEdges = m.csr(CendaMesh.A_FACE_ADJ_OFFSETS, CendaMesh.A_FACE_ADJ_EDGES);
         Map<Long, Integer> facePairToEdgeId = new HashMap<>();
-
-        for (MeshEdge edge : edges) {
-            int[] adjFaces = edge.adjacentFaceIds();
-            for (int i = 0; i < adjFaces.length; i++) {
-                for (int j = i + 1; j < adjFaces.length; j++) {
-                    int fA = adjFaces[i];
-                    int fB = adjFaces[j];
-                    if (fA >= 0 && fA < faceIdUpperBound && fB >= 0 && fB < faceIdUpperBound) {
-                        faceAdjSets.get(fA).add(fB);
-                        faceAdjSets.get(fB).add(fA);
-                        long pairKey = MeshGeometry.canonicalFacePairKey(fA, fB);
-                        facePairToEdgeId.put(pairKey, edge.edgeId());
-                    }
-                }
+        for (int fid = 0; fid < adjacent.length; fid++) {
+            for (int i = 0; i < adjacent[fid].length; i++) {
+                facePairToEdgeId.put(MeshGeometry.canonicalFacePairKey(fid, adjacent[fid][i]), adjacentEdges[fid][i]);
             }
         }
+        List<List<Integer>> immutableFaceToAdjacentFaces = Collections.unmodifiableList(unmodifiableRows(adjacent));
 
-        List<List<Integer>> faceToAdjacentFaces = new ArrayList<>(faceIdUpperBound);
-        for (int i = 0; i < faceIdUpperBound; i++) {
-            faceToAdjacentFaces.add(Collections.unmodifiableList(new ArrayList<>(faceAdjSets.get(i))));
-        }
+        boolean uniform = info.uniform();
+        int firstCount = info.firstFaceVertexCount();
 
-        // Step 5: Detect uniform topology
-        boolean uniform = true;
-        int firstCount = faces.length > 0 ? faces[0].vertexCount() : 0;
-        for (int i = 1; i < faces.length; i++) {
-            if (faces[i].vertexCount() != firstCount) {
-                uniform = false;
-                break;
-            }
-        }
-
-        // Step 6: Index mapping — exact corner maps from the render mesh.
+        // Index mapping — exact corner maps from the render mesh.
         int[] meshToUniqueMapping = renderMesh.cornerToVertexId().clone();
         int[][] vertexIdToCorners = renderMesh.vertexIdToCorners();
         int[][] uniqueToMeshIndices = new int[uniqueVertexCount][];
@@ -181,23 +181,25 @@ public final class MeshTopologyBuilder {
         }
         int[] triangleToFaceId = renderMesh.triangleToFaceId().clone();
 
-        // Step 7: Compute per-face normals, centroids, and areas.
-        // Sized by faceIdUpperBound and indexed by face ID to handle gaps from deletion.
-        // Gap entries remain null/0.0 (consumers must handle nulls).
+        // Face geometry by face id (gaps: null / 0).
+        float[] normals = m.floats(CendaMesh.A_FACE_NORMALS);
+        float[] centroids = m.floats(CendaMesh.A_FACE_CENTROIDS);
+        float[] faceAreas = m.floats(CendaMesh.A_FACE_AREAS);
         Vector3f[] faceNormals = new Vector3f[faceIdUpperBound];
         Vector3f[] faceCentroids = new Vector3f[faceIdUpperBound];
-        float[] faceAreas = new float[faceIdUpperBound];
-        for (MeshFace face : faces) {
-            int fid = face.faceId();
-            int[] verts = face.vertexIndices();
-            faceNormals[fid] = MeshGeometry.computeNormal(verts, uniqueToMeshIndices, vertices);
-            faceCentroids[fid] = MeshGeometry.computeCentroid(verts, uniqueToMeshIndices, vertices);
-            faceAreas[fid] = MeshGeometry.computeArea(verts, uniqueToMeshIndices, vertices);
+        for (int fid : faceIds) {
+            faceNormals[fid] = new Vector3f(normals[fid * 3], normals[fid * 3 + 1], normals[fid * 3 + 2]);
+            faceCentroids[fid] = new Vector3f(centroids[fid * 3], centroids[fid * 3 + 1], centroids[fid * 3 + 2]);
         }
 
-        // Step 9: Construct all 15 sub-services
+        int[] kindOrdinals = m.ints(CendaMesh.A_EDGE_KIND);
+        EdgeKind[] kinds = new EdgeKind[edgeCount];
+        EdgeKind[] all = EdgeKind.values();
+        for (int e = 0; e < edgeCount; e++) {
+            kinds[e] = all[kindOrdinals[e]];
+        }
+
         Map<Long, Integer> immutableEdgeKeyToId = Collections.unmodifiableMap(edgeKeyToId);
-        List<List<Integer>> immutableFaceToAdjacentFaces = Collections.unmodifiableList(faceToAdjacentFaces);
         Map<Long, Integer> immutableFacePairToEdgeId = Collections.unmodifiableMap(facePairToEdgeId);
 
         IndexMappingQuery indexMappingQuery = new IndexMappingQuery(
@@ -207,44 +209,18 @@ public final class MeshTopologyBuilder {
         TopologyMetadataQuery topologyMetadataQuery = new TopologyMetadataQuery(
                 uniform, firstCount, faces);
 
-        // Build sparse face array indexed by face ID for all sub-services that
-        // use face IDs as array indices. Gap entries (deleted faces) are null.
-        // Sub-services must null-check when accessing by face ID.
-        MeshFace[] facesById = new MeshFace[faceIdUpperBound];
-        for (MeshFace face : faces) {
-            facesById[face.faceId()] = face;
-        }
-
         ElementAdjacencyQuery elementAdjacencyQuery = new ElementAdjacencyQuery(
                 edges, facesById, immutableVertexToEdges, immutableVertexToFaces,
                 immutableFaceToAdjacentFaces, immutableFacePairToEdgeId);
 
-        // Face geometry cache (root of dirty-tracking chain)
         FaceGeometryCache faceGeometryCache = new FaceGeometryCache(
                 facesById, uniqueToMeshIndices, faceNormals, faceCentroids,
-                faceAreas, vertices);
+                faceAreas, renderMesh.vertices());
 
-        // Edge kinds (open / manifold / non-manifold)
-        EdgeClassifier edgeClassifier = new EdgeClassifier(edges);
-
-        // Compute initial dihedral angles for DihedralAngleCache
-        float[] dihedralAngles = new float[edges.length];
-        for (int i = 0; i < edges.length; i++) {
-            int[] adjFaces = edges[i].adjacentFaceIds();
-            if (adjFaces.length == 2
-                    && adjFaces[0] >= 0 && adjFaces[0] < faceIdUpperBound
-                    && adjFaces[1] >= 0 && adjFaces[1] < faceIdUpperBound
-                    && faceNormals[adjFaces[0]] != null
-                    && faceNormals[adjFaces[1]] != null) {
-                dihedralAngles[i] = MeshGeometry.computeDihedralAngle(
-                        faceNormals[adjFaces[0]], faceNormals[adjFaces[1]]);
-            } else {
-                dihedralAngles[i] = Float.NaN;
-            }
-        }
+        EdgeClassifier edgeClassifier = new EdgeClassifier(kinds);
 
         DihedralAngleCache dihedralAngleCache = new DihedralAngleCache(
-                edges, dihedralAngles, faceGeometryCache);
+                edges, m.floats(CendaMesh.A_EDGE_DIHEDRAL));
 
         VertexClassifier vertexClassifier = new VertexClassifier(
                 edges, immutableVertexToEdges, uniform, firstCount);
@@ -280,5 +256,17 @@ public final class MeshTopologyBuilder {
             edgeCount, faces.length, uniqueVertexCount, triangleCount, uniform, firstCount);
 
         return topology;
+    }
+
+    private static List<List<Integer>> unmodifiableRows(int[][] rows) {
+        List<List<Integer>> out = new ArrayList<>(rows.length);
+        for (int[] row : rows) {
+            List<Integer> list = new ArrayList<>(row.length);
+            for (int v : row) {
+                list.add(v);
+            }
+            out.add(Collections.unmodifiableList(list));
+        }
+        return out;
     }
 }

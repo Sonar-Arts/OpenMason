@@ -2,19 +2,13 @@ package com.openmason.engine.modeling.editable;
 
 import com.openmason.engine.modeling.ModelingConstants;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
 /**
  * Position welding for the import path: collapses coincident soup vertices
  * (within {@link ModelingConstants#POSITION_EPSILON}) into shared welded ids.
  *
- * <p>Spatial-hash grid (cell = 2× epsilon, 27-cell neighbor search) for O(n)
- * behavior — the same algorithm the legacy {@code UniqueVertexMapper} used,
- * extracted here because after the {@link EditableMesh} migration welding
- * only ever happens once, at import time.
+ * <p>Thin binding over the native mesh pipeline ({@code co_mesh_weld}, {@link CendaMesh}; OpenMason #175 F3): a
+ * spatial-hash grid (cell = 2x epsilon, 27-cell neighbour search, first match in cell insertion order - not the
+ * nearest) exactly as the Java this replaced, proven bit for bit by {@code MeshPipelineParityTest}.
  */
 public final class VertexWelder {
 
@@ -42,7 +36,8 @@ public final class VertexWelder {
      * Weld coincident positions in a soup vertex array.
      *
      * @param vertices Soup positions (x,y,z interleaved)
-     * @param epsilon  Distance below which two positions are the same vertex
+     * @param epsilon  Distance below which two positions are the same vertex (must be {@code > 0}; the native
+     *                 pipeline reads a non-positive epsilon as the default, so it is refused here)
      */
     public static WeldResult weld(float[] vertices, float epsilon) {
         if (vertices == null || vertices.length == 0) {
@@ -52,69 +47,13 @@ public final class VertexWelder {
             throw new IllegalArgumentException(
                 "Vertex array length must be divisible by 3: " + vertices.length);
         }
-
-        int soupCount = vertices.length / 3;
-        int[] soupToWelded = new int[soupCount];
-        List<Integer> representatives = new ArrayList<>();
-
-        float cellSize = epsilon * 2.0f;
-        float epsilonSq = epsilon * epsilon;
-        Map<Long, List<Integer>> spatialHash = new HashMap<>();
-
-        for (int soupIdx = 0; soupIdx < soupCount; soupIdx++) {
-            float x = vertices[soupIdx * 3];
-            float y = vertices[soupIdx * 3 + 1];
-            float z = vertices[soupIdx * 3 + 2];
-
-            int cx = (int) Math.floor(x / cellSize);
-            int cy = (int) Math.floor(y / cellSize);
-            int cz = (int) Math.floor(z / cellSize);
-
-            int matched = -1;
-            searchLoop:
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dz = -1; dz <= 1; dz++) {
-                        List<Integer> candidates = spatialHash.get(cellKey(cx + dx, cy + dy, cz + dz));
-                        if (candidates == null) {
-                            continue;
-                        }
-                        for (int candidate : candidates) {
-                            float ddx = x - vertices[candidate * 3];
-                            float ddy = y - vertices[candidate * 3 + 1];
-                            float ddz = z - vertices[candidate * 3 + 2];
-                            if (ddx * ddx + ddy * ddy + ddz * ddz < epsilonSq) {
-                                matched = soupToWelded[candidate];
-                                break searchLoop;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (matched >= 0) {
-                soupToWelded[soupIdx] = matched;
-            } else {
-                soupToWelded[soupIdx] = representatives.size();
-                representatives.add(soupIdx);
-            }
-
-            spatialHash.computeIfAbsent(cellKey(cx, cy, cz), k -> new ArrayList<>()).add(soupIdx);
+        if (!(epsilon > 0.0f)) {
+            throw new IllegalArgumentException("Weld epsilon must be > 0: " + epsilon);
         }
-
-        float[] weldedPositions = new float[representatives.size() * 3];
-        for (int w = 0; w < representatives.size(); w++) {
-            int src = representatives.get(w) * 3;
-            weldedPositions[w * 3]     = vertices[src];
-            weldedPositions[w * 3 + 1] = vertices[src + 1];
-            weldedPositions[w * 3 + 2] = vertices[src + 2];
+        try (CendaMesh m = CendaMesh.create()) {
+            m.weld(vertices, epsilon);
+            float[] positions = m.floats(CendaMesh.A_VERTEX_POSITIONS);
+            return new WeldResult(m.ints(CendaMesh.A_SOUP_TO_VERTEX), positions, positions.length / 3);
         }
-
-        return new WeldResult(soupToWelded, weldedPositions, representatives.size());
-    }
-
-    /** Pack a 3D grid cell into a hash key (21 bits per axis, sign-preserving). */
-    private static long cellKey(int x, int y, int z) {
-        return ((x & 0x1FFFFFL) << 42) | ((y & 0x1FFFFFL) << 21) | (z & 0x1FFFFFL);
     }
 }

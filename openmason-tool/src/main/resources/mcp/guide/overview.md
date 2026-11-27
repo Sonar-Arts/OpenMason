@@ -29,7 +29,8 @@ and skinned vertices), per-vertex **skin weights**, and **attachment sockets**
 ## Undo domains
 `undo` / `redo` take a `domain`: model (default — parts, geometry, face
 textures; a whole script run is one step), texture (texture editor), bone,
-skin (weights), attach (sockets), anim. The six histories are separate.
+skin (weights), morph (shape keys, vertex groups), attach (sockets), anim.
+The histories are separate.
 
 ## Topics
 `parts`, `face_textures`, `bones`, `skinning`, `attachments`, `animation`, `scripting`,

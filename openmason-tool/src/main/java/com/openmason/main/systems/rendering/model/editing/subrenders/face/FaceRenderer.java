@@ -1356,6 +1356,12 @@ public class FaceRenderer implements MeshChangeListener {
         selectionDirty = true;
     }
 
+    // CPU mirrors, for tests (same package): the listener-updated copies must equal a fresh rebuild's.
+    float[] trianglePositionsView() { return trianglePositions; }
+    float[] fillDataView() { return fillData; }
+    float[] lineDataView() { return lineData; }
+    float[] dotDataView() { return dotData; }
+
     public void setEditingFaceIndex(int faceIndex) {
         this.editingFaceIndex = faceIndex;
     }

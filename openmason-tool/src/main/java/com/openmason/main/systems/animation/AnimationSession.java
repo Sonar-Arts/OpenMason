@@ -309,8 +309,54 @@ public final class AnimationSession implements AutoCloseable {
         return locals;
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // Shape keys (OpenMason #171): the clip's morph tracks over the model's shape keys
+
+    private com.openmason.engine.anim.AnimClipDocument morphClip;
+    private long morphClipRevision = Long.MIN_VALUE;
+    private java.util.List<String> morphTrackNames = java.util.List.of();
+    private float[] morphWeights;
+
+    /** The model's shape keys (its mesh's morph targets, in target order); empty when it has none. */
+    public java.util.List<com.openmason.engine.rig.RigMorphs.Target> shapeKeys() {
+        com.openmason.engine.rig.RigMorphs m = model.geometry().morphs();
+        return m == null ? java.util.List.of() : m.targets();
+    }
+
+    /**
+     * The shape-key weights of the BAKED clip at t (every layer composed; what the runtime plays), one per
+     * {@link #shapeKeys()} target: its morph track's value, else the key's default. Null when the model has no shape
+     * keys. Marshalling only: the playable clip is copied once per edit and sampled natively.
+     */
+    public float[] morphWeights(float t) {
+        java.util.List<com.openmason.engine.rig.RigMorphs.Target> keys = shapeKeys();
+        if (keys.isEmpty()) return null;
+        long rev = authoring.revision();
+        if (morphClip == null || rev != morphClipRevision) {
+            if (morphClip != null) morphClip.close();
+            morphClip = authoring.playableClip();
+            morphClipRevision = rev;
+            morphTrackNames = morphClip.morphTracks().stream().map(com.openmason.engine.anim.AnimClipDocument.Curve::name)
+                    .toList();
+        }
+        if (morphWeights == null || morphWeights.length != keys.size()) morphWeights = new float[keys.size()];
+        for (int i = 0; i < keys.size(); i++) {
+            int track = morphTrack(keys.get(i).name());
+            morphWeights[i] = track >= 0 ? morphClip.sampleMorph(track, t) : keys.get(i).defaultWeight();
+        }
+        return morphWeights;
+    }
+
+    private int morphTrack(String name) {
+        for (int i = 0; i < morphTrackNames.size(); i++) if (morphTrackNames.get(i).equals(name)) return i;
+        for (int i = 0; i < morphTrackNames.size(); i++) if (morphTrackNames.get(i).equalsIgnoreCase(name)) return i;
+        return -1;
+    }
+
     @Override
     public void close() {
+        if (morphClip != null) morphClip.close();
+        morphClip = null;
         if (overlay != null) overlay.close();
         overlay = null;
         authoring.close();

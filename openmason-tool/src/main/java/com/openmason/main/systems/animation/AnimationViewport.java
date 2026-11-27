@@ -83,7 +83,16 @@ final class AnimationViewport implements AutoCloseable {
     }
 
     int render(EntityGeometry geometry, JointPalette palette, int w, int h) {
+        return render(geometry, palette, w, h, null);
+    }
+
+    /** Shape keys (#171): appearance carrying the clip's morph weights (one per target; null = defaults). */
+    private final com.openmason.engine.rendering.model.draw.ModelAppearance appearance =
+            new com.openmason.engine.rendering.model.draw.ModelAppearance();
+
+    int render(EntityGeometry geometry, JointPalette palette, int w, int h, float[] morphWeights) {
         if (w < 8 || h < 8) return colorTex;
+        appearance.setMorphWeights(morphWeights);
         ensureTarget(w, h);
         eye.set((float) (Math.sin(yaw) * Math.cos(pitch)), (float) Math.sin(pitch), (float) (Math.cos(yaw) * Math.cos(pitch)))
                 .mul(distance).add(target);
@@ -113,8 +122,12 @@ final class AnimationViewport implements AutoCloseable {
                     gpu = UploadedModel.upload(geometry);
                     uploadedFor = geometry;
                 }
-                if (geometry.materials().isEmpty()) renderer.drawFlat(gpu.mesh(), gpu.plan(), palette, view, projection, flat);
-                else renderer.drawLit(gpu.mesh(), gpu.plan(), gpu, palette, view, projection, ModelLighting.preview(view), null);
+                if (geometry.materials().isEmpty()) {
+                    renderer.drawFlat(gpu.mesh(), gpu.plan(), palette, view, projection, flat, appearance);
+                } else {
+                    renderer.drawLit(gpu.mesh(), gpu.plan(), gpu, palette, view, projection, ModelLighting.preview(view),
+                            null, appearance);
+                }
             }
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

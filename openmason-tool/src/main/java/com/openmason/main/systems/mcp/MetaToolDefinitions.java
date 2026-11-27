@@ -11,9 +11,9 @@ import static com.openmason.main.systems.mcp.McpArgs.optString;
  * self-description ({@code describe_api}), and domain-routed {@code undo} /
  * {@code redo}.
  *
- * <p>Honesty note on undo: this merges tool NAMES, not timelines — the six
- * histories (model+face-textures, texture editor, bones, skin weights, sockets, animation)
- * remain separate; {@code domain} picks which one to step.
+ * <p>Honesty note on undo: this merges tool NAMES, not timelines — the seven
+ * histories (model+face-textures, texture editor, bones, skin weights, shape keys + vertex groups,
+ * sockets, animation) remain separate; {@code domain} picks which one to step.
  */
 public final class MetaToolDefinitions {
 
@@ -24,6 +24,7 @@ public final class MetaToolDefinitions {
     private final SkinEditingService skin;
     private final AttachmentEditingService attachments;
     private final com.openmason.main.systems.animation.mcp.AnimationEditingService animation;
+    private final VertexDataEditingService vertexData;
     private final ObjectMapper mapper;
     private final McpGuide guide;
 
@@ -36,6 +37,21 @@ public final class MetaToolDefinitions {
                                com.openmason.main.systems.animation.mcp.AnimationEditingService animation,
                                ObjectMapper mapper,
                                McpGuide guide) {
+        this(summary, model, texture, bones, skin, attachments, animation, null, mapper, guide);
+    }
+
+    /** With the shape-key / vertex-group history (undo domain {@code morph}, OpenMason #171 / #172). */
+    public MetaToolDefinitions(ModelSummaryService summary,
+                               ModelEditingService model,
+                               TextureEditingService texture,
+                               BoneEditingService bones,
+                               SkinEditingService skin,
+                               AttachmentEditingService attachments,
+                               com.openmason.main.systems.animation.mcp.AnimationEditingService animation,
+                               VertexDataEditingService vertexData,
+                               ObjectMapper mapper,
+                               McpGuide guide) {
+        this.vertexData = vertexData;
         this.summary = summary;
         this.model = model;
         this.texture = texture;
@@ -80,7 +96,8 @@ public final class MetaToolDefinitions {
                 "undo",
                 "Undo the most recent mutation in a domain: model (parts/geometry/face textures — "
                         + "the default; a whole script run is one step), texture (texture editor), "
-                        + "bone, skin (weights), attach (sockets), anim. The six histories are separate.",
+                        + "bone, skin (weights), morph (shape keys, groups), attach (sockets), anim. "
+                        + "The histories are separate.",
                 domainSchema(),
                 args -> stepHistory(optString(args, "domain"), true)));
 
@@ -94,7 +111,7 @@ public final class MetaToolDefinitions {
     private com.fasterxml.jackson.databind.JsonNode domainSchema() {
         return McpSchema.of(mapper)
                 .enumStr("domain", "Which history to step (default model)",
-                        "model", "texture", "bone", "skin", "attach", "anim")
+                        "model", "texture", "bone", "skin", "morph", "attach", "anim")
                 .build();
     }
 
@@ -105,10 +122,11 @@ public final class MetaToolDefinitions {
             case "texture" -> undo ? texture.undo() : texture.redo();
             case "bone" -> undo ? bones.undo() : bones.redo();
             case "skin" -> undo ? skin.undo() : skin.redo();
+            case "morph" -> vertexData != null && (undo ? vertexData.undo() : vertexData.redo());
             case "attach" -> undo ? attachments.undo() : attachments.redo();
             case "anim" -> animation.undo(!undo);
             default -> throw McpErrors.invalidEnum("domain", d,
-                    java.util.List.of("model", "texture", "bone", "skin", "attach", "anim"));
+                    java.util.List.of("model", "texture", "bone", "skin", "morph", "attach", "anim"));
         };
     }
 

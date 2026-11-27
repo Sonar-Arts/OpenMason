@@ -388,20 +388,16 @@ public final class ModelGpuMesh implements AutoCloseable {
             return;
         }
         if (normalVbo == 0) normalVbo = GL15.glGenBuffers();
-        java.nio.ShortBuffer buffer = org.lwjgl.system.MemoryUtil.memAllocShort(n * 2);
-        try {
-            buffer.put(octNormals, 0, n * 2).flip();
-            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, normalVbo);
-            if (n == normalVertices) {
-                GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, 0L, buffer);
-            } else {
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, buffer, usage);
-            }
-            GL30.glVertexAttribIPointer(ModelNormalGlsl.NORMAL_LOCATION, 2, GL11.GL_SHORT, 4, 0L);
-            GL20.glEnableVertexAttribArray(ModelNormalGlsl.NORMAL_LOCATION);
-        } finally {
-            org.lwjgl.system.MemoryUtil.memFree(buffer);
+        java.nio.ShortBuffer buffer = staging((long) n * 4L).asShortBuffer();
+        buffer.put(octNormals, 0, n * 2).flip();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, normalVbo);
+        if (n == normalVertices) {
+            GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, 0L, buffer);
+        } else {
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, buffer, usage);
         }
+        GL30.glVertexAttribIPointer(ModelNormalGlsl.NORMAL_LOCATION, 2, GL11.GL_SHORT, 4, 0L);
+        GL20.glEnableVertexAttribArray(ModelNormalGlsl.NORMAL_LOCATION);
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL30.glBindVertexArray(previousVao);
         normalVertices = n;
@@ -445,16 +441,12 @@ public final class ModelGpuMesh implements AutoCloseable {
         if (length == 0) {
             GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, 0L, usage);
         } else {
-            IntBuffer buffer = memAllocInt(length);
-            try {
-                buffer.put(indices).flip();
-                if (length == indexCount) {
-                    GL15.glBufferSubData(GL15.GL_ELEMENT_ARRAY_BUFFER, 0L, buffer);
-                } else {
-                    GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, buffer, usage);
-                }
-            } finally {
-                memFree(buffer);
+            IntBuffer buffer = staging((long) length * Integer.BYTES).asIntBuffer();
+            buffer.put(indices).flip();
+            if (length == indexCount) {
+                GL15.glBufferSubData(GL15.GL_ELEMENT_ARRAY_BUFFER, 0L, buffer);
+            } else {
+                GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, buffer, usage);
             }
         }
         GL30.glBindVertexArray(previousVao);
@@ -469,22 +461,36 @@ public final class ModelGpuMesh implements AutoCloseable {
         if (length == 0) {
             GL15.glBufferData(target, 0L, usage);
         } else {
-            FloatBuffer fb = memAllocFloat(length);
-            try {
-                fb.put(data).flip();
-                if (length == previousLength) {
-                    GL15.glBufferSubData(target, 0L, fb);
-                } else {
-                    GL15.glBufferData(target, fb, usage);
-                }
-            } finally {
-                memFree(fb);
+            FloatBuffer fb = staging((long) length * Float.BYTES).asFloatBuffer();
+            fb.put(data).flip();
+            if (length == previousLength) {
+                GL15.glBufferSubData(target, 0L, fb);
+            } else {
+                GL15.glBufferData(target, fb, usage);
             }
         }
         GL15.glBindBuffer(target, 0);
         retrack((long) length * Float.BYTES - (long) previousLength * Float.BYTES);
         uploadedBytes += (long) length * Float.BYTES;
         return length;
+    }
+
+    // One grow-only native staging buffer for the per-edit uploads (#175): a drag re-sends positions every frame,
+    // and a fresh malloc/free of the whole array per upload was pure overhead. GL thread only; freed by close().
+    private java.nio.ByteBuffer staging;
+
+    /** The staging buffer, at least {@code bytes} long, position 0, limit {@code bytes}, native order. */
+    private java.nio.ByteBuffer staging(long bytes) {
+        if (bytes > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("upload too large: " + bytes + " bytes");
+        }
+        int size = (int) bytes;
+        if (staging == null || staging.capacity() < size) {
+            if (staging != null) org.lwjgl.system.MemoryUtil.memFree(staging);
+            staging = org.lwjgl.system.MemoryUtil.memAlloc(Math.max(size, 4096));
+        }
+        staging.clear().limit(size);
+        return staging;
     }
 
     private void ensureCreated() {
@@ -531,6 +537,10 @@ public final class ModelGpuMesh implements AutoCloseable {
         }
         if (normalVbo != 0) GL15.glDeleteBuffers(normalVbo);
         deleteMorphObjects();
+        if (staging != null) {
+            org.lwjgl.system.MemoryUtil.memFree(staging);
+            staging = null;
+        }
         morphs = null;
         morphBytes = 0;
         vao = positionVbo = uvVbo = ebo = skinRangeVbo = influenceBuffer = influenceTexture = 0;

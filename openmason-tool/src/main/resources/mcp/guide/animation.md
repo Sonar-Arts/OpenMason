@@ -50,6 +50,8 @@ unsaved changes without `discard:true`.
   index?, rename?, remove?}; `layer_weight` {layer, time, value | remove}
 - `notify` {name, time, duration?, payload?} | {index, remove | members};
   `curve` {name, keys | null}; `marker` {name, time} | {index, remove};
+  `morph_key` {layer?, morph, time, value, interp? | remove} / `morph` {layer?,
+  morph, keys | null}: shape-key weight tracks (OMANIM 1.3, by key name);
   `root_motion` {joint, axes} | {} (off); `additive` {reference, time?, space?}
 - `effector` {name, kind, upper/mid/end | joints, axis?, rename?, remove?};
   `effector_key` {effector, time, pos?, rot?, weight?, pole? | remove}

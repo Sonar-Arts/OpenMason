@@ -811,6 +811,56 @@ public class ViewportController {
     /** Weight-paint mode settings (brush, target joint, cursor). */
     public com.openmason.main.systems.skeleton.WeightPaintState getWeightPaintState() { return weightPaintState; }
 
+    // ========== Shape keys + vertex groups (OMO 1.9, #171 / #172: rigging pane, MCP morph_* / vgroup_*) ==========
+    private com.openmason.main.systems.skeleton.vertexdata.VertexDataAuthoring vertexData;
+
+    /** This viewport's shape keys and vertex groups (stores, undo history, preview state; one per viewport). */
+    public com.openmason.main.systems.skeleton.vertexdata.VertexDataAuthoring getVertexData() {
+        if (vertexData == null) {
+            vertexData = new com.openmason.main.systems.skeleton.vertexdata.VertexDataAuthoring(
+                    modelRenderer.getPartManager());
+        }
+        return vertexData;
+    }
+
+    /** Unique (selectable) viewport vertex -> combined-soup vertices, for vertex-group assign / select. */
+    public com.openmason.main.systems.skeleton.vertexdata.VertexDataAuthoring.IndexBridge getVertexIndexBridge() {
+        return new com.openmason.main.systems.skeleton.vertexdata.VertexDataAuthoring.IndexBridge() {
+            @Override
+            public int uniqueCount() {
+                VertexRenderer vr = viewportRenderPipeline != null ? viewportRenderPipeline.getVertexRenderer() : null;
+                return vr != null ? vr.getVertexCount() : modelRenderer.getUniqueVertexCount();
+            }
+
+            @Override
+            public int[] soupOfUnique(int unique) {
+                int[] mesh = modelRenderer.getMeshIndicesForUniqueVertex(unique);
+                if (mesh == null) return new int[0];
+                java.util.LinkedHashSet<Integer> soup = new java.util.LinkedHashSet<>();
+                for (int mi : mesh) {
+                    for (int s : modelRenderer.getPartManager().resolveCombinedVertex(mi)) soup.add(s);
+                }
+                return soup.stream().mapToInt(Integer::intValue).toArray();
+            }
+        };
+    }
+
+    /** The selected unique vertices (vertex mode). */
+    public java.util.Set<Integer> getSelectedVertices() {
+        return vertexSelectionState.getSelectedVertexIndices();
+    }
+
+    /** Replaces the vertex selection with these unique vertices (and its highlight). */
+    public void selectVertices(java.util.Collection<Integer> uniqueVertices) {
+        VertexRenderer vr = viewportRenderPipeline != null ? viewportRenderPipeline.getVertexRenderer() : null;
+        vertexSelectionState.clearSelection();
+        for (int u : uniqueVertices) {
+            org.joml.Vector3f p = vr != null ? vr.getVertexPosition(u) : modelRenderer.getUniqueVertexPosition(u);
+            if (p != null) vertexSelectionState.toggleVertex(u, p);
+        }
+        if (vr != null) vr.updateSelectionSet(vertexSelectionState.getSelectedVertexIndices());
+    }
+
     /** Session-level attachment points (sockets) owned by this viewport. */
     public com.openmason.main.systems.skeleton.AttachmentStore getAttachmentStore() { return attachmentStore; }
 

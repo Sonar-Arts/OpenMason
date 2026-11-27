@@ -420,7 +420,8 @@ public final class AnimationWorkspace implements WorkspaceDock {
         float height = Math.max(120f, ImGui.getContentRegionAvailY() - controls);
         int texture;
         try {
-            texture = viewport.render(doc.model().geometry(), palette, (int) width, (int) height);
+            texture = viewport.render(doc.model().geometry(), palette, (int) width, (int) height,
+                    doc.morphWeights(doc.time()));
         } catch (RuntimeException e) {
             ImGui.textWrapped("Viewport: " + e.getMessage());
             return;

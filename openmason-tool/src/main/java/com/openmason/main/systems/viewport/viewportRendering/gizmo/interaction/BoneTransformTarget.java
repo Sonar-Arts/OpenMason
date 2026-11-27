@@ -24,6 +24,9 @@ import org.joml.Vector3f;
  * Selection is read from {@link BoneStore#getSelectedBoneId()} so the same handle
  * always works whether the user picks a bone in the hierarchy or via some future
  * viewport picker.
+ *
+ * <p>A drag is one transform interaction (OpenMason #175 F2): every rest edit during it draws through the editable
+ * model's GPU palette, and the baked mesh is rebuilt once on release ({@link #endDrag}).
  */
 public class BoneTransformTarget implements ITransformTarget {
 
@@ -103,6 +106,25 @@ public class BoneTransformTarget implements ITransformTarget {
     public String getTargetName() {
         OMOFormat.BoneEntry b = selected();
         return b == null ? "No Bone Selected" : "Bone: " + b.name();
+    }
+
+    // True between beginDrag and endDrag: the part manager defers its re-bake (GPU palette path, #175 F2).
+    private boolean interactionOpen;
+
+    /** A gizmo drag starts: rest edits during it move the drawn model through matrices only. */
+    @Override
+    public void beginDrag() {
+        if (interactionOpen) boneStore.endEditInteraction();
+        boneStore.beginEditInteraction();
+        interactionOpen = true;
+    }
+
+    /** The drag ends: the model is re-baked once with the final skeleton. */
+    @Override
+    public void endDrag() {
+        if (!interactionOpen) return;
+        interactionOpen = false;
+        boneStore.endEditInteraction();
     }
 
     private OMOFormat.BoneEntry selected() {

@@ -1,35 +1,39 @@
 package com.openmason.engine.modeling.editable;
 
-import com.openmason.engine.modeling.ModelingConstants;
-import com.openmason.engine.modeling.uv.FaceProjectionUtil;
+import com.openmason.engine.modeling.topology.MeshTopology;
+import com.openmason.engine.modeling.topology.MeshTopologyBuilder;
 import com.openmason.engine.modeling.uv.FaceTextureMapping;
 import com.openmason.engine.modeling.uv.IFaceTextureManager;
 import com.openmason.engine.modeling.uv.MaterialDefinition;
 import org.joml.Vector3f;
-
-import java.util.ArrayList;
-import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Derives the render representation from an {@link EditableMesh}: emits one
  * corner per face-loop vertex (per-face duplication — a cube stays 24 render
  * vertices), projects corner UVs into each face's
- * {@link FaceTextureMapping.UVRegion}, and triangulates loops via
- * {@link PolygonTriangulator}.
+ * {@link FaceTextureMapping.UVRegion}, and triangulates loops (the
+ * {@link PolygonTriangulator} rules).
  *
  * <p>Because corners are never shared across faces, material seams need no
  * special handling — the legacy seam-duplication/strip machinery is
  * unnecessary by construction.
  *
- * <p>The UV projection is the same tangent-frame region mapping the legacy
- * {@code PerFaceUVCoordinateGenerator} applied on every rebuild. A face's
- * AUTHORED corner UVs win over the projection when the face has no explicit
- * mapping, or when its mapping says they are authored
- * ({@link FaceTextureMapping#authoredUVs()}: an imported / loaded UV layout
- * that is not the region projection — before #169 those were thrown away and
- * every mapped face was re-projected).
+ * <p>The UV projection is the tangent-frame region mapping (Newell normal → tangent frame → bounds normalized to
+ * 0..1 → V flip → rotation → region). A face's AUTHORED corner UVs win over the projection when the face has no
+ * explicit mapping, or when its mapping says they are authored ({@link FaceTextureMapping#authoredUVs()}).
+ *
+ * <p>Thin binding over the native mesh pipeline ({@code co_mesh_set_faces} + {@code co_mesh_build}, {@link CendaMesh};
+ * OpenMason #175 F3), bit for bit the Java this replaced ({@code MeshPipelineParityTest}). {@link #derive} keeps the
+ * native mesh alive for incremental positions-only refreshes ({@link Derivation#movePositions}).
  */
 public final class RenderMeshBuilder {
+
+    private static final Logger logger = LoggerFactory.getLogger(RenderMeshBuilder.class);
+
+    private static final int TRI_FALLBACK_FLAGS = CendaMesh.FACE_TRI_DEGENERATE_NORMAL
+            | CendaMesh.FACE_TRI_ZERO_AREA | CendaMesh.FACE_TRI_NO_EAR;
 
     private RenderMeshBuilder() {
         // Static utility — no instantiation
@@ -44,97 +48,158 @@ public final class RenderMeshBuilder {
      *                       May be {@code null} (all faces full-region).
      */
     public static RenderMesh build(EditableMesh mesh, IFaceTextureManager textureManager) {
-        int cornerTotal = 0;
-        int triangleTotal = 0;
-        for (EditableFace face : mesh.faces()) {
-            cornerTotal += face.loopLength();
-            triangleTotal += face.loopLength() - 2;
+        try (CendaMesh m = CendaMesh.create()) {
+            m.setMappings(mesh, textureManager);
+            m.setFaces(mesh, CendaMesh.STAGE_RENDER);
+            logTriangulationFallbacks(m);
+            return renderMeshOf(m);
         }
-
-        float[] vertices = new float[cornerTotal * 3];
-        float[] texCoords = new float[cornerTotal * 2];
-        int[] indices = new int[triangleTotal * 3];
-        int[] triangleToFaceId = new int[triangleTotal];
-        int[] cornerToVertexId = new int[cornerTotal];
-
-        List<List<Integer>> cornersPerVertex = new ArrayList<>(mesh.vertexCount());
-        for (int v = 0; v < mesh.vertexCount(); v++) {
-            cornersPerVertex.add(new ArrayList<>(4));
-        }
-
-        int corner = 0;
-        int triangle = 0;
-        Vector3f pos = new Vector3f();
-
-        for (EditableFace face : mesh.faces()) {
-            int n = face.loopLength();
-            int firstCorner = corner;
-            Vector3f[] loopPositions = new Vector3f[n];
-
-            for (int i = 0; i < n; i++) {
-                int vertexId = face.vertexAt(i);
-                mesh.position(vertexId, pos);
-                loopPositions[i] = new Vector3f(pos);
-
-                vertices[corner * 3]     = pos.x;
-                vertices[corner * 3 + 1] = pos.y;
-                vertices[corner * 3 + 2] = pos.z;
-                cornerToVertexId[corner] = vertexId;
-                cornersPerVertex.get(vertexId).add(corner);
-                corner++;
-            }
-
-            emitFaceUVs(face, loopPositions, texCoords, firstCorner,
-                mapping(textureManager, face.faceId()));
-
-            int[] local = PolygonTriangulator.triangulate(loopPositions);
-            for (int i = 0; i < local.length; i += 3) {
-                indices[triangle * 3]     = firstCorner + local[i];
-                indices[triangle * 3 + 1] = firstCorner + local[i + 1];
-                indices[triangle * 3 + 2] = firstCorner + local[i + 2];
-                triangleToFaceId[triangle] = face.faceId();
-                triangle++;
-            }
-        }
-
-        int[][] vertexIdToCorners = new int[mesh.vertexCount()][];
-        for (int v = 0; v < mesh.vertexCount(); v++) {
-            List<Integer> list = cornersPerVertex.get(v);
-            int[] arr = new int[list.size()];
-            for (int i = 0; i < arr.length; i++) {
-                arr[i] = list.get(i);
-            }
-            vertexIdToCorners[v] = arr;
-        }
-
-        return new RenderMesh(vertices, texCoords, indices,
-            triangleToFaceId, cornerToVertexId, vertexIdToCorners);
-    }
-
-    private static FaceTextureMapping mapping(IFaceTextureManager textureManager, int faceId) {
-        return textureManager != null ? textureManager.getFaceMapping(faceId) : null;
     }
 
     /**
-     * Emit a face's corner UVs. Faces with an explicit non-default mapping are
-     * projected into their region unless the mapping marks the face's UVs as
-     * authored; faces without one keep their AUTHORED per-corner UVs when
-     * present (sphere lat/long grids, hand-authored UVs).
+     * Render mesh AND topology of {@code mesh} in one native pass (= {@link #build} +
+     * {@link MeshTopologyBuilder#build}), keeping the native mesh for incremental drags. The caller owns the result
+     * (close it, or let the cleaner do it).
      */
-    private static void emitFaceUVs(EditableFace face, Vector3f[] loop, float[] texCoords,
-                                    int firstCorner, FaceTextureMapping faceMapping) {
-        boolean explicitMapping = isExplicit(faceMapping);
+    public static Derivation derive(EditableMesh mesh, IFaceTextureManager textureManager) {
+        CendaMesh m = CendaMesh.create();
+        try {
+            m.setMappings(mesh, textureManager);
+            m.setFaces(mesh, CendaMesh.STAGE_RENDER | CendaMesh.STAGE_TOPOLOGY);
+            logTriangulationFallbacks(m);
+            RenderMesh rm = renderMeshOf(m);
+            return new Derivation(m, rm, MeshTopologyBuilder.fromNative(m, mesh, rm));
+        } catch (RuntimeException e) {
+            m.close();
+            throw e;
+        }
+    }
 
-        float[] authored = face.cornerUVs();
-        if (authored != null && (!explicitMapping || faceMapping.authoredUVs())) {
-            for (int i = 0; i < loop.length; i++) {
-                texCoords[(firstCorner + i) * 2]     = authored[i * 2];
-                texCoords[(firstCorner + i) * 2 + 1] = authored[i * 2 + 1];
-            }
-            return;
+    /**
+     * A derivation that stays bound to its native mesh: {@link #renderMesh()} / {@link #topology()} plus the
+     * incremental positions-only refresh a drag needs.
+     *
+     * <p><b>Drag path</b>: after {@code EditableMesh.setPosition} on some vertices, call
+     * {@link #movePositions(EditableMesh, int[])} with those vertex ids instead of a full rebuild. Native cost is
+     * O(moved corners + the touched faces' triangulation and edges); the result equals a full {@link #build} +
+     * {@link MeshTopologyBuilder#build} for the new positions, bit for bit (drag parity in
+     * {@code MeshPipelineParityTest}). Only POSITIONS may change between calls: after any structural edit (faces,
+     * loops, authored UVs) or a mapping change, derive again. Not thread-safe (one owner thread).
+     */
+    public static final class Derivation implements AutoCloseable {
+
+        private final CendaMesh nativeMesh;
+        private RenderMesh renderMesh;
+        private final MeshTopology topology;
+        private int[] lastMovedFaceIds = new int[0];
+
+        private Derivation(CendaMesh nativeMesh, RenderMesh renderMesh, MeshTopology topology) {
+            this.nativeMesh = nativeMesh;
+            this.renderMesh = renderMesh;
+            this.topology = topology;
         }
 
-        projectFaceUVs(loop, texCoords, firstCorner, faceMapping);
+        /** The current render mesh (a new record after every {@link #movePositions} that changed something). */
+        public RenderMesh renderMesh() {
+            return renderMesh;
+        }
+
+        /**
+         * The topology (null for an empty mesh, like {@link MeshTopologyBuilder#build}). The SAME object across
+         * {@link #movePositions} calls: its face normals / centroids / areas and dihedral angles are refreshed in
+         * place for the touched faces; its structure cannot change on a move.
+         */
+        public MeshTopology topology() {
+            return topology;
+        }
+
+        /**
+         * Positions-only refresh ({@code co_mesh_move_vertices}): reads the CURRENT positions of {@code vertexIds}
+         * from {@code mesh} (the same mesh this derivation was made from, already moved with
+         * {@code setPosition}) and updates the render mesh (new corner positions, projected UVs, re-triangulated
+         * indices of the touched faces) and the topology's face geometry and dihedral angles.
+         *
+         * <p>The new {@link #renderMesh()} gets fresh {@code vertices}, {@code texCoords} and {@code indices} arrays;
+         * {@code triangleToFaceId}, {@code cornerToVertexId} and {@code vertexIdToCorners} are shared with the
+         * previous record (a move cannot change them).
+         *
+         * @return {@link CendaMesh} {@code CHANGED_*} bits: POSITIONS when anything moved, UVS when a projected UV
+         *         changed, INDICES when a touched face re-triangulated differently (re-upload the index buffer),
+         *         TOPOLOGY when the topology geometry was refreshed; 0 when nothing moved
+         */
+        public int movePositions(EditableMesh mesh, int[] vertexIds) {
+            if (vertexIds == null || vertexIds.length == 0) {
+                lastMovedFaceIds = new int[0];
+                return 0;
+            }
+            float[] xyz = new float[vertexIds.length * 3];
+            Vector3f p = new Vector3f();
+            for (int i = 0; i < vertexIds.length; i++) {
+                mesh.position(vertexIds[i], p);
+                xyz[i * 3] = p.x;
+                xyz[i * 3 + 1] = p.y;
+                xyz[i * 3 + 2] = p.z;
+            }
+            int changes = nativeMesh.moveVertices(vertexIds, xyz);
+            int[] slots = nativeMesh.ints(CendaMesh.A_MOVED_FACES);
+            int[] faceIds = nativeMesh.ints(CendaMesh.A_FACE_IDS);
+            lastMovedFaceIds = new int[slots.length];
+            for (int i = 0; i < slots.length; i++) lastMovedFaceIds[i] = faceIds[slots[i]];
+            if (changes == 0) {
+                return 0;
+            }
+            RenderMesh old = renderMesh;
+            renderMesh = new RenderMesh(
+                nativeMesh.floats(CendaMesh.A_CORNER_POSITIONS),
+                nativeMesh.floats(CendaMesh.A_CORNER_UVS),
+                nativeMesh.ints(CendaMesh.A_TRI_INDICES),
+                old.triangleToFaceId(), old.cornerToVertexId(), old.vertexIdToCorners());
+            if (topology != null) {
+                MeshTopologyBuilder.refreshMoved(topology, nativeMesh, lastMovedFaceIds, renderMesh.vertices());
+            }
+            return changes;
+        }
+
+        /** Face ids the last {@link #movePositions} touched (ascending face slot order). */
+        public int[] lastMovedFaceIds() {
+            return lastMovedFaceIds.clone();
+        }
+
+        @Override
+        public void close() {
+            nativeMesh.close();
+        }
+    }
+
+    /** The RENDER stage arrays of a native mesh as a {@link RenderMesh}. */
+    static RenderMesh renderMeshOf(CendaMesh m) {
+        return new RenderMesh(
+            m.floats(CendaMesh.A_CORNER_POSITIONS),
+            m.floats(CendaMesh.A_CORNER_UVS),
+            m.ints(CendaMesh.A_TRI_INDICES),
+            m.ints(CendaMesh.A_TRI_FACE_IDS),
+            m.ints(CendaMesh.A_LOOP_VERTICES),
+            m.csr(CendaMesh.A_VERTEX_CORNER_OFFSETS, CendaMesh.A_VERTEX_CORNERS));
+    }
+
+    /** The Java builder warned per face that fell back to a fan; the native one reports it in the face flags. */
+    private static void logTriangulationFallbacks(CendaMesh m) {
+        if (!logger.isWarnEnabled()) {
+            return;
+        }
+        int[] flags = m.ints(CendaMesh.A_FACE_FLAGS);
+        int[] offsets = null;
+        int[] faceIds = null;
+        for (int f = 0; f < flags.length; f++) {
+            if ((flags[f] & TRI_FALLBACK_FLAGS) != 0) {
+                if (offsets == null) {
+                    offsets = m.ints(CendaMesh.A_LOOP_OFFSETS);
+                    faceIds = m.ints(CendaMesh.A_FACE_IDS);
+                }
+                PolygonTriangulator.logFallback(flags[f] & TRI_FALLBACK_FLAGS, offsets[f + 1] - offsets[f],
+                    faceIds[f]);
+            }
+        }
     }
 
     /** True when a mapping is not the implicit default (another material, or a sub-region). */
@@ -149,6 +214,9 @@ public final class RenderMeshBuilder {
      * per coordinate) what the projection into {@code mapping}'s region gives —
      * UVs the editor itself projected and saved, as opposed to an authored UV
      * layout. False for a face without authored UVs.
+     *
+     * <p>The projection is the native one: the face alone (its loop positions, no authored UVs) derived with
+     * {@code mapping} (null = full region, no rotation).
      */
     public static boolean authoredUVsMatchProjection(EditableMesh mesh, EditableFace face,
                                                      FaceTextureMapping mapping, float tolerance) {
@@ -157,94 +225,27 @@ public final class RenderMeshBuilder {
             return false;
         }
         int n = face.loopLength();
-        Vector3f[] loop = new Vector3f[n];
+        EditableMesh single = new EditableMesh();
+        int[] loop = new int[n];
+        Vector3f p = new Vector3f();
         for (int i = 0; i < n; i++) {
-            loop[i] = mesh.position(face.vertexAt(i));
+            mesh.position(face.vertexAt(i), p);
+            loop[i] = single.addVertex(p);
         }
-        float[] projected = new float[n * 2];
-        projectFaceUVs(loop, projected, 0, mapping);
+        single.addFaceWithId(0, loop);
+        float[] projected;
+        try (CendaMesh m = CendaMesh.create()) {
+            if (mapping != null) {
+                m.setMappings(new int[]{0}, new FaceTextureMapping[]{mapping}, 1);
+            }
+            m.setFaces(single, CendaMesh.STAGE_RENDER);
+            projected = m.floats(CendaMesh.A_CORNER_UVS);
+        }
         for (int i = 0; i < projected.length; i++) {
             if (Math.abs(projected[i] - authored[i]) > tolerance) {
                 return false;
             }
         }
         return true;
-    }
-
-    /**
-     * Project a face's loop positions into its UV region: Newell normal →
-     * tangent frame → normalize projected bounds to 0..1 → V-flip → rotation →
-     * region. Identical math to the legacy per-face generator, minus the
-     * robust-normal brute force (the authoritative loop makes Newell exact).
-     */
-    private static void projectFaceUVs(Vector3f[] loop, float[] texCoords, int firstCorner,
-                                       FaceTextureMapping faceMapping) {
-        FaceTextureMapping.UVRegion uvRegion = (faceMapping != null)
-            ? faceMapping.uvRegion()
-            : FaceTextureMapping.FULL_REGION;
-        FaceTextureMapping.UVRotation rotation = (faceMapping != null)
-            ? faceMapping.uvRotation()
-            : FaceTextureMapping.UVRotation.NONE;
-
-        int n = loop.length;
-        Vector3f normal = PolygonTriangulator.newellNormal(loop);
-        // Tangent-frame validation expects a direction, not an area-scaled normal.
-        if (normal.lengthSquared() > 0) normal.normalize();
-        Vector3f[] frame = FaceProjectionUtil.computeTangentFrame(normal);
-        if (frame == null) {
-            // Degenerate face — center of the region for every corner.
-            for (int i = 0; i < n; i++) {
-                texCoords[(firstCorner + i) * 2]     = uvRegion.u0() + 0.5f * uvRegion.width();
-                texCoords[(firstCorner + i) * 2 + 1] = uvRegion.v0() + 0.5f * uvRegion.height();
-            }
-            return;
-        }
-
-        Vector3f tangent = frame[0];
-        Vector3f bitangent = frame[1];
-        Vector3f ref = loop[0];
-
-        float[] projS = new float[n];
-        float[] projT = new float[n];
-        float minS = Float.MAX_VALUE, maxS = -Float.MAX_VALUE;
-        float minT = Float.MAX_VALUE, maxT = -Float.MAX_VALUE;
-
-        for (int i = 0; i < n; i++) {
-            float dx = loop[i].x - ref.x;
-            float dy = loop[i].y - ref.y;
-            float dz = loop[i].z - ref.z;
-            projS[i] = dx * tangent.x + dy * tangent.y + dz * tangent.z;
-            projT[i] = dx * bitangent.x + dy * bitangent.y + dz * bitangent.z;
-            minS = Math.min(minS, projS[i]);
-            maxS = Math.max(maxS, projS[i]);
-            minT = Math.min(minT, projT[i]);
-            maxT = Math.max(maxT, projT[i]);
-        }
-
-        float rangeS = maxS - minS;
-        float rangeT = maxT - minT;
-
-        for (int i = 0; i < n; i++) {
-            float s = (rangeS > ModelingConstants.POSITION_EPSILON) ? (projS[i] - minS) / rangeS : 0.5f;
-            float t = (rangeT > ModelingConstants.POSITION_EPSILON) ? (projT[i] - minT) / rangeT : 0.5f;
-
-            // Flip V so texture top maps to face top (OpenGL UV origin is bottom-left).
-            t = 1.0f - t;
-
-            if (rotation != FaceTextureMapping.UVRotation.NONE) {
-                float rs, rt;
-                switch (rotation) {
-                    case CW_90  -> { rs = t;        rt = 1.0f - s; }
-                    case CW_180 -> { rs = 1.0f - s; rt = 1.0f - t; }
-                    case CW_270 -> { rs = 1.0f - t; rt = s;        }
-                    default     -> { rs = s;        rt = t;        }
-                }
-                s = rs;
-                t = rt;
-            }
-
-            texCoords[(firstCorner + i) * 2]     = uvRegion.u0() + s * uvRegion.width();
-            texCoords[(firstCorner + i) * 2 + 1] = uvRegion.v0() + t * uvRegion.height();
-        }
     }
 }

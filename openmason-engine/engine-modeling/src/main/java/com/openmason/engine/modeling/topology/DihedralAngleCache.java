@@ -1,12 +1,11 @@
 package com.openmason.engine.modeling.topology;
 
-import org.joml.Vector3f;
-
 /**
- * Per-edge dihedral angles with lazy dirty recomputation.
+ * Per-edge dihedral angles (radians, 0..pi; NaN unless the edge has exactly two faces).
  *
- * <p>Depends on {@link FaceGeometryCache} (ensures face normals are clean
- * before computing angles).
+ * <p>The values are the native mesh pipeline's ({@code co_mesh_*} TOPOLOGY stage, OpenMason #175 F3); a positions-only
+ * refresh copies the touched edges' new angles in through {@link MeshTopologyBuilder#refreshMoved}. The Java
+ * dirty-recompute this class used to carry is gone (it was never triggered: every edit rebuilt the topology).
  *
  * @see MeshTopologyBuilder
  */
@@ -14,26 +13,20 @@ public final class DihedralAngleCache {
 
     private final MeshEdge[] edges;
     private final float[] dihedralAngles;
-    private final boolean[] edgeDirty;
-    private final FaceGeometryCache faceGeometryCache;
 
     /**
      * Package-private constructor used by {@link MeshTopologyBuilder}.
      *
-     * @param edges             Edge array (shared reference)
-     * @param dihedralAngles    Pre-computed dihedral angles (owned by this cache)
-     * @param faceGeometryCache Face geometry cache for ensuring normals are clean
+     * @param edges          Edge array (shared reference)
+     * @param dihedralAngles Dihedral angles per edge (owned by this cache)
      */
-    DihedralAngleCache(MeshEdge[] edges, float[] dihedralAngles, FaceGeometryCache faceGeometryCache) {
+    DihedralAngleCache(MeshEdge[] edges, float[] dihedralAngles) {
         this.edges = edges;
         this.dihedralAngles = dihedralAngles;
-        this.edgeDirty = new boolean[edges.length];
-        this.faceGeometryCache = faceGeometryCache;
     }
 
     /**
      * Get the dihedral angle at an edge in radians.
-     * Lazily recomputes when dirtied by a vertex move.
      *
      * @param edgeId Edge identifier (0..edgeCount-1)
      * @return Angle in radians (0..pi), or {@code Float.NaN} if undefined or out of range
@@ -42,39 +35,13 @@ public final class DihedralAngleCache {
         if (edgeId < 0 || edgeId >= edges.length) {
             return Float.NaN;
         }
-        ensureClean(edgeId);
         return dihedralAngles[edgeId];
     }
 
-    /**
-     * Ensure the dihedral angle for an edge is up-to-date.
-     * Ensures adjacent face normals are clean first, then recomputes the angle.
-     * Package-private.
-     */
-    void ensureClean(int edgeId) {
-        if (edgeId < 0 || edgeId >= edgeDirty.length || !edgeDirty[edgeId]) {
-            return;
+    /** Replaces one edge's angle (a positions-only refresh). Package-private. */
+    void update(int edgeId, float angle) {
+        if (edgeId >= 0 && edgeId < dihedralAngles.length) {
+            dihedralAngles[edgeId] = angle;
         }
-        MeshEdge edge = edges[edgeId];
-        for (int faceId : edge.adjacentFaceIds()) {
-            faceGeometryCache.ensureFaceClean(faceId);
-        }
-        dihedralAngles[edgeId] = computeDihedralAngleForEdge(edge);
-        edgeDirty[edgeId] = false;
-    }
-
-    private float computeDihedralAngleForEdge(MeshEdge edge) {
-        int[] adjFaces = edge.adjacentFaceIds();
-        if (adjFaces.length != 2) {
-            return Float.NaN;
-        }
-        Vector3f[] normals = faceGeometryCache.normals();
-        int fA = adjFaces[0];
-        int fB = adjFaces[1];
-        if (fA < 0 || fA >= normals.length || fB < 0 || fB >= normals.length
-                || normals[fA] == null || normals[fB] == null) {
-            return Float.NaN;
-        }
-        return MeshGeometry.computeDihedralAngle(normals[fA], normals[fB]);
     }
 }

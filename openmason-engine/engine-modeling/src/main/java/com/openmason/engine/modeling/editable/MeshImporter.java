@@ -1,16 +1,11 @@
 package com.openmason.engine.modeling.editable;
 
+import com.openmason.engine.modeling.ModelingConstants;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.Arrays;
 import java.util.function.Consumer;
 
 /**
@@ -36,6 +31,13 @@ import java.util.function.Consumer;
  *
  * <p>Face ids are preserved verbatim — materials, UV regions and part face
  * ranges key off them.
+ *
+ * <p>Thin binding over the native mesh pipeline ({@code co_mesh_import}, {@link CendaMesh}; OpenMason #175 F3): every
+ * step above is native, bit for bit the Java this replaced ({@code MeshPipelineParityTest}), including the
+ * boundary-walk rules (a source with two boundary edges keeps its first position and its last target; the walk
+ * succeeds only when it closes over every boundary edge) and the authored-UV pick (the first soup corner of the face
+ * welded into the loop vertex). Face ids {@code >= 2^26} are refused natively (per-id arrays are sized by the
+ * largest id).
  */
 public final class MeshImporter {
 
@@ -112,204 +114,79 @@ public final class MeshImporter {
         if (vertices == null || vertices.length < 9 || indices == null || indices.length < 3) {
             return new ImportResult(mesh, new int[0][]);
         }
-
-        VertexWelder.WeldResult weld = VertexWelder.weld(vertices);
-        for (int w = 0; w < weld.weldedCount(); w++) {
-            mesh.addVertex(new Vector3f(
-                weld.weldedPositions()[w * 3],
-                weld.weldedPositions()[w * 3 + 1],
-                weld.weldedPositions()[w * 3 + 2]));
+        if (vertices.length % 3 != 0) {
+            throw new IllegalArgumentException(
+                "Vertex array length must be divisible by 3: " + vertices.length);
         }
+        int soupCount = vertices.length / 3;
+        boolean hasUVs = texCoords != null && texCoords.length >= soupCount * 2;
 
-        boolean hasUVs = texCoords != null && texCoords.length >= (vertices.length / 3) * 2;
+        try (CendaMesh m = CendaMesh.create()) {
+            m.importSoup(vertices, texCoords, indices, triangleToFaceId, ModelingConstants.POSITION_EPSILON, 0);
 
-        // Group non-degenerate triangles by face id; remember, per face, a soup
-        // corner for each welded id (for authored-UV lookup).
-        Map<Integer, List<int[]>> faceTriangles = new LinkedHashMap<>();
-        Map<Integer, Map<Integer, Integer>> faceWeldedToSoup = hasUVs ? new HashMap<>() : null;
-        int triangleCount = indices.length / 3;
-        int[] soupToWelded = weld.soupToWelded();
-
-        int skippedOutOfRange = 0;
-        for (int t = 0; t < triangleCount; t++) {
-            int sa = indices[t * 3];
-            int sb = indices[t * 3 + 1];
-            int sc = indices[t * 3 + 2];
-            if (sa < 0 || sa >= soupToWelded.length
-                    || sb < 0 || sb >= soupToWelded.length
-                    || sc < 0 || sc >= soupToWelded.length) {
-                // Corrupt input (indices past the vertex array) — dropping the
-                // triangle keeps the rest of the mesh usable instead of
-                // aborting the whole rebuild deep inside the pipeline.
-                skippedOutOfRange++;
-                continue;
-            }
-            int a = soupToWelded[sa];
-            int b = soupToWelded[sb];
-            int c = soupToWelded[sc];
-            if (a == b || b == c || a == c) {
-                continue; // degenerate after welding
-            }
-            int faceId = (triangleToFaceId != null && t < triangleToFaceId.length)
-                ? triangleToFaceId[t] : t;
-            if (faceId < 0) {
-                continue;
-            }
-            faceTriangles.computeIfAbsent(faceId, k -> new ArrayList<>()).add(new int[]{a, b, c});
-            if (hasUVs) {
-                Map<Integer, Integer> weldedToSoup =
-                    faceWeldedToSoup.computeIfAbsent(faceId, k -> new HashMap<>());
-                weldedToSoup.putIfAbsent(a, sa);
-                weldedToSoup.putIfAbsent(b, sb);
-                weldedToSoup.putIfAbsent(c, sc);
-            }
-        }
-        if (skippedOutOfRange > 0) {
-            logger.error("Import dropped {} triangle(s) whose indices exceed the {}-vertex soup "
-                    + "— the input geometry is corrupt (stale part ranges?)",
-                    skippedOutOfRange, soupToWelded.length);
-            emit(warningSink, new ImportWarning(-1, ImportWarning.Kind.CORRUPT_INDICES,
-                    skippedOutOfRange + " triangle(s) dropped: indices exceed the "
-                    + soupToWelded.length + "-vertex soup"));
-        }
-
-        for (Map.Entry<Integer, List<int[]>> entry : faceTriangles.entrySet()) {
-            int faceId = entry.getKey();
-            int[] loop = reconstructLoop(faceId, entry.getValue(), warningSink);
-            if (loop.length < 3) {
-                logger.warn("Face {} degenerate after welding ({} loop vertices) — skipped",
-                    faceId, loop.length);
-                emit(warningSink, new ImportWarning(faceId, ImportWarning.Kind.DEGENERATE_FACE,
-                        "face collapsed to " + loop.length + " loop vertices after welding"));
-                continue;
+            float[] positions = m.floats(CendaMesh.A_VERTEX_POSITIONS);
+            Vector3f p = new Vector3f();
+            for (int w = 0; w < positions.length / 3; w++) {
+                mesh.addVertex(p.set(positions[w * 3], positions[w * 3 + 1], positions[w * 3 + 2]));
             }
 
-            float[] cornerUVs = null;
-            if (hasUVs) {
-                Map<Integer, Integer> weldedToSoup = faceWeldedToSoup.get(faceId);
-                cornerUVs = new float[loop.length * 2];
-                for (int i = 0; i < loop.length; i++) {
-                    Integer soupIdx = weldedToSoup.get(loop[i]);
-                    if (soupIdx == null) {
-                        cornerUVs = null; // loop vertex not seen in triangles — bail out
-                        break;
-                    }
-                    cornerUVs[i * 2]     = texCoords[soupIdx * 2];
-                    cornerUVs[i * 2 + 1] = texCoords[soupIdx * 2 + 1];
-                }
+            // Warnings in the order Java's sink received them: CORRUPT_INDICES first, then per face in face order.
+            int[] warnings = m.ints(CendaMesh.A_WARNINGS);
+            for (int i = 0; i + 2 < warnings.length; i += 3) {
+                report(warnings[i], warnings[i + 1], warnings[i + 2], soupCount, warningSink);
             }
 
-            mesh.addFaceWithId(faceId, loop, cornerUVs);
-        }
-
-        // All soup indices per welded vertex (part-system index space) —
-        // welding crosses part boundaries, so every occurrence matters.
-        List<List<Integer>> soupPerVertex = new ArrayList<>(weld.weldedCount());
-        for (int w = 0; w < weld.weldedCount(); w++) {
-            soupPerVertex.add(new ArrayList<>(2));
-        }
-        for (int soupIdx = 0; soupIdx < soupToWelded.length; soupIdx++) {
-            soupPerVertex.get(soupToWelded[soupIdx]).add(soupIdx);
-        }
-        int[][] vertexIdToSoupIndices = new int[weld.weldedCount()][];
-        for (int w = 0; w < weld.weldedCount(); w++) {
-            List<Integer> list = soupPerVertex.get(w);
-            int[] arr = new int[list.size()];
-            for (int i = 0; i < arr.length; i++) {
-                arr[i] = list.get(i);
+            int[] faceIds = m.ints(CendaMesh.A_FACE_IDS);
+            int[] offsets = m.ints(CendaMesh.A_LOOP_OFFSETS);
+            int[] loops = m.ints(CendaMesh.A_LOOP_VERTICES);
+            int[] flags = m.ints(CendaMesh.A_FACE_FLAGS);
+            float[] loopUVs = m.floats(CendaMesh.A_LOOP_UVS);
+            for (int f = 0; f < faceIds.length; f++) {
+                int[] loop = Arrays.copyOfRange(loops, offsets[f], offsets[f + 1]);
+                float[] cornerUVs = (flags[f] & CendaMesh.FACE_AUTHORED_UVS) != 0
+                    ? Arrays.copyOfRange(loopUVs, offsets[f] * 2, offsets[f + 1] * 2)
+                    : null;
+                mesh.addFaceWithId(faceIds[f], loop, cornerUVs);
             }
-            vertexIdToSoupIndices[w] = arr;
-        }
 
-        logger.debug("Imported soup: {} soup vertices -> {} shared vertices, {} faces (authoredUVs={})",
-            vertices.length / 3, mesh.vertexCount(), mesh.faceCount(), hasUVs);
-        return new ImportResult(mesh, vertexIdToSoupIndices);
+            // All soup indices per welded vertex (part-system index space) —
+            // welding crosses part boundaries, so every occurrence matters.
+            int[][] vertexIdToSoupIndices = m.csr(CendaMesh.A_VERTEX_SOUP_OFFSETS, CendaMesh.A_VERTEX_SOUP);
+
+            logger.debug("Imported soup: {} soup vertices -> {} shared vertices, {} faces (authoredUVs={})",
+                soupCount, mesh.vertexCount(), mesh.faceCount(), hasUVs);
+            return new ImportResult(mesh, vertexIdToSoupIndices);
+        }
     }
 
-    /**
-     * Reconstruct a face's ordered polygon loop from its triangles (welded ids)
-     * via directed boundary-edge walking. Falls back to insertion order (with a
-     * warning) if the boundary chain does not close — which only happens for
-     * soup that was not produced by triangulating a simple polygon.
-     */
-    private static int[] reconstructLoop(int faceId, List<int[]> triangles,
-                                         Consumer<ImportWarning> warningSink) {
-        if (triangles.size() == 1) {
-            return triangles.get(0).clone();
-        }
-
-        // Count directed edges; boundary edges are those whose reverse never appears.
-        Map<Long, Integer> directedEdgeCounts = new LinkedHashMap<>();
-        for (int[] tri : triangles) {
-            directedEdgeCounts.merge(edgeKey(tri[0], tri[1]), 1, Integer::sum);
-            directedEdgeCounts.merge(edgeKey(tri[1], tri[2]), 1, Integer::sum);
-            directedEdgeCounts.merge(edgeKey(tri[2], tri[0]), 1, Integer::sum);
-        }
-
-        Map<Integer, Integer> boundaryNext = new LinkedHashMap<>();
-        for (Map.Entry<Long, Integer> entry : directedEdgeCounts.entrySet()) {
-            long key = entry.getKey();
-            int src = (int) (key >>> 32);
-            int dst = (int) key;
-            if (!directedEdgeCounts.containsKey(edgeKey(dst, src))) {
-                boundaryNext.put(src, dst);
+    /** Logs and emits one native import warning with the Java importer's wording. */
+    private static void report(int kind, int faceId, int value, int soupCount, Consumer<ImportWarning> sink) {
+        switch (kind) {
+            case CendaMesh.WARN_CORRUPT_INDICES -> {
+                logger.error("Import dropped {} triangle(s) whose indices exceed the {}-vertex soup "
+                        + "— the input geometry is corrupt (stale part ranges?)", value, soupCount);
+                emit(sink, new ImportWarning(-1, ImportWarning.Kind.CORRUPT_INDICES,
+                        value + " triangle(s) dropped: indices exceed the " + soupCount + "-vertex soup"));
             }
-        }
-
-        if (boundaryNext.size() >= 3) {
-            int start = triangles.get(0)[0];
-            if (!boundaryNext.containsKey(start)) {
-                start = boundaryNext.keySet().iterator().next();
+            case CendaMesh.WARN_BOUNDARY_WALK_FAILED -> {
+                logger.warn("Boundary walk failed for face {} ({} triangles) — using insertion-order fallback",
+                    faceId, value);
+                emit(sink, new ImportWarning(faceId, ImportWarning.Kind.BOUNDARY_WALK_FAILED,
+                        "boundary walk over " + value
+                        + " triangles did not close — soup is not a triangulated simple polygon"));
             }
-
-            List<Integer> polygon = new ArrayList<>(boundaryNext.size());
-            int current = start;
-            do {
-                polygon.add(current);
-                Integer next = boundaryNext.get(current);
-                if (next == null) {
-                    break;
-                }
-                current = next;
-            } while (current != start && polygon.size() < boundaryNext.size());
-
-            if (polygon.size() >= 3 && current == start && polygon.size() == boundaryNext.size()) {
-                int[] loop = new int[polygon.size()];
-                for (int i = 0; i < loop.length; i++) {
-                    loop[i] = polygon.get(i);
-                }
-                return loop;
+            case CendaMesh.WARN_DEGENERATE_FACE -> {
+                logger.warn("Face {} degenerate after welding ({} loop vertices) — skipped", faceId, value);
+                emit(sink, new ImportWarning(faceId, ImportWarning.Kind.DEGENERATE_FACE,
+                        "face collapsed to " + value + " loop vertices after welding"));
             }
+            default -> logger.warn("Unknown native import warning kind {} (face {}, value {})", kind, faceId, value);
         }
-
-        // Fallback: insertion order. Correct for fans; warn because winding
-        // is not guaranteed for other patterns.
-        logger.warn("Boundary walk failed for face {} ({} triangles) — using insertion-order fallback",
-            faceId, triangles.size());
-        emit(warningSink, new ImportWarning(faceId, ImportWarning.Kind.BOUNDARY_WALK_FAILED,
-                "boundary walk over " + triangles.size()
-                + " triangles did not close — soup is not a triangulated simple polygon"));
-        Set<Integer> seen = new LinkedHashSet<>();
-        for (int[] tri : triangles) {
-            seen.add(tri[0]);
-            seen.add(tri[1]);
-            seen.add(tri[2]);
-        }
-        int[] loop = new int[seen.size()];
-        int i = 0;
-        for (int v : seen) {
-            loop[i++] = v;
-        }
-        return loop;
     }
 
     private static void emit(Consumer<ImportWarning> sink, ImportWarning warning) {
         if (sink != null) {
             sink.accept(warning);
         }
-    }
-
-    private static long edgeKey(int src, int dst) {
-        return ((long) src << 32) | (dst & 0xFFFFFFFFL);
     }
 }

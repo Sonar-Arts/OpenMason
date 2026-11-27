@@ -38,16 +38,20 @@ public class ThumbnailCache {
 
         try {
             int textureId = generator.generate();
+            // A miss (no texture in the file) is cached too, under the same version (#175): the browser asks every
+            // frame, and an uncached miss re-read and decoded the whole file each time. A new version retries.
+            textureCache.put(key, Math.max(textureId, 0));
+            versionCache.put(key, version);
             if (textureId > 0) {
-                textureCache.put(key, textureId);
-                versionCache.put(key, version);
                 logger.trace("Generated thumbnail: {} (version {})", key, version);
                 return textureId;
             }
-            logger.warn("Failed to generate thumbnail: {}", key);
+            logger.debug("No thumbnail for: {} (version {})", key, version);
             return 0;
         } catch (Exception e) {
             logger.error("Error generating thumbnail: {}", key, e);
+            textureCache.put(key, 0);
+            versionCache.put(key, version);
             return 0;
         }
     }

@@ -78,7 +78,8 @@ public final class BoneStore {
     private Function<String, Matrix4f> externalParentResolver;
 
     /**
-     * Fired after any structural mutation (set, put, remove, clear) and pose change. Lets external
+     * Fired after any structural mutation (set, put, remove, clear), and after a pose change when no
+     * {@link #setOnPoseChange} callback is wired. Lets external
      * stores (e.g. a part manager that composes its transforms with bone matrices) rebuild.
      */
     private Runnable onChange;
@@ -106,6 +107,46 @@ public final class BoneStore {
 
     private void fireOnChange() {
         if (onChange != null) onChange.run();
+    }
+
+    /**
+     * Fired after a pose-layer change (set, one bone, clear) instead of {@link #setOnChange}'s callback when set: a
+     * pose only moves matrices (the editor draws it through the GPU palette, OpenMason #175 F2), so it need not
+     * rebuild what a rest edit rebuilds.
+     */
+    private Runnable onPoseChange;
+
+    /** Wire the pose-change callback (null = pose changes fire the {@link #setOnChange} callback). */
+    public void setOnPoseChange(Runnable onPoseChange) {
+        this.onPoseChange = onPoseChange;
+    }
+
+    private void firePoseChange() {
+        if (onPoseChange != null) {
+            onPoseChange.run();
+        } else {
+            fireOnChange();
+        }
+    }
+
+    // Gizmo interaction hooks (OpenMason #175 F2): a bone drag defers the part manager's re-bake to its release.
+    private Runnable interactionBegin;
+    private Runnable interactionEnd;
+
+    /** Wire what a viewport bone drag opens / closes (the part manager's transform interaction). */
+    public void setInteractionHooks(Runnable begin, Runnable end) {
+        this.interactionBegin = begin;
+        this.interactionEnd = end;
+    }
+
+    /** A viewport (gizmo) drag of a bone starts: rest edits until {@link #endEditInteraction} re-bake once. */
+    public void beginEditInteraction() {
+        if (interactionBegin != null) interactionBegin.run();
+    }
+
+    /** The drag ends: the deferred re-bake runs now. */
+    public void endEditInteraction() {
+        if (interactionEnd != null) interactionEnd.run();
     }
 
     /** Listeners told when the skeleton's CONTENT changes (not poses or selection, not a {@link #load}). */
@@ -276,7 +317,7 @@ public final class BoneStore {
      * Replace the whole pose layer and activate it. Bones absent from {@code poses} show their rest
      * values. {@code partRest} gives the parts' rest transforms for the duration of the pose.
      *
-     * @param notify fire the change callback (part rebuild) when something changed
+     * @param notify fire the pose-change callback when something changed
      * @return true when the effective pose changed (including activation)
      */
     public boolean setPose(Map<String, BonePose> poses, Function<String, PartTransform> partRest, boolean notify) {
@@ -293,7 +334,7 @@ public final class BoneStore {
         partRestLookup = partRest;
         if (changed) {
             invalidate();
-            if (notify) fireOnChange();
+            if (notify) firePoseChange();
         }
         return changed;
     }
@@ -306,7 +347,7 @@ public final class BoneStore {
         pose.put(boneId, next);
         poseActive = true;
         invalidate();
-        fireOnChange();
+        firePoseChange();
     }
 
     /**
@@ -322,7 +363,7 @@ public final class BoneStore {
         partRestLookup = null;
         if (was) {
             invalidate();
-            if (notify) fireOnChange();
+            if (notify) firePoseChange();
         }
         return was;
     }

@@ -44,8 +44,24 @@ public class ModelThumbnailRenderer {
             return 0;
         }
         String key = ThumbnailCache.omoKey(entry.pathString(), size);
-        long version = readMtime(entry.path());
+        long version = mtime(entry);
         return cache.getOrCreate(key, version, () -> generate(entry, size));
+    }
+
+    /** How long a file's last-modified time is trusted before it is read again (a stat per frame per entry). */
+    private static final long MTIME_RECHECK_NANOS = 1_000_000_000L;
+    private final java.util.Map<String, long[]> mtimes = new java.util.HashMap<>();
+
+    /** The file's mtime, re-read at most once a second per file (#175). */
+    private long mtime(AssetEntry entry) {
+        long now = System.nanoTime();
+        long[] cached = mtimes.get(entry.pathString());
+        if (cached != null && now - cached[1] < MTIME_RECHECK_NANOS) {
+            return cached[0];
+        }
+        long m = readMtime(entry.path());
+        mtimes.put(entry.pathString(), new long[] {m, now});
+        return m;
     }
 
     private int generate(AssetEntry entry, int size) {
