@@ -120,11 +120,13 @@ class ParticleAllocationTest {
      * Bytes allocated by 1200 frames, measured over up to five consecutive windows and returning the first that
      * allocates nothing (else the smallest). A real per-frame allocation shows in every window; a one-off JIT
      * recompilation (deoptimization re-materialises scalar-replaced objects, e.g. after another test trained the
-     * shared code differently) settles after the first. The meter's own cost is measured and subtracted.
+     * shared code differently) settles after the first. The meter's own cost (a boxed long per reflective call) is
+     * measured and subtracted: warmed up first, then the smallest of several samples - one early sample could catch
+     * the reflective call's one-off warm-up allocation, over-subtract, and turn a zero-allocation window into -32
+     * bytes (CI 2026-11-27). A window cannot allocate less than nothing, so each is clamped at 0.
      */
     static long steadyBytes(java.util.function.IntConsumer frames) {
-        long m0 = allocated();
-        long meterCost = allocated() - m0;
+        long meterCost = meterCost();
         long best = Long.MAX_VALUE;
         int i = 100_000;
         for (int window = 0; window < 5 && best != 0; window++) {
@@ -132,9 +134,20 @@ class ParticleAllocationTest {
             for (int k = 0; k < 1200; k++) {
                 frames.accept(i++);
             }
-            best = Math.min(best, allocated() - before - meterCost);
+            best = Math.min(best, Math.max(0, allocated() - before - meterCost));
         }
         return best;
+    }
+
+    /** The steady cost of one {@link #allocated()} call: warmed up, then the minimum over 32 samples. */
+    private static long meterCost() {
+        for (int k = 0; k < 256; k++) allocated();
+        long cost = Long.MAX_VALUE;
+        for (int k = 0; k < 32; k++) {
+            long m0 = allocated();
+            cost = Math.min(cost, allocated() - m0);
+        }
+        return Math.max(0, cost);
     }
 
     private static long allocated() {
