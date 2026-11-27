@@ -127,13 +127,17 @@ public final class Garment implements AutoCloseable {
         }
     }
 
-    /** GPU skin attributes over the TARGET's joints: draw with the body's palette. */
+    /** GPU skin form over the TARGET's joints (rig ABI 3 packing): draw with the body's palette. */
     public PackedSkin pack() {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment joints = arena.allocate(8L * vertexCount, 2);
-            MemorySegment weights = arena.allocate(4L * vertexCount, 1);
-            CendaAppearance.check((int) CendaAppearance.GARMENT_PACK.invokeExact(handle(), joints, weights), "pack");
-            return new PackedSkin(joints.toArray(ValueLayout.JAVA_SHORT), weights.toArray(ValueLayout.JAVA_BYTE));
+            int records = (int) CendaAppearance.GARMENT_PACK_SIZE.invokeExact(handle());
+            CendaAppearance.check(records, "pack_size");
+            MemorySegment ranges = arena.allocate(ValueLayout.JAVA_INT, 2L * Math.max(1, vertexCount));
+            MemorySegment influences = arena.allocate(ValueLayout.JAVA_SHORT, 2L * Math.max(1, records));
+            CendaAppearance.check((int) CendaAppearance.GARMENT_PACK.invokeExact(handle(), records, ranges, influences),
+                "pack");
+            return new PackedSkin(ranges.asSlice(0, 8L * vertexCount).toArray(ValueLayout.JAVA_INT),
+                influences.asSlice(0, 4L * records).toArray(ValueLayout.JAVA_SHORT));
         } catch (Throwable t) {
             throw CendaCharacter.rethrow(t);
         }

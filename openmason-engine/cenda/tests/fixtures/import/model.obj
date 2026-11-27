@@ -1,0 +1,33 @@
+# fixture
+mtllib model.mtl
+o Box
+v 0 0 0 1 0 0
+v 1 0 0 0 1 0
+v 1 1 0 0 0 1
+v 0 1 0 1 1 1
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+vn 0 0 1
+g front
+usemtl Wood
+s 1
+f 1/1/1 2/2/1 3/3/1 4/4/1
+s off
+f -4/-4/-1 -2/-2/-1 \
+  -1/-1/-1
+o Panel
+v 2 0 0
+v 3 0 0
+v 3.5 1 0
+v 2.5 2 0
+v 1.5 1 0
+g
+usemtl Paint
+s 2
+f 5//1 6//1 7//1 8//1 9//1
+usemtl Wood
+f 5/1 6/2 7/3
+usemtl Missing
+f 5 7 8

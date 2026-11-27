@@ -65,6 +65,7 @@ add_library(omformat STATIC
         src/omanimgraph_edit.cpp
         src/omlook.cpp
         src/omappearance.cpp
+        src/omo.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/builtin_profiles.cpp)
 target_include_directories(omformat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(cenda::omformat ALIAS omformat)
@@ -73,3 +74,6 @@ target_include_directories(omformat PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(omformat PRIVATE cenda_yyjson cenda_miniz cenda_warnings)
 # Linked into libcenda_kernels (a shared lib).
 set_target_properties(omformat PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
+
+# Model importers (glTF 2.0 + OBJ, OpenMason #173): their sources and pinned third-party deps live in one fragment.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/import.cmake)

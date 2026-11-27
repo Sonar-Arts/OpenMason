@@ -1,4 +1,4 @@
-/* Cenda character appearance (OpenMason #162, part of CC ABI 1; Roblox HumanoidDescription as data): what a
+/* Cenda character appearance (OpenMason #162, part of CC ABI 1, changed in CC ABI 2 by #170: garment packing; Roblox HumanoidDescription as data): what a
  * character looks like, as one small record that is saved with a player and sent to every client, resolved
  * natively against the character into what to draw. Consumed by Java via FFM (com.openmason.engine.character).
  *
@@ -128,8 +128,13 @@ int32_t cc_garment_vertex_count(const cc_garment* g);
 int32_t cc_garment_positions(const cc_garment* g, float* out);
 /* The weights over TARGET joint indices (owned by the garment): pose / deform with the body's palette. */
 const cr_skin* cc_garment_skin(const cc_garment* g);
-/* GPU attributes for the target's palette: 4 x u16 joints + 4 x unorm8 weights per vertex (cr_skin_pack). */
-int32_t cc_garment_pack(const cc_garment* g, uint16_t* out_joints, uint8_t* out_weights);
+/* GPU attributes for the target's palette in the rig.h ABI 3 packing (CC ABI 2; ABI 1 wrote 4 x u16 joints + 4 x
+ * unorm8 weights): per vertex a (offset, count) uint32 pair in out_ranges (vertex_count * 2), per influence a
+ * (joint, unorm16 weight) uint16 pair in out_influences (influence_capacity * 2), weights summing to exactly 65535;
+ * an unweighted vertex is (the fallback joint, 65535) - what cr_skin_pack writes with every vertex's part joint
+ * = the garment's fallback (ref 0's target). influence_capacity must be >= cc_garment_pack_size. */
+int32_t cc_garment_pack_size(const cc_garment* g);
+int32_t cc_garment_pack(const cc_garment* g, int32_t influence_capacity, uint32_t* out_ranges, uint16_t* out_influences);
 /* The target joint a ref resolved to (-1 = unresolved). */
 int32_t cc_garment_joint(const cc_garment* g, int32_t ref);
 

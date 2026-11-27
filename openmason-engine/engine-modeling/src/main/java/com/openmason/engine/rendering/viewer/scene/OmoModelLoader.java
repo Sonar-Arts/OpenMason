@@ -94,9 +94,10 @@ public final class OmoModelLoader implements ModelSource {
         List<ParsedMaterialData> materials = result.materials();
         if (materials != null && !materials.isEmpty()) {
             for (ParsedMaterialData material : materials) {
-                int textureId = material.texturePng() != null
-                        ? textureUploader.upload(material.texturePng())
-                        : 0;
+                // OMO 1.9: a material may have only a base colour (no PNG); keep it with a solid-colour texture
+                byte[] png = material.texturePng() != null ? material.texturePng()
+                        : material.baseColor() != null ? OMOFormat.solidColorPng(material.baseColor()) : null;
+                int textureId = png != null ? textureUploader.upload(png) : 0;
                 if (textureId <= 0) {
                     logger.warn("No texture for material {} ('{}') in {}",
                             material.materialId(), material.name(), displayName);

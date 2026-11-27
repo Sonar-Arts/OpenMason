@@ -27,8 +27,11 @@ public final class CendaRig {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CendaRig.class);
 
-    /** Must equal {@code CR_ABI_VERSION} in rig.h (build-kernels.sh checks both sides). */
-    static final int EXPECTED_ABI = 2;
+    /**
+     * Must equal {@code CR_ABI_VERSION} in rig.h; build-kernels.sh's {@code check_abi} compares the two before it
+     * builds. ABI 3 (OpenMason #170): unbounded skin influences (CSR import / export, variable-length GPU packing).
+     */
+    static final int EXPECTED_ABI = 3;
 
     static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     static final ValueLayout.OfFloat F32 = ValueLayout.JAVA_FLOAT;
@@ -46,8 +49,6 @@ public final class CendaRig {
     static final long LAYER_BYTES = 16;
     /** {@code cr_joint_extra}. */
     static final long EXTRA_BYTES = 24;
-    /** {@code cr_skin_entry}. */
-    static final long SKIN_ENTRY_BYTES = 40;
     /** {@code cr_pose_op} (ABI 2). */
     static final long OP_BYTES = 48;
     /** {@code cr_root_motion}. */
@@ -98,9 +99,13 @@ public final class CendaRig {
     static final MethodHandle SKIN_WEIGHTED_COUNT;
     static final MethodHandle SKIN_SET;
     static final MethodHandle SKIN_GET;
+    static final MethodHandle SKIN_INFLUENCE_COUNT;
+    static final MethodHandle SKIN_MAX_INFLUENCES;
+    static final MethodHandle SKIN_INFLUENCE_TOTAL;
     static final MethodHandle SKIN_JOINT_WEIGHTS;
     static final MethodHandle SKIN_IMPORT;
     static final MethodHandle SKIN_EXPORT;
+    static final MethodHandle SKIN_PACK_SIZE;
     static final MethodHandle SKIN_PACK;
     static final MethodHandle SKIN_AUTO_WEIGHTS;
     static final MethodHandle SKIN_PAINT;
@@ -227,13 +232,18 @@ public final class CendaRig {
         SKIN_VERTEX_COUNT = handle(lookup, "cr_skin_vertex_count", FunctionDescriptor.of(I32, ADDR), critical);
         SKIN_WEIGHTED_COUNT = handle(lookup, "cr_skin_weighted_count", FunctionDescriptor.of(I32, ADDR));
         SKIN_SET = handle(lookup, "cr_skin_set", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, I32));
-        SKIN_GET = handle(lookup, "cr_skin_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
+        SKIN_GET = handle(lookup, "cr_skin_get", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, I32));
+        SKIN_INFLUENCE_COUNT = handle(lookup, "cr_skin_influence_count", FunctionDescriptor.of(I32, ADDR, I32), critical);
+        SKIN_MAX_INFLUENCES = handle(lookup, "cr_skin_max_influences", FunctionDescriptor.of(I32, ADDR));
+        SKIN_INFLUENCE_TOTAL = handle(lookup, "cr_skin_influence_total", FunctionDescriptor.of(I32, ADDR));
         SKIN_JOINT_WEIGHTS = handle(lookup, "cr_skin_joint_weights", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
-        SKIN_IMPORT = handle(lookup, "cr_skin_import", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
-        SKIN_EXPORT = handle(lookup, "cr_skin_export", FunctionDescriptor.of(I32, ADDR, ADDR, I32));
-        SKIN_PACK = handle(lookup, "cr_skin_pack", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR));
+        SKIN_IMPORT = handle(lookup, "cr_skin_import", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR, ADDR, ADDR));
+        SKIN_EXPORT = handle(lookup, "cr_skin_export",
+            FunctionDescriptor.of(I32, ADDR, I32, I32, ADDR, ADDR, ADDR, ADDR));
+        SKIN_PACK_SIZE = handle(lookup, "cr_skin_pack_size", FunctionDescriptor.of(I32, ADDR));
+        SKIN_PACK = handle(lookup, "cr_skin_pack", FunctionDescriptor.of(I32, ADDR, ADDR, I32, ADDR, ADDR));
         SKIN_AUTO_WEIGHTS = handle(lookup, "cr_skin_auto_weights",
-            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, I32, ADDR, I32, F32, F32));
+            FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, I32, I32, ADDR, I32, F32, F32, I32));
         SKIN_PAINT = handle(lookup, "cr_skin_paint",
             FunctionDescriptor.of(I32, ADDR, ADDR, ADDR, ADDR, I32, ADDR, ADDR, F32, I32, I32, F32));
         SKIN_NORMALIZE = handle(lookup, "cr_skin_normalize", FunctionDescriptor.of(I32, ADDR));

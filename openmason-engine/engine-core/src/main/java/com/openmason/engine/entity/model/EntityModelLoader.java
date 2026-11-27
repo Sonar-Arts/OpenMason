@@ -314,10 +314,16 @@ public final class EntityModelLoader {
                 if (face.indexCount() > 0) usedMaterials.add(face.materialId());
             }
         }
+        // OMO 1.9 base colour multiplies the image; a colour-only material draws a 1x1 white image times it.
         Map<Integer, MaterialImage> materials = new HashMap<>();
         for (ParsedMaterialData material : omo.materials()) {
-            if (usedMaterials.contains(material.materialId()) && material.texturePng() != null) {
-                materials.put(material.materialId(), decodePng(material.texturePng()));
+            if (!usedMaterials.contains(material.materialId())) continue;
+            if (material.texturePng() != null) {
+                MaterialImage image = decodePng(material.texturePng());
+                materials.put(material.materialId(), material.baseColor() == null ? image
+                        : new MaterialImage(image.width(), image.height(), image.rgba(), material.baseColor()));
+            } else if (material.baseColor() != null) {
+                materials.put(material.materialId(), MaterialImage.solid(material.baseColor()));
             }
         }
 
@@ -327,12 +333,19 @@ public final class EntityModelLoader {
         float[] texCoords = mesh.texCoords() != null ? mesh.texCoords() : new float[0];
         int[]   indices   = mesh.indices()   != null ? mesh.indices()   : new int[0];
 
+        // Corner normals (OMO 1.9 shading, OpenMason #169), once per model, over the mesh as authored (parts shade
+        // apart, like separate Blender objects). Null = every corner flat: no shading section (OMO 1.9: absent =
+        // flat, so every older asset keeps its exact look) or nothing smooth in it.
+        short[] normals = cornerNormals(omo.shading(), parts, vertices, indices, mesh.triangleToFaceId());
+
         // A vertex is bound to ONE joint; a vertex two parts both index (none of the shipped models
         // has one) is duplicated so each part keeps moving its own copy, as the per-part draw did.
-        SplitMesh split = splitSharedVertices(parts, vertices, texCoords, indices);
+        // Per-vertex data (normals) follows the copies.
+        SplitMesh split = splitSharedVertices(parts, vertices, texCoords, indices, normals);
         vertices = split.vertices();
         texCoords = split.texCoords();
         indices = split.indices();
+        normals = split.normals();
 
         // Attachment points (OMO v1.7+)
         List<EntityAttachmentPoint> attachmentPoints = new ArrayList<>();
@@ -354,14 +367,71 @@ public final class EntityModelLoader {
                 partVertexStart, partJointOfVertex);
 
         return new EntityGeometry(vertices, texCoords, indices, parts, materials,
-                computeRestMinY(vertices, indices), attachmentPoints, rig);
+                computeRestMinY(vertices, indices), attachmentPoints, rig, normals);
     }
 
-    private record SplitMesh(float[] vertices, float[] texCoords, int[] indices) {}
+    /**
+     * The model's corner normals as {@link EntityGeometry#normals()}: {@code co_mesh_normals} over the authored soup
+     * (triangles grouped by the part whose faces draw them), with every corner of a FLAT face (and no custom normal)
+     * marked {@code (-32768, -32768)} so the renderer lights it with the drawn face's exact normal. A soup vertex's
+     * face is the face of its lowest triangle (the native rule). Null when nothing is smooth.
+     */
+    static short[] cornerNormals(OMOFormat.ShadingData shading, List<EntityPart> parts, float[] vertices,
+                                 int[] indices, int[] triangleToFaceId) {
+        if (shading == null) return null;
+        int[] smoothWords = shading.smoothWords();
+        int[] customVertices = shading.customNormalVertices();
+        boolean anySmooth = false;
+        for (int w : smoothWords) anySmooth |= w != 0;
+        if (!anySmooth && customVertices.length == 0) return null;
+        int vertexCount = vertices.length / 3;
+        int triangles = indices.length / 3;
+        int[] faceIds = triangleToFaceId != null && triangleToFaceId.length >= triangles ? triangleToFaceId : null;
 
-    /** Duplicates every vertex indexed by more than one part's faces (appended; indices rewritten). */
+        int[] groups = new int[triangles];
+        java.util.Arrays.fill(groups, parts.size());
+        for (int p = 0; p < parts.size(); p++) {
+            for (EntityFace f : parts.get(p).faces()) {
+                int end = Math.min(triangles, (f.indexStart() + f.indexCount()) / 3);
+                for (int t = Math.max(0, f.indexStart() / 3); t < end; t++) groups[t] = p;
+            }
+        }
+        Float autoSmooth = shading.autoSmoothAngle();
+        short[] oct = com.openmason.engine.format.omo.CendaNormals.meshNormals(vertices, indices, faceIds, groups,
+                smoothWords, shading.sharpEdges(), autoSmooth == null ? 0f : autoSmooth, customVertices,
+                shading.customNormalOct(), 0f).oct();
+
+        int[] faceOf = new int[vertexCount];
+        java.util.Arrays.fill(faceOf, -1);
+        for (int t = 0; t < triangles; t++) {
+            int face = faceIds != null ? faceIds[t] : t;
+            for (int k = 0; k < 3; k++) {
+                int v = indices[t * 3 + k];
+                if (v >= 0 && v < vertexCount && faceOf[v] < 0) faceOf[v] = face;
+            }
+        }
+        boolean[] custom = new boolean[vertexCount];
+        for (int v : customVertices) if (v >= 0 && v < vertexCount) custom[v] = true;
+        for (int v = 0; v < vertexCount; v++) {
+            int f = faceOf[v];
+            boolean smooth = f >= 0 && (f >> 5) < smoothWords.length && ((smoothWords[f >> 5] >>> (f & 31)) & 1) != 0;
+            if (!smooth && !custom[v]) {
+                oct[v * 2] = Short.MIN_VALUE;
+                oct[v * 2 + 1] = Short.MIN_VALUE;
+            }
+        }
+        return oct;
+    }
+
+    private record SplitMesh(float[] vertices, float[] texCoords, int[] indices, short[] normals) {}
+
+    /**
+     * Duplicates every vertex indexed by more than one part's faces (appended; indices rewritten). Per-vertex
+     * arrays riding the vertices (normals; morph / vertex-group rows once the runtime carries them) copy their
+     * source vertex's entry to the duplicate.
+     */
     private static SplitMesh splitSharedVertices(List<EntityPart> parts, float[] vertices, float[] texCoords,
-                                                 int[] indices) {
+                                                 int[] indices, short[] normals) {
         int vertexCount = vertices.length / 3;
         int[] owner = new int[vertexCount];
         java.util.Arrays.fill(owner, -1);
@@ -390,19 +460,21 @@ public final class EntityModelLoader {
                 }
             }
         }
-        if (rewritten == null) return new SplitMesh(vertices, texCoords, indices);
+        if (rewritten == null) return new SplitMesh(vertices, texCoords, indices, normals);
         logger.debug("Split {} vertices shared between parts", extraSources.size());
         int total = vertexCount + extraSources.size();
         float[] v2 = java.util.Arrays.copyOf(vertices, total * 3);
         boolean hasUv = texCoords.length >= vertexCount * 2;
         float[] t2 = hasUv ? java.util.Arrays.copyOf(texCoords, total * 2) : texCoords;
+        short[] n2 = normals == null ? null : java.util.Arrays.copyOf(normals, total * 2);
         for (int k = 0; k < extraSources.size(); k++) {
             int src = extraSources.get(k);
             int dst = vertexCount + k;
             System.arraycopy(vertices, src * 3, v2, dst * 3, 3);
             if (hasUv) System.arraycopy(texCoords, src * 2, t2, dst * 2, 2);
+            if (n2 != null) System.arraycopy(normals, src * 2, n2, dst * 2, 2);
         }
-        return new SplitMesh(v2, t2, rewritten);
+        return new SplitMesh(v2, t2, rewritten, n2);
     }
 
     /**

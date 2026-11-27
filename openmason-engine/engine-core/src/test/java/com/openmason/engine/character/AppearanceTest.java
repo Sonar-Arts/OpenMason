@@ -193,7 +193,8 @@ class AppearanceTest {
              Skin skin = Skin.create(n)) {
             def.setSkeleton(rig);
             def.autoMap(rig, humanoid);
-            skin.autoWeights(rig, positions, 0, n, new int[]{shoulder, elbow, wrist}, 2f, 0.01f);
+            skin.autoWeights(rig, positions, 0, n, new int[]{shoulder, elbow, wrist}, 2f, 0.01f,
+                Skin.UNLIMITED_INFLUENCES);
             try (Garment sleeve = Garment.fit(def, rig, null, null, refs, positions, skin)) {
                 assertEquals(0, sleeve.unresolved());
                 assertArrayEquals(positions, sleeve.positions());
@@ -214,11 +215,12 @@ class AppearanceTest {
                 try (Skin fitted = Skin.create(n)) {
                     // The garment's remapped weights deform it: rebuild them from the packed attributes.
                     for (int v = 0; v < n; v++) {
-                        int[] j = new int[4];
-                        float[] w = new float[4];
-                        for (int k = 0; k < 4; k++) {
-                            j[k] = packed.joints()[v * 4 + k] & 0xffff;
-                            w[k] = (packed.weights()[v * 4 + k] & 0xff) / 255f;
+                        int first = packed.ranges()[v * 2], count = packed.ranges()[v * 2 + 1];
+                        int[] j = new int[count];
+                        float[] w = new float[count];
+                        for (int k = 0; k < count; k++) {
+                            j[k] = Short.toUnsignedInt(packed.influences()[(first + k) * 2]);
+                            w[k] = Short.toUnsignedInt(packed.influences()[(first + k) * 2 + 1]) / 65535f;
                         }
                         fitted.set(v, j, w);
                     }
@@ -227,8 +229,8 @@ class AppearanceTest {
                     float[] direct = Skin.deform(skin, partOf, positions, body, null);
                     float worst = 0;
                     for (int i = 0; i < posed.length; i++) worst = Math.max(worst, Math.abs(posed[i] - direct[i]));
-                    // (8-bit packed weights vs the float skin.)
-                    assertTrue(worst < 2e-3f, "garment vs direct deformation " + worst);
+                    // (Rig ABI 3: the GPU packing carries the unorm16 weights the CPU deform uses, every influence.)
+                    assertTrue(worst < 1e-4f, "garment vs direct deformation " + worst);
                     // And it went with the arm: every ring's centre sits on the posed arm.
                     float d = 0;
                     for (int ring = 0; ring < n / 8; ring++) {

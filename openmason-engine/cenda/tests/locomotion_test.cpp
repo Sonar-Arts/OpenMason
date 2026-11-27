@@ -139,14 +139,34 @@ int32_t ground_fn(void* user, const cr_ground_probe* p, int32_t n, cr_ground_hit
 
 // ---- modifier stacks -----------------------------------------------------------------------------------------
 
-cr_modifier_desc legs_mod(int type, bool feet = true) {
-    cr_modifier_desc d{};
+// A modifier desc owning its joint / weight lists (rig ABI 3: the desc holds pointers + a count; copies re-point).
+struct Mod : cr_modifier_desc {
+    std::vector<int32_t> js;
+    std::vector<float> ws;
+    Mod() : cr_modifier_desc{} {}
+    Mod(const Mod& o) : cr_modifier_desc(o), js(o.js), ws(o.ws) { bind(); }
+    Mod& operator=(const Mod& o) {
+        static_cast<cr_modifier_desc&>(*this) = o;
+        js = o.js;
+        ws = o.ws;
+        bind();
+        return *this;
+    }
+    void bind() {
+        joint_count = static_cast<int32_t>(js.size());
+        joints = js.data();
+        joint_weights = ws.data();
+    }
+};
+
+Mod legs_mod(int type, bool feet = true) {
+    Mod d;
     d.type = type;
-    for (int& j : d.joints) j = -1;
     d.target = d.pole = -1;
     d.weight = 1.f;
-    const int js[] = {HIPS, UL, LL, feet ? FL : -1, UR, LR, feet ? FR : -1};
-    for (int j : js) d.joints[d.joint_count++] = j;
+    d.js = {HIPS, UL, LL, feet ? FL : -1, UR, LR, feet ? FR : -1};
+    d.ws.assign(d.js.size(), 0.f);
+    d.bind();
     return d;
 }
 
@@ -188,7 +208,7 @@ void apply(cr_modstack* s, cr_poses* p, float dt, const M* frame = nullptr) {
 void test_probe_layout_and_flat_ground() {
     cr_rig* rig = biped();
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d = legs_mod(CR_MOD_FOOT_PLACEMENT);
+    Mod d = legs_mod(CR_MOD_FOOT_PLACEMENT);
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 0);
     CHECK(s != nullptr);
     Ground g;
@@ -236,8 +256,12 @@ void test_probe_layout_and_flat_ground() {
     rest(p);
     CHECK(cr_modstack_apply(s, p, 0, 0.f) == CR_ERR_HOST);
     // Values: a type reads only its own keys.
-    CHECK(cr_modstack_set_value(s, 0, CR_VALUE_LOCK + 1, 1.f) == CR_OK);
-    CHECK(cr_modstack_set_value(s, 0, CR_VALUE_LOCK + 2, 1.f) == CR_ERR_RANGE);  // two legs only
+    CHECK(cr_modstack_set_value(s, 0, CR_VALUE_LEG(1, CR_LEG_LOCK), 1.f) == CR_OK);
+    CHECK(cr_modstack_set_value(s, 0, CR_VALUE_LEG(2, CR_LEG_LOCK), 1.f) == CR_ERR_RANGE);  // two legs only
+    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(1, CR_LEG_LOCK)) == 1.f);
+    CHECK(cr_modstack_set_value(s, 0, CR_VALUE_LEG(0, CR_LEG_OUT_LOCKED), 1.f) == CR_ERR_RANGE);  // an output
+    CHECK(cr_modstack_set_value(s, 0, CR_VALUE_LEG(0, 5), 1.f) == CR_ERR_RANGE);                  // a reserved field
+    CHECK(cr_modstack_set_value(s, 0, 8, 1.f) == CR_ERR_RANGE);  // the retired ABI 2 CR_VALUE_LOCK key
     CHECK(cr_modstack_set_value(s, 0, CR_VALUE_ANGLE, 1.f) == CR_ERR_RANGE);
     CHECK(cr_modstack_set_value(s, 0, CR_VALUE_MAX_ALIGN, NAN) == CR_ERR_ARG);
     CHECK(cr_modstack_get_value(s, 0, CR_VALUE_UNLOCK_TIME) == 0.15f);
@@ -249,7 +273,7 @@ void test_probe_layout_and_flat_ground() {
 void test_steps_holes_and_alignment() {
     cr_rig* rig = biped();
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d = legs_mod(CR_MOD_FOOT_PLACEMENT);
+    Mod d = legs_mod(CR_MOD_FOOT_PLACEMENT);
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 0);
     Ground g;
     cr_modstack_set_ground(s, ground_fn, &g);
@@ -278,7 +302,7 @@ void test_steps_holes_and_alignment() {
     // A stair edge under the left foot (heel over the lower tread, toe over the higher): it sits on the higher.
     w = run([](double x, double z) { return x < 0 && z < -0.1 ? 0.25 : 0.0; });
     CHECK(std::fabs(at(w, FL).y - (kAnkle + 0.25)) < 1e-4);
-    CHECK(std::fabs(cr_modstack_get_value(s, 0, CR_VALUE_OUT_GROUND) - 0.25f) < 1e-6f);
+    CHECK(std::fabs(cr_modstack_get_value(s, 0, CR_VALUE_LEG(0, CR_LEG_OUT_GROUND)) - 0.25f) < 1e-6f);
     // A 20 degree slope (rising toward +X): both feet roll 20 degrees; 50 degrees is clamped to 30.
     for (double slope : {20.0, 50.0}) {
         const double r = slope * PI / 180.0;
@@ -301,10 +325,10 @@ void test_steps_holes_and_alignment() {
 void test_locks() {
     cr_rig* rig = biped();
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d = legs_mod(CR_MOD_FOOT_PLACEMENT);
+    Mod d = legs_mod(CR_MOD_FOOT_PLACEMENT);
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 0);
     // Flat plane (no ground function). The character slides backward 2 cm a frame: a locked foot stays put.
-    cr_modstack_set_value(s, 0, CR_VALUE_LOCK + 0, 1.f);
+    cr_modstack_set_value(s, 0, CR_VALUE_LEG(0, CR_LEG_LOCK), 1.f);
     V planted;
     for (int f = 0; f < 10; ++f) {
         const M frame = translate(0, 0, 0.02 * f);
@@ -314,32 +338,32 @@ void test_locks() {
         if (f == 0) planted = at(w, FL);
         CHECK(len(sub(at(w, FL), planted)) < 1e-4);
         CHECK(std::fabs(at(w, FR).z - 0.02 * f) < 1e-5);  // the free foot rides along
-        CHECK(cr_modstack_get_value(s, 0, CR_VALUE_OUT_LOCKED) == 1.f);
+        CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(0, CR_LEG_OUT_LOCKED)) == 1.f);
     }
     // Release: the pull fades out over 0.15 s (3 frames of 0.05 s).
-    cr_modstack_set_value(s, 0, CR_VALUE_LOCK + 0, 0.f);
+    cr_modstack_set_value(s, 0, CR_VALUE_LEG(0, CR_LEG_LOCK), 0.f);
     const float fades[] = {2.f / 3.f, 1.f / 3.f, 0.f};
     for (float want : fades) {
         const M frame = translate(0, 0, 0.18);
         rest(p);
         apply(s, p, 0.05f, &frame);
-        CHECK(cr_modstack_get_value(s, 0, CR_VALUE_OUT_LOCKED) == 0.f);
-        CHECK(std::fabs(cr_modstack_get_value(s, 0, CR_VALUE_OUT_ALPHA) - want) < 1e-5f);
+        CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(0, CR_LEG_OUT_LOCKED)) == 0.f);
+        CHECK(std::fabs(cr_modstack_get_value(s, 0, CR_VALUE_LEG(0, CR_LEG_OUT_ALPHA)) - want) < 1e-5f);
     }
     // A lock further than max_lock_distance from the live foot lets go.
-    cr_modstack_set_value(s, 0, CR_VALUE_LOCK + 0, 1.f);
+    cr_modstack_set_value(s, 0, CR_VALUE_LEG(0, CR_LEG_LOCK), 1.f);
     cr_modstack_set_value(s, 0, CR_VALUE_UNLOCK_TIME, 0.f);
     M frame = translate(0, 0, 0);
     rest(p);
     apply(s, p, 0.05f, &frame);
-    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_OUT_LOCKED) == 1.f);
+    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(0, CR_LEG_OUT_LOCKED)) == 1.f);
     frame = translate(0, 0, 0.6);  // > 0.45 away
     rest(p);
     apply(s, p, 0.05f, &frame);
-    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_OUT_LOCKED) == 0.f);
+    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(0, CR_LEG_OUT_LOCKED)) == 0.f);
     // A partial lock pulls part way.
     cr_modstack_reset(s);
-    cr_modstack_set_value(s, 0, CR_VALUE_LOCK + 0, 0.5f);
+    cr_modstack_set_value(s, 0, CR_VALUE_LEG(0, CR_LEG_LOCK), 0.5f);
     frame = translate(0, 0, 0);
     rest(p);
     apply(s, p, 0.f, &frame);
@@ -355,7 +379,7 @@ void test_locks() {
 void test_leg_without_foot() {
     cr_rig* rig = biped();
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d = legs_mod(CR_MOD_FOOT_PLACEMENT, false);
+    Mod d = legs_mod(CR_MOD_FOOT_PLACEMENT, false);
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 0);
     CHECK(s != nullptr);
     Ground g;
@@ -376,7 +400,7 @@ void test_leg_without_foot() {
 void test_stride_warp() {
     cr_rig* rig = biped();
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d = legs_mod(CR_MOD_STRIDE_WARP);
+    Mod d = legs_mod(CR_MOD_STRIDE_WARP);
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 0);
     CHECK(s != nullptr);
     // Mid-stride: left leg 20 degrees forward, right 20 back, both knees a little bent.
@@ -411,17 +435,13 @@ void test_stride_warp() {
 void test_orientation_warp() {
     cr_rig* rig = biped();
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d{};
+    Mod d;
     d.type = CR_MOD_ORIENT_WARP;
-    for (int& j : d.joints) j = -1;
     d.target = d.pole = -1;
     d.weight = 1.f;
-    d.joints[0] = HIPS;
-    d.joints[1] = SPINE;
-    d.joints[2] = CHEST;
-    d.joint_weights[1] = 1.f;
-    d.joint_weights[2] = 3.f;
-    d.joint_count = 3;
+    d.js = {HIPS, SPINE, CHEST};
+    d.ws = {0.f, 1.f, 3.f};
+    d.bind();
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 0);
     CHECK(s != nullptr);
     rest(p);
@@ -632,6 +652,22 @@ void test_graph_format() {
     refused(json, "\"speedParam\": \"speed\"", "\"speedParam\": \"speed\", \"rateMin\": 2");  // rateMin > rateMax
     refused(json, "\"weightParam\": \"place\",", "\"weightParam\": \"place\", \"maxAlign\": 120,");
     refused(json, "\"lockCurve\": \"foot_lock_l\"", "\"lockMarkers\": [\"L\"]");
+    // No fixed caps (rig ABI 3): six stride legs and a 20-joint spine load (ABI 2 refused > 5 legs / > 15 spine).
+    {
+        std::string doc = json;
+        const std::string legs = R"({"upper": "upper_leg_r", "mid": "lower_leg_r", "end": "foot_r"}],)";
+        const std::string more = R"({"upper": "upper_leg_r", "mid": "lower_leg_r", "end": "foot_r"},)";
+        doc.replace(doc.find(legs), legs.size(), more + more + more + more + legs);
+        const std::string spine = R"("spine": [{"joint": "spine"}, {"joint": "chest"}])";
+        std::string many = R"("spine": [)";
+        for (int k = 0; k < 20; ++k) many += std::string(k > 0 ? ", " : "") + R"({"joint": "spine"})";
+        doc.replace(doc.find(spine), spine.size(), many + "]");
+        int32_t r = 0;
+        cg_graph* big = cg_graph_read(doc.data(), static_cast<int64_t>(doc.size()), &r);
+        if (big == nullptr) std::fprintf(stderr, "graph refused: %s\n", cg_last_error());
+        CHECK(big != nullptr && r == CG_OK);
+        cg_graph_destroy(big);
+    }
 }
 
 void test_graph_rates_and_locks() {
@@ -668,8 +704,8 @@ void test_graph_rates_and_locks() {
         a.step(1.f / 60.f, bf);
         b.step(1.f / 60.f, bf);
         CHECK(std::memcmp(a.world.data(), b.world.data(), a.world.size() * sizeof(float)) == 0);
-        locked_frames += a.value(2, CR_VALUE_OUT_LOCKED) == 1.f ? 1 : 0;
-        CHECK(a.value(2, CR_VALUE_OUT_LOCKED) == b.value(2, CR_VALUE_OUT_LOCKED));
+        locked_frames += a.value(2, CR_VALUE_LEG(0, CR_LEG_OUT_LOCKED)) == 1.f ? 1 : 0;
+        CHECK(a.value(2, CR_VALUE_LEG(0, CR_LEG_OUT_LOCKED)) == b.value(2, CR_VALUE_LEG(0, CR_LEG_OUT_LOCKED)));
     }
     CHECK(locked_frames > 100 && locked_frames < 125);  // the left foot: 14 of 30 keys
 }
@@ -700,8 +736,8 @@ double climb(double rise, double run, bool place, double* slide_out, int* checke
         for (int k = 0; k < 2; ++k) {
             const int foot = k == 0 ? FL : FR;
             // Contact = the clip's stance (its lock curve), fully locked when foot placement runs.
-            const bool full = w.value(2, CR_VALUE_LOCK + k) == 1.f
-                && (!place || (w.value(2, CR_VALUE_OUT_LOCKED + k) == 1.f && w.value(2, CR_VALUE_OUT_ALPHA + k) == 1.f));
+            const bool full = w.value(2, CR_VALUE_LEG(k, CR_LEG_LOCK)) == 1.f
+                && (!place || (w.value(2, CR_VALUE_LEG(k, CR_LEG_OUT_LOCKED)) == 1.f && w.value(2, CR_VALUE_LEG(k, CR_LEG_OUT_ALPHA)) == 1.f));
             const V ankle = at(w.world, foot), toe = at(w.child, foot);
             if (full && z < -0.5 && f > 30) {
                 // The tread it stands on: the higher of the ones under its heel (ankle) and toe.
@@ -712,7 +748,7 @@ double climb(double rise, double run, bool place, double* slide_out, int* checke
                     std::printf("  f=%d k=%d z=%.3f root=%.3f ankle=(%.3f %.3f %.3f) toe z=%.3f ground=%.3f err=%.4f pelvis=%.3f "
                                 "thigh-ankle %.4f thigh-knee %.4f knee-ankle %.4f lockin %.2f\n",
                                 f, k, z, y, ankle.x, ankle.y, ankle.z, toe.z, ground, err, w.value(2, CR_VALUE_OUT_PELVIS),
-                                len(sub(ankle, thigh)), len(sub(knee, thigh)), len(sub(ankle, knee)), w.value(2, CR_VALUE_LOCK + k));
+                                len(sub(ankle, thigh)), len(sub(knee, thigh)), len(sub(ankle, knee)), w.value(2, CR_VALUE_LEG(k, CR_LEG_LOCK)));
                 }
                 worst = std::max(worst, err);
                 ++checked;
@@ -785,7 +821,7 @@ double drift_per_step(bool stride, bool locks, double speed_scale) {
         w.step(1.f / 60.f, base);
         // Contact = the lock curve (the clip's stance phases), read back from the modifier's lock input.
         for (int k = 0; k < 2; ++k) {
-            const bool contact = w.value(2, CR_VALUE_LOCK + k) > 0.5f;
+            const bool contact = w.value(2, CR_VALUE_LEG(k, CR_LEG_LOCK)) > 0.5f;
             const V ankle = at(w.world, k == 0 ? FL : FR);
             if (contact && !down[k]) start[k] = ankle;
             if (!contact && down[k] && f > 60) {
@@ -814,6 +850,69 @@ void bench_drift() {
 
 }  // namespace
 
+// Six legs (rig ABI 3; ABI 2 stopped at 5): one ground call for all twelve probes, every foot placed, per-leg
+// values keyed CR_VALUE_LEG for leg 5 too.
+void test_six_legs() {
+    std::vector<cr_joint_desc> j = {bone(-1, 0, kHipsY, 0, 0, 0, 0)};
+    std::vector<int32_t> joints = {0};
+    for (int k = 0; k < 6; ++k) {
+        const float x = k % 2 == 0 ? -kHalfHips : kHalfHips, z = -0.4f + 0.4f * static_cast<float>(k / 2);
+        const int up = static_cast<int>(j.size());
+        j.push_back(bone(0, x, 0, z, 0, -kThigh, 0));
+        j.push_back(bone(up, 0, 0, 0, 0, -kShin, 0));
+        j.push_back(bone(up + 1, 0, 0, 0, 0, -0.1f, -0.2f));
+        joints.insert(joints.end(), {up, up + 1, up + 2});
+    }
+    const int n = static_cast<int>(j.size());
+    cr_rig* rig = cr_rig_create(j.data(), n, nullptr, nullptr);
+    cr_poses* p = cr_poses_create(rig, 1);
+    cr_modifier_desc d{};
+    d.type = CR_MOD_FOOT_PLACEMENT;
+    d.target = d.pole = -1;
+    d.weight = 1.f;
+    d.joint_count = static_cast<int32_t>(joints.size());
+    d.joints = joints.data();  // joint_weights NULL = every weight 0
+    cr_modstack* s = cr_modstack_create(rig, &d, 1, 0);
+    CHECK(s != nullptr);
+    Ground g;
+    g.height = [](double x, double) { return x < 0 ? 0.1 : 0.0; };
+    CHECK(cr_modstack_set_ground(s, ground_fn, &g) == CR_OK);
+    rest(p);
+    apply(s, p, 0.f);
+    std::vector<float> w(static_cast<size_t>(n) * 16);
+    CHECK(cr_poses_compose(p, 0, nullptr, 0, nullptr, nullptr, w.data(), nullptr) == CR_OK);
+    CHECK(g.calls == 1 && g.seen.size() == 12);
+    for (size_t i = 0; i < g.seen.size(); ++i) CHECK(g.seen[i].foot == static_cast<int>(i / 2) && g.seen[i].point == static_cast<int>(i % 2));
+    CHECK(std::fabs(at(w, 0).y - kHipsY) < 1e-6);  // the lowest foot needs no drop
+    for (int k = 0; k < 6; ++k) {
+        const double want = kAnkle + (k % 2 == 0 ? 0.1 : 0.0);
+        CHECK(std::fabs(at(w, 3 + 3 * k).y - want) < 1e-4);
+        CHECK(std::fabs(cr_modstack_get_value(s, 0, CR_VALUE_LEG(k, CR_LEG_OUT_GROUND)) - (k % 2 == 0 ? 0.1f : 0.f)) < 1e-6f);
+    }
+    CHECK(cr_modstack_set_value(s, 0, CR_VALUE_LEG(5, CR_LEG_LOCK), 1.f) == CR_OK);
+    CHECK(cr_modstack_set_value(s, 0, CR_VALUE_LEG(6, CR_LEG_LOCK), 1.f) == CR_ERR_RANGE);
+    apply(s, p, 1.f / 60.f);
+    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(5, CR_LEG_OUT_LOCKED)) == 1.f);
+    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(4, CR_LEG_OUT_LOCKED)) == 0.f);
+    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(6, CR_LEG_OUT_LOCKED)) == 0.f);  // past the leg count
+    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(6, CR_LEG_LOCK)) == 0.f);
+    CHECK(cr_modstack_get_value(s, 0, CR_VALUE_LEG(5, CR_LEG_LOCK)) == 1.f);
+    CHECK(cr_modstack_get_value(s, 0, 66) == 0.f && cr_modstack_get_value(s, 0, 80) == 0.f);  // retired ABI 2 outputs
+    // Stride warping takes six legs too.
+    d.type = CR_MOD_STRIDE_WARP;
+    cr_modstack* sw = cr_modstack_create(rig, &d, 1, 0);
+    CHECK(sw != nullptr);
+    CHECK(cr_modstack_set_value(sw, 0, CR_VALUE_SCALE, 1.2f) == CR_OK);
+    CHECK(cr_modstack_set_value(sw, 0, CR_VALUE_LEG(0, CR_LEG_LOCK), 1.f) == CR_ERR_RANGE);  // stride: no leg keys
+    for (int f = 0; f < 4; ++f) CHECK(cr_modstack_get_value(sw, 0, CR_VALUE_LEG(2, f)) == 0.f);
+    rest(p);
+    CHECK(cr_modstack_apply(sw, p, 0, 0.f) == CR_OK);
+    cr_modstack_destroy(sw);
+    cr_modstack_destroy(s);
+    cr_poses_destroy(p);
+    cr_rig_destroy(rig);
+}
+
 int main() {
     test_probe_layout_and_flat_ground();
     test_steps_holes_and_alignment();
@@ -821,6 +920,7 @@ int main() {
     test_leg_without_foot();
     test_stride_warp();
     test_orientation_warp();
+    test_six_legs();
     test_graph_format();
     test_graph_rates_and_locks();
     test_staircase_acceptance();

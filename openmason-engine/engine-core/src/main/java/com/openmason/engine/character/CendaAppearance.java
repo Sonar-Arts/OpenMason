@@ -55,6 +55,7 @@ final class CendaAppearance {
     static final MethodHandle GARMENT_VERTEX_COUNT;
     static final MethodHandle GARMENT_POSITIONS;
     static final MethodHandle GARMENT_SKIN;
+    static final MethodHandle GARMENT_PACK_SIZE;
     static final MethodHandle GARMENT_PACK;
     static final MethodHandle GARMENT_JOINT;
     static final MethodHandle APP_CREATE;
@@ -107,7 +108,8 @@ final class CendaAppearance {
         GARMENT_VERTEX_COUNT = handle(lookup, "cc_garment_vertex_count", FunctionDescriptor.of(I32, ADDR));
         GARMENT_POSITIONS = handle(lookup, "cc_garment_positions", FunctionDescriptor.of(I32, ADDR, ADDR));
         GARMENT_SKIN = handle(lookup, "cc_garment_skin", FunctionDescriptor.of(ADDR, ADDR));
-        GARMENT_PACK = handle(lookup, "cc_garment_pack", FunctionDescriptor.of(I32, ADDR, ADDR, ADDR));
+        GARMENT_PACK_SIZE = handle(lookup, "cc_garment_pack_size", FunctionDescriptor.of(I32, ADDR));
+        GARMENT_PACK = handle(lookup, "cc_garment_pack", FunctionDescriptor.of(I32, ADDR, I32, ADDR, ADDR));
         GARMENT_JOINT = handle(lookup, "cc_garment_joint", FunctionDescriptor.of(I32, ADDR, I32));
         APP_CREATE = handle(lookup, "cc_appearance_create", FunctionDescriptor.of(ADDR, ADDR, ADDR, ADDR, ADDR));
         APP_DESTROY = handle(lookup, "cc_appearance_destroy", FunctionDescriptor.ofVoid(ADDR));

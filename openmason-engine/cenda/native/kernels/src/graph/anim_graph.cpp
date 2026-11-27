@@ -228,8 +228,8 @@ struct StrideRt {
 struct FootRt {
     int mod = -1, stack = -1;
     int legs = 0;
-    std::string curve[CR_MAX_LEGS];
-    int channel[CR_MAX_LEGS]{-1, -1, -1, -1, -1};
+    std::vector<std::string> curve;  // per leg (any number since rig ABI 3)
+    std::vector<int> channel;        // per leg, -1 = none
 };
 
 struct SlotRt {
@@ -1082,13 +1082,14 @@ void feed_locomotion(cg_instance& inst) {
     for (const FootRt& r : inst.feet) {
         for (int k = 0; k < r.legs; ++k) {
             float lock = 0.f;
-            if (!r.curve[k].empty()) {
-                const int32_t cv = cg_instance_curve_find(&inst, r.curve[k].c_str());
+            const size_t kk = static_cast<size_t>(k);
+            if (!r.curve[kk].empty()) {
+                const int32_t cv = cg_instance_curve_find(&inst, r.curve[kk].c_str());
                 lock = cv >= 0 ? inst.curve_values[static_cast<size_t>(cv)] : 0.f;
-            } else if (r.channel[k] >= 0) {
-                lock = static_cast<float>(inst.lock_acc[static_cast<size_t>(r.channel[k])]);
+            } else if (r.channel[kk] >= 0) {
+                lock = static_cast<float>(inst.lock_acc[static_cast<size_t>(r.channel[kk])]);
             }
-            cr_modstack_set_value(inst.mods, r.stack, CR_VALUE_LOCK + k, std::clamp(lock, 0.f, 1.f));
+            cr_modstack_set_value(inst.mods, r.stack, CR_VALUE_LEG(k, CR_LEG_LOCK), std::clamp(lock, 0.f, 1.f));
         }
     }
 }
@@ -1343,11 +1344,13 @@ void build_locomotion(cg_instance& inst) {
                 r.mod = static_cast<int>(i);
                 r.stack = si;
                 r.legs = static_cast<int>(m.legs.size());
+                r.curve.assign(m.legs.size(), std::string());
+                r.channel.assign(m.legs.size(), -1);
                 for (int k = 0; k < r.legs; ++k) {
                     const og::Leg& l = m.legs[static_cast<size_t>(k)];
-                    r.curve[k] = l.lock_curve;
+                    r.curve[static_cast<size_t>(k)] = l.lock_curve;
                     if (!l.lock_down.empty()) {
-                        r.channel[k] = static_cast<int>(inst.lock_markers.size());
+                        r.channel[static_cast<size_t>(k)] = static_cast<int>(inst.lock_markers.size());
                         inst.lock_markers.emplace_back(l.lock_down, l.lock_up);
                     }
                 }
@@ -1383,19 +1386,28 @@ int32_t build_modifiers(cg_instance& inst) {
     if (d.modifiers.empty()) return 0;
     int32_t unresolved = 0;
     std::vector<cr_modifier_desc> descs;
+    // Each desc's joint list (rig ABI 3: pointer + count, any length); cr_modstack_create copies them.
+    std::vector<std::vector<int32_t>> desc_joints;
+    std::vector<std::vector<float>> desc_weights;
     std::vector<cr_target> statics;
     std::vector<std::pair<int, int>> aliases;  // (static index, host target)
     for (size_t i = 0; i < d.modifiers.size(); ++i) {
         const og::Modifier& m = d.modifiers[i];
         cr_modifier_desc c{};
-        for (int& j : c.joints) j = -1;
         c.target = c.pole = -1;
         c.weight = m.weight;
+        std::vector<int32_t> js;
+        std::vector<float> ws;
         bool ok = true;
-        auto joint = [&](const std::string& ref) {
+        // Appends a joint with its weight (0 = none given).
+        auto push = [&](int32_t j, float w) {
+            js.push_back(j);
+            ws.push_back(w);
+        };
+        auto joint = [&](const std::string& ref, float w = 0.f) {
             const int j = resolve_joint(inst, ref);
             ok &= j >= 0;
-            c.joints[c.joint_count++] = j;
+            push(j, w);
         };
         auto target = [&](const std::string& ref, int32_t& slot) {
             int s = -1;
@@ -1424,10 +1436,7 @@ int32_t build_modifiers(cg_instance& inst) {
                 break;
             case og::ModType::Aim:
                 c.type = CR_MOD_AIM;
-                for (const og::AimJoint& a : m.aim) {
-                    c.joint_weights[c.joint_count] = a.weight;
-                    joint(a.joint);
-                }
+                for (const og::AimJoint& a : m.aim) joint(a.joint, a.weight);
                 target(m.target, c.target);
                 std::copy(m.axis, m.axis + 3, c.p);
                 if (m.each) c.flags |= CR_MOD_AIM_EACH;
@@ -1457,15 +1466,12 @@ int32_t build_modifiers(cg_instance& inst) {
                 break;
             case og::ModType::FullBody: {
                 c.type = CR_MOD_FULL_BODY;
-                joint(m.body);
-                c.joint_weights[0] = m.hip_weight;
+                joint(m.body, m.hip_weight);
                 // One consecutive slot per limb: static targets go straight in, host targets are aliased.
                 const size_t first = statics.size();
                 for (const og::Limb& l : m.limbs) {
-                    c.joint_weights[c.joint_count] = l.pull;
-                    c.joint_weights[c.joint_count + 1] = l.reach;
-                    joint(l.upper);
-                    joint(l.mid);
+                    joint(l.upper, l.pull);
+                    joint(l.mid, l.reach);
                     joint(l.end);
                     statics.push_back(cr_target{});
                 }
@@ -1496,8 +1502,7 @@ int32_t build_modifiers(cg_instance& inst) {
                         ++unresolved;
                         continue;
                     }
-                    c.joint_weights[c.joint_count] = a.weight;
-                    c.joints[c.joint_count++] = j;
+                    push(j, a.weight);
                 }
                 break;
             case og::ModType::StrideWarp:
@@ -1513,7 +1518,7 @@ int32_t build_modifiers(cg_instance& inst) {
                         e = resolve_joint(inst, l.end);
                         if (e < 0) ++unresolved;
                     }
-                    c.joints[c.joint_count++] = e;
+                    push(e, 0.f);
                 }
                 break;
         }
@@ -1522,7 +1527,14 @@ int32_t build_modifiers(cg_instance& inst) {
             continue;
         }
         inst.mod_index[i] = static_cast<int>(descs.size());
+        c.joint_count = static_cast<int32_t>(js.size());
         descs.push_back(c);
+        desc_joints.push_back(std::move(js));
+        desc_weights.push_back(std::move(ws));
+    }
+    for (size_t k = 0; k < descs.size(); ++k) {
+        descs[k].joints = desc_joints[k].data();
+        descs[k].joint_weights = desc_weights[k].data();
     }
     const int32_t slots = static_cast<int32_t>(d.targets.size() + statics.size());
     inst.mods = cr_modstack_create(inst.rig, descs.data(), static_cast<int32_t>(descs.size()), slots);

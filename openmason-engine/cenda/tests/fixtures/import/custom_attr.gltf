@@ -1,0 +1,96 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "OpenMason import fixtures"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 36
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 36,
+   "byteLength": 12
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 12,
+   "byteStride": 4
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 60,
+   "byteLength": 36
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC3",
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "max": [
+    1,
+    1,
+    0
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 3,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5121,
+   "count": 3,
+   "type": "SCALAR",
+   "normalized": true
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC3"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Jacket",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "_COVERED_JACKET": 1,
+      "_MASK": 2,
+      "COLOR_0": 3
+     },
+     "extras": {
+      "prim": 1
+     }
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Jacket",
+   "mesh": 0
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 96,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAD8AAIA/AAAAAP8AAAAzAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/"
+  }
+ ]
+}

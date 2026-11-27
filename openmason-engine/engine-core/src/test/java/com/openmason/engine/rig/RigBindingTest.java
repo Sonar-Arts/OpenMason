@@ -139,15 +139,18 @@ class RigBindingTest {
         assertEquals(3, inf.vertex(), "arm local vertex 1 = combined vertex 2+1");
         PackedSkin packed = m.packed();
         assertEquals(4, packed.vertexCount());
-        // Vertex 0: rigid to body (joint 0).
-        assertEquals(0, packed.joints()[0]);
-        assertEquals(255, packed.weights()[0] & 0xFF);
-        // Vertex 3: spine (joint 2) 0.75, body (joint 0) 0.25.
-        assertEquals(2, packed.joints()[12]);
-        assertEquals(0, packed.joints()[13]);
-        int w0 = packed.weights()[12] & 0xFF, w1 = packed.weights()[13] & 0xFF;
-        assertEquals(255, w0 + w1);
-        assertEquals(191, w0, 1);
+        assertEquals(5, packed.influenceCount(), "3 rigid vertices + 2 influences");
+        // Vertex 0: rigid to body (joint 0): one influence of weight 65535.
+        assertArrayEquals(new int[]{0, 1}, java.util.Arrays.copyOfRange(packed.ranges(), 0, 2));
+        assertEquals(0, packed.influences()[0]);
+        assertEquals(65535, Short.toUnsignedInt(packed.influences()[1]));
+        // Vertex 3: spine (joint 2) 0.75, body (joint 0) 0.25 - records 3 and 4, unorm16 summing to 65535.
+        assertArrayEquals(new int[]{3, 2}, java.util.Arrays.copyOfRange(packed.ranges(), 6, 8));
+        assertEquals(2, packed.influences()[6]);
+        assertEquals(0, packed.influences()[8]);
+        int w0 = Short.toUnsignedInt(packed.influences()[7]), w1 = Short.toUnsignedInt(packed.influences()[9]);
+        assertEquals(65535, w0 + w1);
+        assertEquals(49151, w0);
         assertTrue(m.joints().get(2).hasGeometry(), "the spine moves skinned geometry");
     }
 
@@ -161,7 +164,7 @@ class RigBindingTest {
             Skin.Influence got = skin.get(1);
             assertEquals(2, got.joints().length);
             assertEquals(0.5f, got.weights()[0], EPS);
-            skin.autoWeights(m.rig(), positions, 2, 2, new int[]{2}, 0f, 0f);
+            skin.autoWeights(m.rig(), positions, 2, 2, new int[]{2}, 0f, 0f, Skin.UNLIMITED_INFLUENCES);
             assertArrayEquals(new int[]{2}, skin.get(3).joints());
             float[] heat = skin.jointWeights(2, m.partJointOfVertex());
             assertEquals(0.5f, heat[1], EPS);
@@ -193,5 +196,96 @@ class RigBindingTest {
                 new RigModel.PartSpec("b", "b", "a", true, null, new Vector3f(), new Vector3f(), new Vector3f(1)));
         RigModel m = RigModel.ofParts(parts, new int[0]);
         assertTrue((m.rig().flags() & Rig.FLAG_CYCLE_BROKEN) != 0);
+    }
+
+    /** A body part with a chain of 9 bones (joints 1..9), each posed a little further. */
+    private static RigModel chainOfNine() {
+        List<RigModel.PartSpec> parts = List.of(new RigModel.PartSpec("body", "body", null, true,
+                new Vector3f(), new Vector3f(), new Vector3f(), new Vector3f(1)));
+        List<OMOFormat.BoneEntry> bones = new java.util.ArrayList<>();
+        String parent = "body";
+        for (int b = 0; b < 9; b++) {
+            String id = "b" + b;
+            bones.add(new OMOFormat.BoneEntry(id, id, parent, 0, 0, 0, 0.1f * b, 0.5f, 0, 0, 0, 0, 0, 0.5f, 0));
+            parent = id;
+        }
+        return RigModel.build(parts, bones, null, new int[]{0}, new int[]{0, 0, 0});
+    }
+
+    @Test
+    void nineInfluencesPackAndDeformThroughTheBinding() {
+        RigModel m = chainOfNine();
+        assertEquals(10, m.jointCount());
+        int[] joints = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+        float[] weights = {0.02f, 0.03f, 0.05f, 0.07f, 0.09f, 0.11f, 0.13f, 0.2f, 0.3f};
+        float[] positions = {0.3f, 2.1f, -0.2f, 0.5f, 0.5f, 0.5f, -1f, 3f, 0.25f};
+        try (Skin skin = Skin.create(3)) {
+            // Lightest first, as a file may list them: every influence is kept (ABI 2 kept the first 4 in file
+            // order through the 40-byte entries), heaviest first after the round trip.
+            skin.importInfluences(List.of(new Skin.Influence(0, joints, weights),
+                    new Skin.Influence(2, new int[]{3, 7}, new float[]{1f, 3f})));
+            Skin.Influence got = skin.get(0);
+            assertEquals(9, got.joints().length);
+            assertEquals(9, skin.influenceCount(0));
+            assertEquals(9, skin.maxInfluences());
+            assertEquals(11, skin.influenceTotal());
+            assertEquals(9, got.joints()[0], "heaviest first");
+            assertEquals(1, got.joints()[8]);
+            float sum = 0;
+            for (float w : got.weights()) sum += w;
+            assertEquals(1f, sum, EPS);
+            try (Skin copy = Skin.of(3, skin.exportInfluences())) {
+                assertArrayEquals(got.joints(), copy.get(0).joints());
+                assertArrayEquals(got.weights(), copy.get(0).weights(), 0f);
+                assertArrayEquals(new int[]{7, 3}, copy.get(2).joints());
+            }
+
+            int[] partJoint = {0, 0, 0};
+            PackedSkin packed = skin.pack(partJoint);
+            assertEquals(3, packed.vertexCount());
+            assertEquals(12, packed.influenceCount(), "9 + the unweighted vertex's part joint + 2");
+            assertArrayEquals(new int[]{0, 9, 9, 1, 10, 2}, packed.ranges());
+            int qSum = 0;
+            for (int k = 0; k < 9; k++) qSum += Short.toUnsignedInt(packed.influences()[k * 2 + 1]);
+            assertEquals(65535, qSum, "unorm16 weights sum to exactly 1");
+            assertEquals(0, packed.influences()[18], "unweighted: rigid to its part joint");
+            assertEquals(65535, Short.toUnsignedInt(packed.influences()[19]));
+
+            // CPU deform = the GPU blend: sum (q / 65535) K(joint) v with the packed weights.
+            float[] locals = RigPoser.local().localPose(m.rig(), null, 0f, List.of(), new float[m.jointCount() * 9]);
+            for (int j = 1; j < m.jointCount(); j++) {
+                locals[j * 9 + 3] += 7f * j;
+                locals[j * 9 + 5] += 3f * j;
+            }
+            JointPalette palette = RigPoser.local().poseLocals(m.rig(), locals, null, new JointPalette());
+            float[] deformed = Skin.deform(skin, partJoint, positions, palette, null);
+            for (int v = 0; v < 3; v++) {
+                int first = packed.ranges()[v * 2], count = packed.ranges()[v * 2 + 1];
+                Vector3f expected = new Vector3f();
+                for (int k = 0; k < count; k++) {
+                    int joint = Short.toUnsignedInt(packed.influences()[(first + k) * 2]);
+                    float w = Short.toUnsignedInt(packed.influences()[(first + k) * 2 + 1]) / 65535f;
+                    Vector3f p = palette.skinMatrix(joint, new Matrix4f())
+                            .transformPosition(new Vector3f(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]));
+                    expected.fma(w, p);
+                }
+                assertEquals(expected.x, deformed[v * 3], 1e-4f, "vertex " + v);
+                assertEquals(expected.y, deformed[v * 3 + 1], 1e-4f, "vertex " + v);
+                assertEquals(expected.z, deformed[v * 3 + 2], 1e-4f, "vertex " + v);
+            }
+        }
+    }
+
+    @Test
+    void autoWeightsUseEveryBoneUnlessLimited() {
+        RigModel m = chainOfNine();
+        float[] positions = {0.2f, 2.0f, 0.1f};
+        int[] bones = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+        try (Skin all = Skin.create(1); Skin four = Skin.create(1)) {
+            all.autoWeights(m.rig(), positions, 0, 1, bones, 1f, 0f, Skin.UNLIMITED_INFLUENCES);
+            four.autoWeights(m.rig(), positions, 0, 1, bones, 1f, 0f, 4);
+            assertEquals(9, all.maxInfluences(), "no cap: every bone");
+            assertEquals(4, four.maxInfluences(), "max 4 = the ABI 2 weights");
+        }
     }
 }

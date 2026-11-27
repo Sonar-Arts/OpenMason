@@ -4,8 +4,15 @@ add_executable(omformat_smoke smoke_test.cpp)
 target_link_libraries(omformat_smoke PRIVATE cenda::omformat cenda_warnings)
 add_test(NAME omformat_smoke COMMAND omformat_smoke)
 
+# Model importers (glTF 2.0 + OBJ, OpenMason #173): libomformat only, fixtures in tests/fixtures/import.
+add_executable(import import_test.cpp)
+target_link_libraries(import PRIVATE cenda::omformat cenda_warnings)
+target_compile_definitions(import PRIVATE CENDA_IMPORT_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/import")
+add_test(NAME import COMMAND import)
+set_tests_properties(import PROPERTIES TIMEOUT 120)
+
 if(CENDA_BUILD_KERNELS)
-    set(_kernel_tests kernels_smoke kernels_chunk lua_host flex_host audio_engine entity_world physics_world behavior_scheduler nav_world rig character characterize anim_clip anim_graph rig_modifiers locomotion retarget first_person sockets appearance character_edit anim_graph_edit anim_author)
+    set(_kernel_tests kernels_smoke kernels_chunk lua_host flex_host audio_engine entity_world physics_world behavior_scheduler nav_world rig character characterize anim_clip anim_graph rig_modifiers locomotion retarget first_person sockets appearance character_edit anim_graph_edit anim_author omo normals import_omo mask morph mesh_pipeline)
     foreach(_test IN LISTS _kernel_tests)
         add_executable(${_test} ${_test}_test.cpp)
         target_link_libraries(${_test} PRIVATE cenda_kernels cenda_warnings)
@@ -26,6 +33,21 @@ if(CENDA_BUILD_KERNELS)
     target_link_libraries(character PRIVATE cenda::omformat)
     target_compile_definitions(anim_graph_edit PRIVATE
             CENDA_LOCOMOTION_GRAPH="${CMAKE_SOURCE_DIR}/../engine-core/src/test/resources/animgraph/humanoid_locomotion.omanimgraph")
+    # omo (OpenMason #167): native OMO codec + co_* ABI over every fixture OMO / SBE / SBO.
+    target_link_libraries(omo PRIVATE cenda::omformat)
+    target_compile_definitions(omo PRIVATE
+            CENDA_FIXTURES_ROOT="${CMAKE_SOURCE_DIR}/../../test-fixtures/stonebreak/resources"
+            CENDA_OMO_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden/omo")
+    # import_omo (OpenMason #173): glTF/OBJ scene -> OMO 1.9 document (co_import_*), over the import fixtures.
+    target_link_libraries(import_omo PRIVATE cenda::omformat)
+    target_compile_definitions(import_omo PRIVATE CENDA_IMPORT_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/import")
+    # mesh_pipeline (OpenMason #175 F3): the editor's weld / loops / triangulation / render mesh / topology, native.
+    target_link_libraries(mesh_pipeline PRIVATE cenda::omformat)
+    # morph (OpenMason #171): shape keys - rig morph targets, pose morph weights, OMANIM morph tracks.
+    target_link_libraries(morph PRIVATE cenda::omformat)
+    # normals (OpenMason #169): native corner normals + the editor shading store (co_mesh_normals, co_shading_*).
+    target_link_libraries(normals PRIVATE cenda::omformat)
+    target_compile_definitions(normals PRIVATE CENDA_NORMALS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/normals")
     # anim_clip round-trips every clip of the Stonebreak fixture SBEs (skips them when the folder is absent).
     target_link_libraries(anim_clip PRIVATE cenda::omformat)
     target_compile_definitions(anim_clip PRIVATE
@@ -40,6 +62,8 @@ if(CENDA_BUILD_KERNELS)
     endif()
     # Each test finishes in well under a second; a hang should fail fast, not stall CI.
     set_tests_properties(omformat_smoke ${_kernel_tests} PROPERTIES TIMEOUT 120)
+    # omo walks ~500 fixture + golden OMOs (16 s release, ~2 min under ASan alone).
+    set_tests_properties(omo PROPERTIES TIMEOUT 900)
 endif()
 
 # Region store (cv_store_*, #120): links the store's object files directly (not the shared lib) so the

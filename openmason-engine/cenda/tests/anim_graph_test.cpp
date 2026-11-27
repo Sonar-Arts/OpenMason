@@ -795,6 +795,63 @@ const char* kAimLimit = R"({"format": "omanimgraph", "version": "1.0",
      "target": "look"}
   ]})";
 
+// Rig ABI 3 (OpenMason #170): an aim modifier over 20 joints (ABI 2 / the format stopped at 16) loads, builds and
+// shares the turn over every joint.
+void test_long_aim_graph() {
+    constexpr int N = 20;
+    std::vector<cr_joint_desc> j;
+    std::vector<std::string> names;
+    for (int k = 0; k < N; ++k) {
+        cr_joint_desc d{};
+        d.parent = k - 1;
+        d.kind = CR_JOINT_BONE;
+        d.flags = CR_JOINT_HAS_GEOMETRY;
+        d.pos[1] = k == 0 ? 1.f : 0.f;
+        d.scale[0] = d.scale[1] = d.scale[2] = 1.f;
+        d.endpoint[1] = 0.05f;
+        j.push_back(d);
+        names.push_back("s" + std::to_string(k));
+    }
+    std::vector<const char*> cn;
+    for (const std::string& n : names) cn.push_back(n.c_str());
+    cr_rig* rig = cr_rig_create(j.data(), N, cn.data(), cn.data());
+    std::string doc = R"({"format": "omanimgraph", "version": "1.0", "slots": ["pose"], "targets": ["look"], "root": "c",
+  "nodes": [{"id": "c", "type": "clip", "slot": "pose"}],
+  "modifiers": [{"type": "aim", "limits": false, "target": "look", "joints": [)";
+    for (int k = 0; k < N; ++k) doc += std::string(k > 0 ? ", " : "") + R"({"joint": "s)" + std::to_string(k) + R"("})";
+    doc += "]}]}";
+    cg_graph* g = graph(doc);
+    CHECK(g != nullptr);
+    if (g == nullptr) {
+        cr_rig_destroy(rig);
+        return;
+    }
+    int32_t unresolved = -1;
+    cg_instance* inst = cg_instance_create(g, rig, nullptr, &unresolved);
+    CHECK(inst != nullptr && unresolved == 0);
+    cm_clip* rest = cm_clip_create();
+    cm_header h{30.f, 1.f, 1, 0, 0.f, 0.f, 0};
+    cm_clip_header_set(rest, &h);
+    bind(inst, g, "pose", rest);
+    const double r = 60.0 * std::numbers::pi / 180.0;
+    const float target[3] = {static_cast<float>(-std::sin(r) * 1e4), 1.5f, static_cast<float>(-std::cos(r) * 1e4)};
+    CHECK(cg_instance_set_target(inst, 0, CR_TARGET_MODEL, target, nullptr) == CG_OK);
+    CHECK(cg_instance_evaluate(inst, 1.f / 60.f, nullptr, 0, nullptr, nullptr, nullptr, nullptr) == CG_OK);
+    std::vector<float> local(static_cast<size_t>(N) * 9);
+    CHECK(cg_instance_local_pose(inst, local.data()) == CG_OK);
+    float sum = 0.f;
+    for (int k = 0; k < N; ++k) {
+        const float ry = local[static_cast<size_t>(k) * 9 + 4];
+        CHECK(near(ry, 60.f / N, 1e-2f));  // equal weights: an equal share each
+        sum += ry;
+    }
+    CHECK(near(sum, 60.f, 1e-2f));
+    cg_instance_destroy(inst);
+    cm_clip_destroy(rest);
+    cg_graph_destroy(g);
+    cr_rig_destroy(rig);
+}
+
 void test_aim_limits() {
     auto bone = [](int parent, float py, float ey) {
         cr_joint_desc d{};
@@ -1086,6 +1143,7 @@ int main() {
     test_determinism();
     test_modifiers();
     test_aim_limits();
+    test_long_aim_graph();
     test_aim_limits_yxz();
     if (failures != 0) {
         std::fprintf(stderr, "anim_graph: %d check(s) failed\n", failures);

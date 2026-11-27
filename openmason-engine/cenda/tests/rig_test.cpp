@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -284,40 +285,44 @@ void test_skin_ops() {
     cr_skin* skin = cr_skin_create(5);
     CHECK(cr_skin_weighted_count(skin) == 0);
 
-    // set: drops non-positive, merges, keeps 4 heaviest, normalizes.
+    // set: drops non-positive, merges, normalizes, heaviest first.
     const int32_t sj[6] = {0, 1, 0, 2, 3, 4};
     const float sw[6] = {1.f, 1.f, 1.f, 0.5f, -1.f, 0.25f};
     CHECK(cr_skin_set(skin, 0, sj, sw, 6) == CR_OK);
-    int32_t gj[4];
-    float gw[4];
-    CHECK(cr_skin_get(skin, 0, gj, gw) == 4);
+    int32_t gj[16];
+    float gw[16];
+    CHECK(cr_skin_get(skin, 0, gj, gw, 16) == 4);
     CHECK(gj[0] == 0 && near(gw[0], 2.f / 3.75f));
 
-    // pack: unweighted vertices -> part joint at 255; weighted sum to exactly 255.
-    std::vector<uint16_t> pj(20);
-    std::vector<uint8_t> pw(20);
-    CHECK(cr_skin_pack(skin, part_of, pj.data(), pw.data()) == CR_OK);
-    CHECK(pw[0] + pw[1] + pw[2] + pw[3] == 255);
-    CHECK(pj[4] == 2 && pw[4] == 255 && pw[5] == 0);
+    // pack: unweighted vertices -> one influence (part joint, 65535); weighted ones sum to exactly 65535.
+    CHECK(cr_skin_pack_size(skin) == 4 + 4);  // vertex 0's four + one each for vertices 1..4
+    std::vector<uint32_t> ranges(10);
+    std::vector<uint16_t> infl(16);
+    CHECK(cr_skin_pack(skin, part_of, 7, ranges.data(), infl.data()) == CR_ERR_ARG);  // too small
+    CHECK(cr_skin_pack(skin, part_of, 8, ranges.data(), infl.data()) == CR_OK);
+    CHECK(ranges[0] == 0 && ranges[1] == 4 && ranges[2] == 4 && ranges[3] == 1 && ranges[8] == 7 && ranges[9] == 1);
+    CHECK(infl[1] + infl[3] + infl[5] + infl[7] == 65535);
+    CHECK(infl[0] == 0 && infl[2] == 1 && infl[4] == 2 && infl[6] == 4);  // heaviest first
+    CHECK(infl[8] == 2 && infl[9] == 65535);
 
     // Auto weights on vertices 1..4 to both bones.
     const int32_t bones[2] = {0, 1};
-    CHECK(cr_skin_auto_weights(skin, rig, pos, 1, 4, bones, 2, 2.f, 0.01f) == CR_OK);
-    CHECK(cr_skin_get(skin, 1, gj, gw) >= 1 && gj[0] == 0);  // mid-lower: lower bone dominates
-    CHECK(cr_skin_get(skin, 3, gj, gw) >= 1 && gj[0] == 1);  // mid-upper
+    CHECK(cr_skin_auto_weights(skin, rig, pos, 1, 4, bones, 2, 2.f, 0.01f, 0) == CR_OK);
+    CHECK(cr_skin_get(skin, 1, gj, gw, 16) >= 1 && gj[0] == 0);  // mid-lower: lower bone dominates
+    CHECK(cr_skin_get(skin, 3, gj, gw, 16) >= 1 && gj[0] == 1);  // mid-upper
     // Rigid (falloff 0): exactly one influence.
-    CHECK(cr_skin_auto_weights(skin, rig, pos, 4, 1, bones, 2, 0.f, 0.f) == CR_OK);
-    CHECK(cr_skin_get(skin, 4, gj, gw) == 1 && gj[0] == 1 && near(gw[0], 1.f));
+    CHECK(cr_skin_auto_weights(skin, rig, pos, 4, 1, bones, 2, 0.f, 0.f, 0) == CR_OK);
+    CHECK(cr_skin_get(skin, 4, gj, gw, 16) == 1 && gj[0] == 1 && near(gw[0], 1.f));
 
     // Paint: ADD joint 1 fully at vertex 1 with a small brush; others rescale.
     const float c[3] = {0.1f, 0.5f, 0.f};
     CHECK(cr_skin_paint(skin, pos, part_of, nullptr, 0, nullptr, c, 0.2f, 1, CR_PAINT_REPLACE, 1.f) == 1);
-    CHECK(cr_skin_get(skin, 1, gj, gw) == 1 && gj[0] == 1 && near(gw[0], 1.f));
+    CHECK(cr_skin_get(skin, 1, gj, gw, 16) == 1 && gj[0] == 1 && near(gw[0], 1.f));
     // SUBTRACT on an unweighted vertex starts from its part joint and hands the rest back to it.
     cr_skin* s2 = cr_skin_create(5);
     const float c0[3] = {0.1f, 0.f, 0.f};
     CHECK(cr_skin_paint(s2, pos, part_of, nullptr, 0, nullptr, c0, 0.2f, 1, CR_PAINT_ADD, 0.5f) == 1);
-    CHECK(cr_skin_get(s2, 0, gj, gw) == 2);
+    CHECK(cr_skin_get(s2, 0, gj, gw, 16) == 2);
     float w1 = 0.f, w2 = 0.f;
     for (int k = 0; k < 2; ++k) {
         if (gj[k] == 1) w1 = gw[k];
@@ -332,22 +337,25 @@ void test_skin_ops() {
     const float full[1] = {1.f};
     cr_skin_set(s3, 1, one, full, 1);
     CHECK(cr_skin_paint(s3, pos, part_of, tris, 6, nullptr, c, 0.2f, 1, CR_PAINT_SMOOTH, 1.f) == 1);
-    CHECK(cr_skin_get(s3, 1, gj, gw) == 2);
+    CHECK(cr_skin_get(s3, 1, gj, gw, 16) == 2);
 
     // Normalize / prune / remove / remap.
     CHECK(cr_skin_prune(skin, 0.4f) >= 0);
     CHECK(cr_skin_remove_joint(skin, 1) >= 1);
-    CHECK(cr_skin_get(skin, 1, gj, gw) == 0);  // only joint 1 -> unweighted again
+    CHECK(cr_skin_get(skin, 1, gj, gw, 16) == 0);  // only joint 1 -> unweighted again
     const int32_t map[3] = {1, 0, 2};
     CHECK(cr_skin_remap_joints(skin, map, 3) == CR_OK);
     CHECK(cr_skin_normalize(skin) == CR_OK);
 
-    // Export / import round trip.
-    const int32_t count = cr_skin_export(skin, nullptr, 0);
-    std::vector<cr_skin_entry> entries(static_cast<size_t>(count));
-    CHECK(cr_skin_export(skin, entries.data(), count) == count);
+    // Export / import round trip (CSR).
+    const int32_t count = cr_skin_export(skin, 0, 0, nullptr, nullptr, nullptr, nullptr);
+    const int32_t total = cr_skin_influence_total(skin);
+    std::vector<int32_t> ev(static_cast<size_t>(count)), eo(static_cast<size_t>(count) + 1), ej(static_cast<size_t>(total));
+    std::vector<float> ew(static_cast<size_t>(total));
+    CHECK(cr_skin_export(skin, count, total, ev.data(), eo.data(), ej.data(), ew.data()) == count);
+    CHECK(eo[0] == 0 && eo[static_cast<size_t>(count)] == total);
     cr_skin* back = cr_skin_create(5);
-    CHECK(cr_skin_import(back, entries.data(), count) == CR_OK);
+    CHECK(cr_skin_import(back, count, ev.data(), eo.data(), ej.data(), ew.data()) == CR_OK);
     CHECK(cr_skin_weighted_count(back) == count);
 
     // Mirror across X: a vertex at +x hands its weights to its twin at -x, joints mirrored.
@@ -357,21 +365,21 @@ void test_skin_ops() {
     cr_skin_set(ms, 0, mj, full, 1);
     const int32_t mirror_map[2] = {1, 0};
     CHECK(cr_skin_mirror(ms, mpos, 0, 1, 1e-4f, mirror_map, 2) == 1);
-    CHECK(cr_skin_get(ms, 1, gj, gw) == 1 && gj[0] == 1);
+    CHECK(cr_skin_get(ms, 1, gj, gw, 16) == 1 && gj[0] == 1);
 
     // Mirror writes every coincident copy of the target (split UV seams).
     const float spos[9] = {0.5f, 1.f, 0.f, -0.5f, 1.f, 0.f, -0.5f, 1.f, 0.f};
     cr_skin* seam = cr_skin_create(3);
     cr_skin_set(seam, 0, mj, full, 1);
     CHECK(cr_skin_mirror(seam, spos, 0, 1, 1e-4f, mirror_map, 2) == 2);
-    CHECK(cr_skin_get(seam, 1, gj, gw) == 1 && gj[0] == 1);
-    CHECK(cr_skin_get(seam, 2, gj, gw) == 1 && gj[0] == 1);
+    CHECK(cr_skin_get(seam, 1, gj, gw, 16) == 1 && gj[0] == 1);
+    CHECK(cr_skin_get(seam, 2, gj, gw, 16) == 1 && gj[0] == 1);
     cr_skin_destroy(seam);
 
     // Transfer onto an edited mesh: nearest old vertex.
     const float npos[6] = {0.49f, 1.f, 0.f, 0.f, 9.f, 0.f};
     cr_skin* moved = cr_skin_transfer(ms, mpos, npos, 2);
-    CHECK(moved != nullptr && cr_skin_get(moved, 0, gj, gw) == 1 && gj[0] == 0);
+    CHECK(moved != nullptr && cr_skin_get(moved, 0, gj, gw, 16) == 1 && gj[0] == 0);
 
     // Deform = sum w K v; a rotated bone carries its weighted vertices.
     cr_key k{};
@@ -420,6 +428,389 @@ cr_rig* chain(int n) {
 }
 
 // Slot values helper: every joint rot y = ry, driven.
+// Unbounded influences (rig ABI 3, OpenMason #170): nine influences survive every operation; the packed unorm16
+// weights sum to 65535 and are exactly what cr_skin_deform blends with.
+void test_skin_unbounded() {
+    // Nine bones on a ring around the Y axis (radius 0.3 + 0.01 k), each pointing up, plus a part (joint 9).
+    std::vector<cr_joint_desc> j;
+    for (int k = 0; k < 9; ++k) {
+        const double a = 2.0 * 3.14159265358979 * k / 9.0, r = 0.3 + 0.01 * k;
+        cr_joint_desc b = bone(-1, 0.f, 1.f);
+        b.pos[0] = static_cast<float>(r * std::cos(a));
+        b.pos[2] = static_cast<float>(r * std::sin(a));
+        j.push_back(b);
+    }
+    j.push_back(part(-1, 0, 0, 0, 0, 0, 0));
+    cr_rig* rig = cr_rig_create(j.data(), 10, nullptr, nullptr);
+    CHECK(rig != nullptr);
+
+    // set / get / capacity / counts.
+    cr_skin* skin = cr_skin_create(4);
+    int32_t sj[9];
+    float sw[9];
+    for (int k = 0; k < 9; ++k) {
+        sj[k] = k;
+        sw[k] = static_cast<float>(k + 1);
+    }
+    CHECK(cr_skin_set(skin, 0, sj, sw, 9) == CR_OK);
+    int32_t gj[12];
+    float gw[12];
+    for (int k = 0; k < 12; ++k) {
+        gj[k] = -99;
+        gw[k] = -99.f;
+    }
+    CHECK(cr_skin_get(skin, 0, gj, gw, 4) == 9);  // the full count, four written
+    CHECK(gj[0] == 8 && gj[1] == 7 && gj[2] == 6 && gj[3] == 5 && gj[4] == -99 && gw[4] == -99.f);
+    CHECK(near(gw[0], 9.f / 45.f));
+    CHECK(cr_skin_get(skin, 0, nullptr, nullptr, 0) == 9);
+    CHECK(cr_skin_get(skin, 0, gj, gw, 12) == 9);
+    float sum = 0.f;
+    for (int k = 0; k < 9; ++k) {
+        CHECK(gj[k] == 8 - k && near(gw[k], static_cast<float>(9 - k) / 45.f));
+        sum += gw[k];
+    }
+    CHECK(near(sum, 1.f));
+    CHECK(cr_skin_influence_count(skin, 0) == 9 && cr_skin_influence_count(skin, 1) == 0
+          && cr_skin_influence_count(skin, 7) == 0);
+    CHECK(cr_skin_max_influences(skin) == 9 && cr_skin_influence_total(skin) == 9 && cr_skin_weighted_count(skin) == 1);
+    // A second vertex with five, a third rigid (unweighted).
+    CHECK(cr_skin_set(skin, 1, sj, sw, 5) == CR_OK);
+    CHECK(cr_skin_influence_total(skin) == 14);
+
+    // Export / import (CSR), sparse and dense.
+    const int32_t n = cr_skin_export(skin, 0, 0, nullptr, nullptr, nullptr, nullptr);
+    CHECK(n == 2);
+    std::vector<int32_t> ev(2), eo(3), ej(14);
+    std::vector<float> ew(14);
+    CHECK(cr_skin_export(skin, 2, 13, ev.data(), eo.data(), ej.data(), ew.data()) == 2 && eo[1] == 0);  // too small: nothing
+    CHECK(cr_skin_export(skin, 2, 14, ev.data(), eo.data(), ej.data(), ew.data()) == 2);
+    CHECK(ev[0] == 0 && ev[1] == 1 && eo[0] == 0 && eo[1] == 9 && eo[2] == 14 && ej[0] == 8 && ej[9] == 4);
+    cr_skin* back = cr_skin_create(4);
+    CHECK(cr_skin_import(back, 2, ev.data(), eo.data(), ej.data(), ew.data()) == CR_OK);
+    for (int v = 0; v < 4; ++v) {
+        int32_t aj[12], bj[12];
+        float aw[12], bw[12];
+        const int32_t ca = cr_skin_get(skin, v, aj, aw, 12), cb = cr_skin_get(back, v, bj, bw, 12);
+        CHECK(ca == cb);
+        for (int k = 0; k < ca && k < 12; ++k) CHECK(aj[k] == bj[k] && aw[k] == bw[k]);
+    }
+    cr_skin* dense = cr_skin_create(3);
+    const int32_t doff[4] = {0, 9, 9, 10};  // vertex 1 unweighted
+    const int32_t dj[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    const float dw[10] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    CHECK(cr_skin_import(dense, 3, nullptr, doff, dj, dw) == CR_OK);
+    CHECK(cr_skin_influence_count(dense, 0) == 9 && cr_skin_influence_count(dense, 1) == 0
+          && cr_skin_influence_count(dense, 2) == 1);
+    const int32_t bad_off[3] = {0, 5, 4};
+    CHECK(cr_skin_import(dense, 2, nullptr, bad_off, dj, dw) == CR_ERR_ARG);
+    const int32_t far_vertex[1] = {7};
+    CHECK(cr_skin_import(dense, 1, far_vertex, doff, dj, dw) == CR_ERR_RANGE);
+    cr_skin_destroy(dense);
+
+    // Pack: ranges in vertex order, unorm16 weights summing to exactly 65535, the rigid vertices one record each.
+    const int32_t part_of[4] = {9, 9, 9, 9};
+    CHECK(cr_skin_pack_size(skin) == 9 + 5 + 1 + 1);
+    std::vector<uint32_t> ranges(8);
+    std::vector<uint16_t> infl(32);
+    CHECK(cr_skin_pack(skin, part_of, 16, ranges.data(), infl.data()) == CR_OK);
+    CHECK(ranges[0] == 0 && ranges[1] == 9 && ranges[2] == 9 && ranges[3] == 5 && ranges[4] == 14 && ranges[5] == 1
+          && ranges[6] == 15 && ranges[7] == 1);
+    for (size_t v = 0; v < 2; ++v) {
+        uint32_t qs = 0;
+        for (uint32_t k = ranges[v * 2]; k < ranges[v * 2] + ranges[v * 2 + 1]; ++k) qs += infl[k * 2 + 1];
+        CHECK(qs == 65535);
+    }
+    CHECK(infl[0] == 8 && infl[28] == 9 && infl[29] == 65535 && infl[30] == 9 && infl[31] == 65535);
+    // Largest remainder: 65535 * k / 45 for k = 9..1 -> floors 13107, 11650.6.., ...; the unit goes to the largest remainders.
+    {
+        uint32_t floors = 0;
+        for (int k = 9; k >= 1; --k) floors += static_cast<uint32_t>(std::floor(65535.0 * k / 45.0));
+        uint32_t extra = 0;
+        for (int k = 0; k < 9; ++k) extra += infl[static_cast<size_t>(k) * 2 + 1] - static_cast<uint32_t>(std::floor(65535.0 * (9 - k) / 45.0));
+        CHECK(floors + extra == 65535 && extra < 9);
+    }
+
+    // Deform == the quantized blend, bit for bit (same q, same double accumulation).
+    std::vector<float> K(10 * 16, 0.f);
+    for (int jj = 0; jj < 10; ++jj) {
+        float* m = K.data() + jj * 16;
+        const float c = std::cos(0.1f * static_cast<float>(jj)), sn = std::sin(0.1f * static_cast<float>(jj));
+        m[0] = c; m[2] = -sn; m[5] = 1.f + 0.01f * static_cast<float>(jj); m[8] = sn; m[10] = c; m[15] = 1.f;
+        m[12] = 0.1f * static_cast<float>(jj); m[13] = -0.05f * static_cast<float>(jj); m[14] = 0.02f;
+    }
+    const float pos[12] = {0.f, 0.5f, 0.f, 0.1f, 0.7f, -0.2f, 0.3f, 0.1f, 0.2f, -0.4f, 0.9f, 0.05f};
+    float out[12];
+    CHECK(cr_skin_deform(skin, part_of, pos, 4, K.data(), 10, out) == CR_OK);
+    for (size_t v = 0; v < 4; ++v) {
+        const float* pp = pos + v * 3;
+        double acc[3] = {0.0, 0.0, 0.0};
+        for (uint32_t k = ranges[v * 2]; k < ranges[v * 2] + ranges[v * 2 + 1]; ++k) {
+            const float* m = K.data() + infl[k * 2] * 16;
+            const double w = static_cast<double>(infl[k * 2 + 1]) / 65535.0;
+            for (int r = 0; r < 3; ++r) {
+                acc[r] += w * (m[r] * static_cast<double>(pp[0]) + m[4 + r] * static_cast<double>(pp[1])
+                               + m[8 + r] * static_cast<double>(pp[2]) + m[12 + r]);
+            }
+        }
+        for (size_t c = 0; c < 3; ++c) CHECK(out[v * 3 + c] == static_cast<float>(acc[c]));
+    }
+
+    // Paint ADD a tenth joint: nothing is truncated.
+    const float ppos[12] = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f, 10.f, 0.f, 0.f, 15.f, 0.f, 0.f};
+    const float center[3] = {0.f, 0.f, 0.f};
+    CHECK(cr_skin_paint(skin, ppos, part_of, nullptr, 0, nullptr, center, 0.5f, 9, CR_PAINT_ADD, 0.5f) == 1);
+    CHECK(cr_skin_get(skin, 0, gj, gw, 12) == 10);
+    float w9 = -1.f, w8 = -1.f;
+    for (int k = 0; k < 10; ++k) {
+        if (gj[k] == 9) w9 = gw[k];
+        if (gj[k] == 8) w8 = gw[k];
+    }
+    CHECK(near(w9, 0.5f) && near(w8, 0.5f * 9.f / 45.f));
+
+    // Normalize / prune / remove / remap keep the long list.
+    CHECK(cr_skin_normalize(skin) == CR_OK && cr_skin_influence_count(skin, 0) == 10);
+    CHECK(cr_skin_remove_joint(skin, 9) == 1 && cr_skin_influence_count(skin, 0) == 9);
+    int32_t shift[10];
+    for (int k = 0; k < 10; ++k) shift[k] = 9 - k;  // reverse
+    CHECK(cr_skin_remap_joints(skin, shift, 10) == CR_OK);
+    CHECK(cr_skin_get(skin, 0, gj, gw, 12) == 9 && gj[0] == 1 && gj[8] == 9);
+    CHECK(cr_skin_prune(skin, 0.05f) == 2);  // 1/45 and 2/45 go
+    CHECK(cr_skin_influence_count(skin, 0) == 7);
+
+    // Mirror: a nine-influence vertex at +x hands all nine (mirrored joints) to its twin.
+    cr_skin* ms = cr_skin_create(2);
+    CHECK(cr_skin_set(ms, 0, sj, sw, 9) == CR_OK);
+    const float mpos[6] = {0.5f, 1.f, 0.f, -0.5f, 1.f, 0.f};
+    int32_t mirror_map[10];
+    for (int k = 0; k < 10; ++k) mirror_map[k] = (k + 1) % 10;
+    CHECK(cr_skin_mirror(ms, mpos, 0, 1, 1e-4f, mirror_map, 10) == 1);
+    CHECK(cr_skin_get(ms, 1, gj, gw, 12) == 9);
+    for (int k = 0; k < 9; ++k) CHECK(gj[k] == (8 - k + 1) % 10 && near(gw[k], static_cast<float>(9 - k) / 45.f));
+
+    // Transfer: the nearest old vertex's nine.
+    const float npos[3] = {0.49f, 1.f, 0.f};
+    cr_skin* moved = cr_skin_transfer(ms, mpos, npos, 1);
+    CHECK(moved != nullptr && cr_skin_get(moved, 0, gj, gw, 12) == 9 && gj[0] == 8);
+    cr_skin* cl = cr_skin_clone(ms);
+    CHECK(cl != nullptr && cr_skin_influence_count(cl, 0) == 9 && cr_skin_influence_count(cl, 1) == 9);
+
+    // Auto weights over every bone: a vertex on the axis is about equally far from all nine -> nine influences;
+    // max_influences 4 = the ABI 2 rule (the four nearest).
+    const float apos[3] = {0.f, 0.5f, 0.f};
+    cr_skin* aw = cr_skin_create(1);
+    const int32_t abones[9] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    CHECK(cr_skin_auto_weights(aw, rig, apos, 0, 1, abones, 9, 2.f, 0.01f, 0) == CR_OK);
+    CHECK(cr_skin_get(aw, 0, gj, gw, 12) == 9 && gj[0] == 0 && gj[8] == 8);  // nearest (radius 0.30) first
+    CHECK(cr_skin_auto_weights(aw, rig, apos, 0, 1, abones, 9, 2.f, 0.01f, 4) == CR_OK);
+    CHECK(cr_skin_get(aw, 0, gj, gw, 12) == 4 && gj[0] == 0 && gj[3] == 3);
+    CHECK(cr_skin_auto_weights(aw, rig, apos, 0, 1, abones, 9, 2.f, 0.01f, -1) == CR_ERR_ARG);
+    // min_weight prunes from the full set: with 0.12 only the bones nearer than about the mean stay.
+    CHECK(cr_skin_auto_weights(aw, rig, apos, 0, 1, abones, 9, 2.f, 0.12f, 0) == CR_OK);
+    const int32_t kept = cr_skin_get(aw, 0, gj, gw, 12);
+    CHECK(kept > 1 && kept < 9);
+
+    // Storage churn: many vertices rewritten with growing and shrinking lists (pool moves + compaction).
+    cr_skin* churn = cr_skin_create(1500);
+    int32_t cj[12];
+    float cw[12];
+    for (int k = 0; k < 12; ++k) {
+        cj[k] = k;
+        cw[k] = static_cast<float>(12 - k);
+    }
+    for (int round = 0; round < 4; ++round) {
+        for (int v = 0; v < 1500; ++v) CHECK(cr_skin_set(churn, v, cj, cw, 1 + (v * 7 + round * 5) % 12) == CR_OK);
+    }
+    bool all = true;
+    for (int v = 0; v < 1500; ++v) {
+        const int want = 1 + (v * 7 + 3 * 5) % 12;
+        const int32_t got = cr_skin_get(churn, v, gj, gw, 12);
+        all &= got == want && gj[0] == 0 && gj[got - 1] == got - 1;
+    }
+    CHECK(all);
+
+    cr_skin_destroy(churn);
+    cr_skin_destroy(aw);
+    cr_skin_destroy(cl);
+    cr_skin_destroy(moved);
+    cr_skin_destroy(ms);
+    cr_skin_destroy(back);
+    cr_skin_destroy(skin);
+    cr_rig_destroy(rig);
+}
+
+
+// The largest-remainder rule the old O(n^2) loop implemented (reference for quantize's exact slots and ties).
+std::vector<uint16_t> reference_quantize(const std::vector<float>& w) {
+    double sum = 0.0;
+    for (float x : w) sum += x;
+    std::vector<uint16_t> q(w.size());
+    std::vector<double> rem(w.size());
+    int64_t total = 0;
+    for (size_t k = 0; k < w.size(); ++k) {
+        const double exact = static_cast<double>(w[k]) / sum * 65535.0;
+        const double fl = std::floor(exact);
+        q[k] = static_cast<uint16_t>(fl);
+        rem[k] = exact - fl;
+        total += q[k];
+    }
+    while (total < 65535) {
+        size_t best = w.size();
+        for (size_t k = 0; k < w.size(); ++k) {
+            if (rem[k] >= 0.0 && (best == w.size() || rem[k] > rem[best])) best = k;
+        }
+        q[best] = static_cast<uint16_t>(q[best] + 1);
+        rem[best] = -1.0;
+        ++total;
+    }
+    return q;
+}
+
+// Packs one vertex and returns its (joint, q) records.
+std::vector<std::pair<int, int>> packed_one(const cr_skin* skin) {
+    std::vector<uint32_t> ranges(static_cast<size_t>(cr_skin_vertex_count(skin)) * 2);
+    std::vector<uint16_t> infl(static_cast<size_t>(cr_skin_pack_size(skin)) * 2);
+    CHECK(cr_skin_pack(skin, nullptr, cr_skin_pack_size(skin), ranges.data(), infl.data()) == CR_OK);
+    std::vector<std::pair<int, int>> out;
+    for (uint32_t k = ranges[0]; k < ranges[0] + ranges[1]; ++k) out.emplace_back(infl[k * 2], infl[k * 2 + 1]);
+    return out;
+}
+
+// Edge cases of the ABI 3 skin (OpenMason #170 review): exact largest-remainder slots and ties, non-finite and
+// underflowing weights, CSR layouts, capacities, rigid vertices with a bad part joint, and pool churn that compacts
+// inside assign.
+void test_skin_edges() {
+    // Ties: six equal weights -> 10922.5 each; the three deficit units go to the first three (lower joint) slots.
+    cr_skin* s = cr_skin_create(1);
+    const int32_t j6[7] = {5, 3, 1, 0, 2, 4, 6};
+    const float eq[7] = {1, 1, 1, 1, 1, 1, 1};
+    CHECK(cr_skin_set(s, 0, j6, eq, 6) == CR_OK);
+    std::vector<std::pair<int, int>> p = packed_one(s);
+    const std::vector<std::pair<int, int>> want6 = {{0, 10923}, {1, 10923}, {2, 10923}, {3, 10922}, {4, 10922}, {5, 10922}};
+    CHECK(p == want6);
+    // Seven equal: 9362.14..; one unit, to the first slot.
+    CHECK(cr_skin_set(s, 0, j6, eq, 7) == CR_OK);
+    p = packed_one(s);
+    CHECK(p.size() == 7 && p[0] == std::make_pair(0, 9363));
+    for (size_t k = 1; k < p.size(); ++k) CHECK(p[k] == std::make_pair(static_cast<int>(k), 9362));
+    // Distinct remainders: every slot equals the reference loop, for several weight sets.
+    const std::vector<std::vector<float>> sets = {{9, 8, 7, 6, 5, 4, 3, 2, 1}, {0.5f, 0.3f, 0.2f}, {1, 1e-3f, 2e-3f, 0.37f, 0.37f},
+                                                  {3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 0.5f}};
+    for (const std::vector<float>& w : sets) {
+        std::vector<int32_t> js(w.size());
+        for (size_t k = 0; k < w.size(); ++k) js[k] = static_cast<int32_t>(k);
+        CHECK(cr_skin_set(s, 0, js.data(), w.data(), static_cast<int32_t>(w.size())) == CR_OK);
+        std::vector<int32_t> gj(w.size());
+        std::vector<float> gw(w.size());
+        CHECK(cr_skin_get(s, 0, gj.data(), gw.data(), static_cast<int32_t>(w.size())) == static_cast<int32_t>(w.size()));
+        const std::vector<uint16_t> ref = reference_quantize(gw);
+        p = packed_one(s);
+        bool same = p.size() == ref.size();
+        for (size_t k = 0; same && k < p.size(); ++k) same = p[k].first == gj[k] && p[k].second == ref[k];
+        CHECK(same);
+    }
+
+    // Non-finite weights are refused (nothing changes); a merged overflow too; an underflowing weight is dropped.
+    const int32_t two[2] = {0, 1};
+    const float good[2] = {1.f, 1.f};
+    CHECK(cr_skin_set(s, 0, two, good, 2) == CR_OK);
+    const float nan_w[2] = {1.f, std::nanf("")};
+    const float inf_w[2] = {INFINITY, 1.f};
+    CHECK(cr_skin_set(s, 0, two, nan_w, 2) == CR_ERR_ARG);
+    CHECK(cr_skin_set(s, 0, two, inf_w, 2) == CR_ERR_ARG);
+    const int32_t same_joint[2] = {3, 3};
+    const float huge[2] = {3e38f, 3e38f};  // merges to inf
+    CHECK(cr_skin_set(s, 0, same_joint, huge, 2) == CR_ERR_ARG);
+    CHECK(cr_skin_influence_count(s, 0) == 2);
+    const float tiny[2] = {1e30f, 1e-40f};  // 1e-40 / 1e30 underflows to 0 in float: dropped
+    CHECK(cr_skin_set(s, 0, two, tiny, 2) == CR_OK);
+    int32_t gj1[2];
+    float gw1[2];
+    CHECK(cr_skin_get(s, 0, gj1, gw1, 2) == 1 && gj1[0] == 0 && gw1[0] == 1.f);
+    cr_skin_destroy(s);
+
+    // Import: offsets need not start at 0, an empty entry mid-array unweights its vertex; NaN anywhere refuses all.
+    cr_skin* im = cr_skin_create(4);
+    CHECK(cr_skin_set(im, 1, two, good, 2) == CR_OK);  // vertex 1 weighted before: the empty entry clears it
+    const int32_t iv[3] = {0, 1, 3};
+    const int32_t ioff[4] = {2, 4, 4, 5};
+    const int32_t ij[5] = {-9, -9, 7, 8, 9};  // the first two are before offsets[0] and never read
+    const float iw[5] = {NAN, NAN, 1.f, 3.f, 2.f};
+    CHECK(cr_skin_import(im, 3, iv, ioff, ij, iw) == CR_OK);
+    int32_t gj[4];
+    float gw[4];
+    CHECK(cr_skin_get(im, 0, gj, gw, 4) == 2 && gj[0] == 8 && gj[1] == 7 && near(gw[0], 0.75f));
+    CHECK(cr_skin_influence_count(im, 1) == 0 && cr_skin_influence_count(im, 2) == 0);
+    CHECK(cr_skin_get(im, 3, gj, gw, 4) == 1 && gj[0] == 9 && gw[0] == 1.f);
+    const float iw_nan[5] = {1.f, 1.f, 1.f, NAN, 1.f};
+    const int32_t ioff2[3] = {2, 4, 5};
+    CHECK(cr_skin_import(im, 2, iv, ioff2, ij, iw_nan) == CR_ERR_ARG);
+    CHECK(cr_skin_get(im, 0, gj, gw, 4) == 2 && gj[0] == 8);  // untouched
+    // Export: a vertex capacity below n writes nothing.
+    int32_t ev[2] = {-1, -1}, eo[3] = {-1, -1, -1}, ej[3] = {-1, -1, -1};
+    float ew[3] = {-1, -1, -1};
+    CHECK(cr_skin_export(im, 1, 3, ev, eo, ej, ew) == 2);
+    CHECK(ev[0] == -1 && eo[0] == -1 && ej[0] == -1 && ew[0] == -1.f);
+    CHECK(cr_skin_export(im, 2, 3, ev, eo, ej, ew) == 2 && ev[1] == 3 && eo[2] == 3);
+
+    // Rigid vertices with a bad part joint: pack and deform both use joint 0.
+    const int32_t bad_part[4] = {-5, 70000, 2, 1};
+    std::vector<uint32_t> ranges(8);
+    std::vector<uint16_t> infl(static_cast<size_t>(cr_skin_pack_size(im)) * 2);
+    CHECK(cr_skin_pack(im, bad_part, cr_skin_pack_size(im), ranges.data(), infl.data()) == CR_OK);
+    CHECK(infl[ranges[2] * 2] == 0 && infl[ranges[4] * 2] == 2);  // vertex 1 (part -5) -> 0, vertex 2 -> 2
+    std::vector<float> K(3 * 16, 0.f);
+    for (int jj = 0; jj < 3; ++jj) {
+        float* m = K.data() + jj * 16;
+        m[0] = m[5] = m[10] = m[15] = 1.f;
+        m[12] = static_cast<float>(jj + 1);  // joint j translates x by j + 1
+    }
+    cr_skin* rigid = cr_skin_create(2);
+    const int32_t odd_part[2] = {-5, 9};  // both invalid for a 3-joint palette
+    const float rp[6] = {0.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+    float ro[6];
+    CHECK(cr_skin_deform(rigid, odd_part, rp, 2, K.data(), 3, ro) == CR_OK);
+    CHECK(ro[0] == 1.f && ro[3] == 1.f && ro[4] == 1.f);  // joint 0, not the origin
+    cr_skin_destroy(rigid);
+    cr_skin_destroy(im);
+
+    // Churn: the same 300 vertices grow round after round (each move abandons a block, the pool passes 4096 entries
+    // and compacts inside assign), then shrink; every vertex is checked after every round.
+    cr_skin* churn = cr_skin_create(300);
+    std::vector<int32_t> cj(40);
+    std::vector<float> cw(40);
+    for (int k = 0; k < 40; ++k) {
+        cj[static_cast<size_t>(k)] = k;
+        cw[static_cast<size_t>(k)] = static_cast<float>(40 - k);
+    }
+    bool all = true;
+    auto verify = [&](int want_of_v_offset, bool shrink) {
+        std::vector<int32_t> gjj(40);
+        std::vector<float> gww(40);
+        for (int v = 0; v < 300; ++v) {
+            const int want = shrink ? 1 + v % 3 : want_of_v_offset;
+            const int32_t got = cr_skin_get(churn, v, gjj.data(), gww.data(), 40);
+            all &= got == want;
+            for (int k = 0; k < got && k < 40; ++k) all &= gjj[static_cast<size_t>(k)] == k;
+        }
+    };
+    for (int round = 1; round <= 40; ++round) {
+        for (int v = 0; v < 300; ++v) all &= cr_skin_set(churn, v, cj.data(), cw.data(), round) == CR_OK;
+        verify(round, false);
+    }
+    CHECK(cr_skin_influence_total(churn) == 300 * 40);
+    for (int v = 0; v < 300; ++v) all &= cr_skin_set(churn, v, cj.data(), cw.data(), 1 + v % 3) == CR_OK;
+    verify(0, true);
+    CHECK(all);
+    CHECK(cr_skin_influence_total(churn) == 300 * 2);
+    CHECK(cr_skin_prune(churn, 0.6f) == 300);  // the 2- and 3-influence vertices keep their heaviest: 100x1 + 100x2
+    CHECK(cr_skin_influence_total(churn) == 300 && cr_skin_max_influences(churn) == 1);
+    cr_skin* copy = cr_skin_clone(churn);
+    CHECK(copy != nullptr && cr_skin_influence_total(copy) == 300);
+    cr_skin_destroy(copy);
+    cr_skin_destroy(churn);
+}
+
+
 void set_all_rot(cr_poses* poses, int slot, int n, float ry, float rx = 0.f) {
     std::vector<float> v(static_cast<size_t>(n) * 9, 0.f);
     for (size_t i = 0; i < static_cast<size_t>(n); ++i) {
@@ -799,6 +1190,8 @@ int main() {
     test_sampling();
     test_overlays_and_binding();
     test_skin_ops();
+    test_skin_unbounded();
+    test_skin_edges();
     test_program_matches_rig_pose();
     test_weighted_mask_ramps();
     test_blend();

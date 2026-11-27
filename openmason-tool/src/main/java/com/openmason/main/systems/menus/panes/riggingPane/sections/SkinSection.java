@@ -41,6 +41,8 @@ public class SkinSection {
     private final ImFloat falloff = new ImFloat(2.0f);
     private final ImFloat minWeight = new ImFloat(0.05f);
     private final ImBoolean rigid = new ImBoolean(false);
+    /** Auto weights: nearest bones per vertex, 0 = unlimited (every bone, like Blender). */
+    private final ImInt maxInfluences = new ImInt(0);
     private final ImFloat pruneBelow = new ImFloat(0.05f);
     private final ImInt mirrorAxis = new ImInt(0);
     private final ImInt mirrorDirection = new ImInt(0);
@@ -138,6 +140,11 @@ public class SkinSection {
             if (ImGui.isItemHovered()) ImGui.setTooltip("Higher = weights fall off faster with distance from a bone");
             ImGui.setNextItemWidth(ImGui.getContentRegionAvailX() * 0.5f);
             ImGui.dragFloat("Min weight##skin_min", minWeight.getData(), 0.005f, 0f, 0.5f, "%.3f");
+            ImGui.setNextItemWidth(ImGui.getContentRegionAvailX() * 0.5f);
+            if (ImGui.inputInt("Max influences##skin_max_infl", maxInfluences)) {
+                maxInfluences.set(Math.max(0, maxInfluences.get()));
+            }
+            if (ImGui.isItemHovered()) ImGui.setTooltip("Bones per vertex, nearest first; 0 = unlimited (every bone)");
         }
 
         List<String> chosen = new ArrayList<>();
@@ -146,7 +153,8 @@ public class SkinSection {
         if (!enabled) ImGui.beginDisabled();
         if (ThemedWidgets.accentButton("Auto Weights##skin_auto", -1, 0)) {
             float f = rigid.get() ? 0f : falloff.get();
-            act("Auto Weights", () -> skin.autoWeights(targets, chosen, f, minWeight.get()),
+            int limit = rigid.get() ? 0 : maxInfluences.get();
+            act("Auto Weights", () -> skin.autoWeights(targets, chosen, f, minWeight.get(), limit),
                     n -> n + " vertices weighted");
         }
         if (!enabled) ImGui.endDisabled();

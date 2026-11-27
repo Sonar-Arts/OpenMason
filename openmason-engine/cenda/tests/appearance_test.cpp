@@ -307,7 +307,7 @@ Mesh make_body(const cr_rig* rig, const Build& b) {
     m.skin = cr_skin_create(n);
     for (const Region& r : regions) {
         CHECK(cr_skin_auto_weights(m.skin, rig, m.pos.data(), r.first, r.count, r.bones.data(),
-                                   static_cast<int32_t>(r.bones.size()), 2.f, 0.01f) == CR_OK);
+                                   static_cast<int32_t>(r.bones.size()), 2.f, 0.01f, 0) == CR_OK);
     }
     return m;
 }
@@ -341,7 +341,7 @@ Mesh make_tunic(const cr_rig* rig, const Build& b, float clearance) {
     m.skin = cr_skin_create(n);
     for (const Region& r : regions) {
         CHECK(cr_skin_auto_weights(m.skin, rig, m.pos.data(), r.first, r.count, r.bones.data(),
-                                   static_cast<int32_t>(r.bones.size()), 2.f, 0.01f) == CR_OK);
+                                   static_cast<int32_t>(r.bones.size()), 2.f, 0.01f, 0) == CR_OK);
     }
     return m;
 }
@@ -504,7 +504,26 @@ std::vector<float> deform(const cr_rig* rig, const cr_skin* skin, const std::vec
 struct Result {
     double worst_lift = 0, worst_body_gap = 0, worst_ratio = 0;
     int failing_frames = 0, frames = 0;
+    std::vector<double> clip_lift, clip_gap;  // per clip, in clips() order
 };
+
+// The printed numbers before rig ABI 3 (#170, 2026-11-27): per clip (walk, crouch, reach, twist, wave) the tunic's
+// lift and the body's own stretch, to the 4 decimals they were printed with. Unweighted -> unorm16 deform and keeping
+// every auto-weight influence must not move them: with falloff 2 / prune 0.01 no vertex keeps a 5th bone, and the
+// quantized weights move a vertex by < 1e-4.
+constexpr double kPrinted = 0.5e-4 + 1e-9;
+const double kLiftA[5] = {0.0038, 0.0017, 0.0156, 0.0140, 0.0078};
+const double kGapA[5] = {0.0423, 0.1072, 0.0668, 0.0302, 0.0652};
+const double kLiftB[5] = {0.0044, 0.0006, 0.0123, 0.0090, 0.0078};
+const double kGapB[5] = {0.0517, 0.1250, 0.0719, 0.0314, 0.0695};
+
+void check_printed(const Result& r, const double* lift, const double* gap) {
+    CHECK(r.clip_lift.size() == 5 && r.clip_gap.size() == 5);
+    for (size_t c = 0; c < r.clip_lift.size() && c < 5; ++c) {
+        CHECK(std::fabs(r.clip_lift[c] - lift[c]) <= kPrinted);
+        CHECK(std::fabs(r.clip_gap[c] - gap[c]) <= kPrinted);
+    }
+}
 
 // Runs every clip; per frame the tunic's lift off the body (clearance - rest clearance, its widest vertex) must
 // stay within the body's own widest skin stretch that frame.
@@ -543,6 +562,8 @@ Result follow(const cr_rig* rig, const Mesh& body, const Mesh& pieces, const std
             r.worst_ratio = std::max(r.worst_ratio, gap > 0 ? lift / gap : 0.0);
         }
         std::printf("[appearance] %s %-7s tunic lift %.4f, body's own stretch %.4f\n", label, c.name, clip_lift, clip_gap);
+        r.clip_lift.push_back(clip_lift);
+        r.clip_gap.push_back(clip_gap);
         r.worst_lift = std::max(r.worst_lift, clip_lift);
         r.worst_body_gap = std::max(r.worst_body_gap, clip_gap);
     }
@@ -563,6 +584,14 @@ void test_garment_follows() {
     Mesh tunic = make_tunic(rig, a, clear);
     std::printf("[appearance] body %zu vertices / %zu triangles, tunic %zu vertices\n", body.pos.size() / 3,
                 body.tri.size() / 3, tunic.pos.size() / 3);
+    // Rig ABI 3 (#170): auto weights consider every bone of a region, no longer only the 4 nearest. The arm regions
+    // list 5 bones (chest, shoulder, upper arm, forearm, hand), but with falloff 2 the 5th-nearest bone's share is
+    // below the 1% prune everywhere (max 3 influences per vertex), so every number this test prints is the same as
+    // under ABI 2 (checked 2026-11-27: identical output before / after the change). The garment with more than 4
+    // influences is the "wide" tunic further down.
+    int32_t five = 0;
+    for (int32_t v = 0; v < cr_skin_vertex_count(body.skin); ++v) five += cr_skin_influence_count(body.skin, v) > 4 ? 1 : 0;
+    std::printf("[appearance] body: %d vertices keep more than 4 influences (max %d)\n", five, cr_skin_max_influences(body.skin));
 
     // Leader pose on the body it was made on: positions unchanged, joints by name.
     cc_garment_desc d{};
@@ -578,15 +607,27 @@ void test_garment_follows() {
     cc_garment_positions(g, fitted.data());
     CHECK(fitted == tunic.pos);
     for (int j = 0; j < JOINTS; ++j) CHECK(cc_garment_joint(g, j) == j);
-    std::vector<uint16_t> pj(fitted.size() / 3 * 4);
-    std::vector<uint8_t> pw(fitted.size() / 3 * 4);
-    CHECK(cc_garment_pack(g, pj.data(), pw.data()) == CC_OK);
-    for (size_t v = 0; v < pw.size(); v += 4) CHECK(pw[v] + pw[v + 1] + pw[v + 2] + pw[v + 3] == 255);
+    // Packed (CC ABI 2 / rig ABI 3): a range per vertex, unorm16 weights summing to exactly 65535.
+    const int32_t records = cc_garment_pack_size(g);
+    CHECK(records >= static_cast<int32_t>(fitted.size() / 3));
+    std::vector<uint32_t> ranges(fitted.size() / 3 * 2);
+    std::vector<uint16_t> infl(static_cast<size_t>(records) * 2);
+    CHECK(cc_garment_pack(g, records - 1, ranges.data(), infl.data()) == CC_ERR_ARG);
+    CHECK(cc_garment_pack(g, records, ranges.data(), infl.data()) == CC_OK);
+    int32_t widest = 0;
+    for (size_t v = 0; v < ranges.size(); v += 2) {
+        uint32_t qs = 0;
+        for (uint32_t k = ranges[v]; k < ranges[v] + ranges[v + 1]; ++k) qs += infl[k * 2 + 1];
+        CHECK(qs == 65535 && ranges[v + 1] >= 1);
+        widest = std::max(widest, static_cast<int32_t>(ranges[v + 1]));
+    }
+    std::printf("[appearance] tunic packed: %d records, up to %d influences per vertex\n", records, widest);
 
     const Result r = follow(rig, body, tunic, fitted, cc_garment_skin(g), "A");
     std::printf("[appearance] A: worst lift %.4f, widest body stretch %.4f, %d/%d frames over\n", r.worst_lift,
                 r.worst_body_gap, r.failing_frames, r.frames);
     CHECK(r.failing_frames == 0);
+    check_printed(r, kLiftA, kGapA);
 
     // The same garment by roles, from an identical but separate character: the fit is the identity.
     cr_rig* twin = make_rig(a);
@@ -636,10 +677,13 @@ void test_garment_follows() {
     mean /= static_cast<double>(rest_b.size());
     std::printf("[appearance] fitted onto B: rest clearance %.4f..%.4f (mean %.4f; made with %.4f)\n", lo, hi, mean, clear);
     CHECK(lo > 0.0 && mean > 0.5 * clear && mean < 3.0 * clear);
+    // Pre-#170 printed values: 0.0006..0.0211, mean 0.0146.
+    CHECK(std::fabs(lo - 0.0006) <= kPrinted && std::fabs(hi - 0.0211) <= kPrinted && std::fabs(mean - 0.0146) <= kPrinted);
     const Result rb = follow(rig_b, body_b, tunic, on_b, cc_garment_skin(gb), "B");
     std::printf("[appearance] B: worst lift %.4f, widest body stretch %.4f, %d/%d frames over\n", rb.worst_lift,
                 rb.worst_body_gap, rb.failing_frames, rb.frames);
     CHECK(rb.failing_frames == 0);
+    check_printed(rb, kLiftB, kGapB);
 
     // A joint the target lacks falls back to its nearest mapped ancestor and is counted.
     const char* odd[JOINTS];
@@ -652,6 +696,39 @@ void test_garment_follows() {
     cc_garment_desc bad = d;
     bad.vertex_count = 3;
     CHECK(cc_garment_create(chr, rig, &bad, nullptr) == nullptr);
+
+    // A "wide" tunic weighted to EVERY joint (no prune: JOINTS influences per vertex; ABI 2 kept 4): fitted onto the
+    // identical twin by roles it still does not move, and onto B it still sits outside the body; packing keeps all.
+    cr_skin* wide = cr_skin_create(static_cast<int32_t>(tunic.pos.size() / 3));
+    std::vector<int32_t> every(JOINTS);
+    for (int j = 0; j < JOINTS; ++j) every[static_cast<size_t>(j)] = j;
+    CHECK(cr_skin_auto_weights(wide, rig, tunic.pos.data(), 0, cr_skin_vertex_count(wide), every.data(), JOINTS, 1.f, 0.f, 0)
+          == CR_OK);
+    CHECK(cr_skin_max_influences(wide) == JOINTS);
+    cc_garment_desc dw = dt;
+    dw.skin = wide;
+    cc_garment* gw = cc_garment_create(chr, rig, &dw, &unresolved);
+    CHECK(gw != nullptr && unresolved == 0);
+    std::vector<float> wide_same(fitted.size());
+    cc_garment_positions(gw, wide_same.data());
+    double wide_worst = 0;
+    for (size_t i = 0; i < wide_same.size(); ++i) wide_worst = std::max(wide_worst, std::fabs(double(wide_same[i]) - tunic.pos[i]));
+    CHECK(wide_worst < 1e-5);
+    CHECK(cr_skin_max_influences(cc_garment_skin(gw)) == JOINTS);
+    CHECK(cc_garment_pack_size(gw) == static_cast<int32_t>(tunic.pos.size() / 3) * JOINTS);
+    cc_garment_desc dwb = db;
+    dwb.skin = wide;
+    cc_garment* gwb = cc_garment_create(chr_b, rig_b, &dwb, &unresolved);
+    CHECK(gwb != nullptr && unresolved == 0);
+    std::vector<float> wide_b(fitted.size());
+    cc_garment_positions(gwb, wide_b.data());
+    bool finite = true;
+    for (float x : wide_b) finite &= std::isfinite(x);
+    CHECK(finite);
+    std::printf("[appearance] wide tunic (%d influences per vertex): identical body worst move %.2e\n", JOINTS, wide_worst);
+    cc_garment_destroy(gwb);
+    cc_garment_destroy(gw);
+    cr_skin_destroy(wide);
 
     for (cc_garment* x : {g, gt, gb, gm}) cc_garment_destroy(x);
     for (cr_skin* s : {body.skin, tunic.skin, body_b.skin}) cr_skin_destroy(s);

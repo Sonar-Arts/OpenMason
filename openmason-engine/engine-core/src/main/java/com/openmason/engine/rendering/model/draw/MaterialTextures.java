@@ -16,4 +16,12 @@ public interface MaterialTextures {
     MaterialTextures UNTEXTURED = materialId -> 0;
 
     int textureFor(int materialId);
+
+    /**
+     * The material's base colour (OMO 1.9, RGBA, Blender / glTF semantics: it multiplies the texture), or null =
+     * white. Resolvers whose textures already hold the colour (the editor's solid-colour PNGs) keep the default.
+     */
+    default float[] baseColorFor(int materialId) {
+        return null;
+    }
 }

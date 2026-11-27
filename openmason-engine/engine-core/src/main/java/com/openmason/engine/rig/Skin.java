@@ -8,14 +8,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Editable per-vertex skin weights ({@code cr_skin}): up to {@link #MAX_INFLUENCES} (joint, weight)
- * influences per vertex; a vertex without any follows its part's joint rigidly. All editing logic is
- * native; this class marshals. Joints are {@link Rig} joint indices. A skin belongs to one thread at a
+ * Editable per-vertex skin weights ({@code cr_skin}): any number of (joint, weight) influences per vertex
+ * (rig.h ABI 3, OpenMason #170 - no cap); a vertex without any follows its part's joint rigidly. All editing
+ * logic is native; this class marshals. Joints are {@link Rig} joint indices. A skin belongs to one thread at a
  * time. Freed by {@link #close()} or, as a backstop, when unreachable.
  */
 public final class Skin implements AutoCloseable {
 
-    public static final int MAX_INFLUENCES = 4;
+    /** {@link #autoWeights}: weight every vertex to every bone (Blender's default). */
+    public static final int UNLIMITED_INFLUENCES = 0;
 
     /** Brush modes ({@code CR_PAINT_*}). */
     public enum PaintMode { ADD, SUBTRACT, REPLACE, SMOOTH }
@@ -139,19 +140,48 @@ public final class Skin implements AutoCloseable {
         }
     }
 
-    /** One vertex's influences (heaviest first); empty arrays for an unweighted vertex. */
+    /** One vertex's influences (heaviest first, all of them); empty arrays for an unweighted vertex. */
     public Influence get(int vertex) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment j = arena.allocate(ValueLayout.JAVA_INT, MAX_INFLUENCES);
-            MemorySegment w = arena.allocate(ValueLayout.JAVA_FLOAT, MAX_INFLUENCES);
-            int n = (int) CendaRig.SKIN_GET.invokeExact(handle(), vertex, j, w);
-            int[] joints = new int[n];
-            float[] weights = new float[n];
-            for (int i = 0; i < n; i++) {
-                joints[i] = j.getAtIndex(ValueLayout.JAVA_INT, i);
-                weights[i] = w.getAtIndex(ValueLayout.JAVA_FLOAT, i);
-            }
-            return new Influence(vertex, joints, weights);
+            int n = influenceCount(vertex);
+            if (n <= 0) return new Influence(vertex, new int[0], new float[0]);
+            MemorySegment j = arena.allocate(ValueLayout.JAVA_INT, n);
+            MemorySegment w = arena.allocate(ValueLayout.JAVA_FLOAT, n);
+            int full = (int) CendaRig.SKIN_GET.invokeExact(handle(), vertex, j, w, n);
+            int c = Math.min(n, full);
+            return new Influence(vertex, j.asSlice(0, 4L * c).toArray(ValueLayout.JAVA_INT),
+                w.asSlice(0, 4L * c).toArray(ValueLayout.JAVA_FLOAT));
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+    }
+
+    /** A vertex's influence count (0 = unweighted or a bad vertex). */
+    public int influenceCount(int vertex) {
+        try {
+            return (int) CendaRig.SKIN_INFLUENCE_COUNT.invokeExact(handle(), vertex);
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+    }
+
+    /** The largest influence count of any vertex (0 = nothing weighted). */
+    public int maxInfluences() {
+        try {
+            return (int) CendaRig.SKIN_MAX_INFLUENCES.invokeExact(handle());
+        } catch (Throwable t) {
+            throw CendaRig.rethrow(t);
+        }
+    }
+
+    /** The number of influences over every weighted vertex. */
+    public int influenceTotal() {
+        try {
+            int n = (int) CendaRig.SKIN_INFLUENCE_TOTAL.invokeExact(handle());
+            if (n < 0) throw new IllegalStateException("cr_skin_influence_total: " + CendaRig.lastError());
+            return n;
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Throwable t) {
             throw CendaRig.rethrow(t);
         }
@@ -179,23 +209,33 @@ public final class Skin implements AutoCloseable {
         }
     }
 
-    /** Sets every listed vertex (others untouched). */
+    /**
+     * Sets every listed vertex (others untouched), every influence kept (CSR {@code cr_skin_import}; duplicate
+     * joints merge, the rest is normalized natively).
+     */
     public void importInfluences(List<Influence> influences) {
         if (influences == null || influences.isEmpty()) return;
+        int count = influences.size();
+        long total = 0;
+        for (Influence inf : influences) total += inf.joints().length;
+        if (total > Integer.MAX_VALUE) throw new IllegalArgumentException("too many influences: " + total);
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment entries = arena.allocate(CendaRig.SKIN_ENTRY_BYTES * influences.size(), 4);
-            for (int i = 0; i < influences.size(); i++) {
+            MemorySegment vertices = arena.allocate(ValueLayout.JAVA_INT, count);
+            MemorySegment offsets = arena.allocate(ValueLayout.JAVA_INT, count + 1L);
+            MemorySegment joints = arena.allocate(ValueLayout.JAVA_INT, Math.max(1, total));
+            MemorySegment weights = arena.allocate(ValueLayout.JAVA_FLOAT, Math.max(1, total));
+            int o = 0;
+            for (int i = 0; i < count; i++) {
                 Influence inf = influences.get(i);
-                long o = CendaRig.SKIN_ENTRY_BYTES * i;
-                int c = Math.min(MAX_INFLUENCES, inf.joints().length);
-                entries.set(CendaRig.I32, o, inf.vertex());
-                entries.set(CendaRig.I32, o + 4, c);
-                for (int k = 0; k < c; k++) {
-                    entries.set(CendaRig.I32, o + 8 + 4L * k, inf.joints()[k]);
-                    entries.set(CendaRig.F32, o + 24 + 4L * k, inf.weights()[k]);
-                }
+                vertices.setAtIndex(ValueLayout.JAVA_INT, i, inf.vertex());
+                offsets.setAtIndex(ValueLayout.JAVA_INT, i, o);
+                int c = inf.joints().length;
+                MemorySegment.copy(inf.joints(), 0, joints, ValueLayout.JAVA_INT, 4L * o, c);
+                MemorySegment.copy(inf.weights(), 0, weights, ValueLayout.JAVA_FLOAT, 4L * o, c);
+                o += c;
             }
-            int rc = (int) CendaRig.SKIN_IMPORT.invokeExact(handle(), entries, influences.size());
+            offsets.setAtIndex(ValueLayout.JAVA_INT, count, o);
+            int rc = (int) CendaRig.SKIN_IMPORT.invokeExact(handle(), count, vertices, offsets, joints, weights);
             if (rc != CendaRig.OK) throw new IllegalArgumentException("cr_skin_import: " + CendaRig.lastError());
         } catch (RuntimeException e) {
             throw e;
@@ -204,46 +244,53 @@ public final class Skin implements AutoCloseable {
         }
     }
 
-    /** Every weighted vertex, in vertex order. */
+    /** Every weighted vertex, in vertex order, its influences heaviest first. */
     public List<Influence> exportInfluences() {
         try (Arena arena = Arena.ofConfined()) {
-            int n = (int) CendaRig.SKIN_EXPORT.invokeExact(handle(), MemorySegment.NULL, 0);
+            MemorySegment h = handle();
+            int n = (int) CendaRig.SKIN_EXPORT.invokeExact(h, 0, 0, MemorySegment.NULL, MemorySegment.NULL,
+                MemorySegment.NULL, MemorySegment.NULL);
+            if (n < 0) throw new IllegalStateException("cr_skin_export: " + CendaRig.lastError());
             List<Influence> out = new ArrayList<>(n);
             if (n == 0) return out;
-            MemorySegment entries = arena.allocate(CendaRig.SKIN_ENTRY_BYTES * n, 4);
-            int written = (int) CendaRig.SKIN_EXPORT.invokeExact(handle(), entries, n);
-            for (int i = 0; i < Math.min(n, written); i++) {
-                long o = CendaRig.SKIN_ENTRY_BYTES * i;
-                int c = entries.get(CendaRig.I32, o + 4);
-                int[] j = new int[c];
-                float[] w = new float[c];
-                for (int k = 0; k < c; k++) {
-                    j[k] = entries.get(CendaRig.I32, o + 8 + 4L * k);
-                    w[k] = entries.get(CendaRig.F32, o + 24 + 4L * k);
-                }
-                out.add(new Influence(entries.get(CendaRig.I32, o), j, w));
+            int total = influenceTotal();
+            MemorySegment vertices = arena.allocate(ValueLayout.JAVA_INT, n);
+            MemorySegment offsets = arena.allocate(ValueLayout.JAVA_INT, n + 1L);
+            MemorySegment joints = arena.allocate(ValueLayout.JAVA_INT, Math.max(1, total));
+            MemorySegment weights = arena.allocate(ValueLayout.JAVA_FLOAT, Math.max(1, total));
+            int written = (int) CendaRig.SKIN_EXPORT.invokeExact(h, n, total, vertices, offsets, joints, weights);
+            if (written != n) throw new IllegalStateException("cr_skin_export: " + CendaRig.lastError());
+            int[] v = vertices.toArray(ValueLayout.JAVA_INT);
+            int[] off = offsets.toArray(ValueLayout.JAVA_INT);
+            int[] j = joints.toArray(ValueLayout.JAVA_INT);
+            float[] w = weights.toArray(ValueLayout.JAVA_FLOAT);
+            for (int i = 0; i < n; i++) {
+                out.add(new Influence(v[i], java.util.Arrays.copyOfRange(j, off[i], off[i + 1]),
+                    java.util.Arrays.copyOfRange(w, off[i], off[i + 1])));
             }
             return out;
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Throwable t) {
             throw CendaRig.rethrow(t);
         }
     }
 
-    /** Packed GPU attributes (see {@link PackedSkin}). */
+    /** Packed GPU form (see {@link PackedSkin}); unweighted vertices are rigid to their part joint. */
     public PackedSkin pack(int[] partJointOfVertex) {
         int n = vertexCount();
         try (Arena arena = Arena.ofConfined()) {
+            MemorySegment h = handle();
+            int records = (int) CendaRig.SKIN_PACK_SIZE.invokeExact(h);
+            if (records < 0) throw new IllegalStateException("cr_skin_pack_size: " + CendaRig.lastError());
             MemorySegment parts = partJointOfVertex == null ? MemorySegment.NULL
                 : arena.allocateFrom(ValueLayout.JAVA_INT, partJointOfVertex);
-            MemorySegment joints = arena.allocate(8L * Math.max(1, n), 2);
-            MemorySegment weights = arena.allocate(4L * Math.max(1, n), 1);
-            int rc = (int) CendaRig.SKIN_PACK.invokeExact(handle(), parts, joints, weights);
+            MemorySegment ranges = arena.allocate(ValueLayout.JAVA_INT, 2L * Math.max(1, n));
+            MemorySegment influences = arena.allocate(ValueLayout.JAVA_SHORT, 2L * Math.max(1, records));
+            int rc = (int) CendaRig.SKIN_PACK.invokeExact(h, parts, records, ranges, influences);
             if (rc != CendaRig.OK) throw new IllegalArgumentException("cr_skin_pack: " + CendaRig.lastError());
-            short[] j = new short[n * 4];
-            byte[] w = new byte[n * 4];
-            MemorySegment.copy(joints, ValueLayout.JAVA_SHORT, 0, j, 0, n * 4);
-            MemorySegment.copy(weights, ValueLayout.JAVA_BYTE, 0, w, 0, n * 4);
-            return new PackedSkin(j, w);
+            return new PackedSkin(ranges.asSlice(0, 8L * n).toArray(ValueLayout.JAVA_INT),
+                influences.asSlice(0, 4L * records).toArray(ValueLayout.JAVA_SHORT));
         } catch (RuntimeException e) {
             throw e;
         } catch (Throwable t) {
@@ -253,15 +300,16 @@ public final class Skin implements AutoCloseable {
 
     /**
      * Auto weights for vertices {@code [first, first+count)} against {@code joints} (bones: their rest
-     * head-tail segments; parts: their pivots). {@code falloff} 0 = rigid to the nearest.
+     * head-tail segments; parts: their pivots). {@code falloff} 0 = rigid to the nearest. {@code maxInfluences}
+     * limits each vertex to its nearest bones ({@link #UNLIMITED_INFLUENCES} = every bone; 4 = the ABI 2 weights).
      */
     public void autoWeights(Rig rig, float[] positions, int first, int count, int[] joints,
-                            float falloff, float minWeight) {
+                            float falloff, float minWeight, int maxInfluences) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment p = arena.allocateFrom(ValueLayout.JAVA_FLOAT, positions);
             MemorySegment b = arena.allocateFrom(ValueLayout.JAVA_INT, joints);
             int rc = (int) CendaRig.SKIN_AUTO_WEIGHTS.invokeExact(handle(), rig.handle(), p, first, count, b,
-                joints.length, falloff, minWeight);
+                joints.length, falloff, minWeight, Math.max(0, maxInfluences));
             if (rc != CendaRig.OK) throw new IllegalArgumentException("cr_skin_auto_weights: " + CendaRig.lastError());
         } catch (RuntimeException e) {
             throw e;

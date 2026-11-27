@@ -505,7 +505,7 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                 }
                 m.aim.push_back(std::move(aj));
             }
-            if (!t_draft && (m.aim.empty() || m.aim.size() > 16)) fail(at + ": aim needs 1..16 joints");
+            if (!t_draft && m.aim.empty()) fail(at + ": aim needs at least one joint");  // no upper bound (rig ABI 3)
             m.target = str_field(v, "target", at, true);
             vec3_field(v, "axis", at, m.axis);
             m.each = bool_field(v, "each", at, false);
@@ -558,7 +558,7 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                 if (l.pull < 0.f || l.pull > 1.f || l.reach < 0.f || l.reach > 1.f) fail(lw + ": pull and reach must be in [0, 1]");
                 m.limbs.push_back(std::move(l));
             }
-            if (!t_draft && (m.limbs.empty() || m.limbs.size() > 5)) fail(at + ": a full-body modifier needs 1..5 limbs");
+            if (!t_draft && m.limbs.empty()) fail(at + ": a full-body modifier needs at least one limb");  // any number (rig ABI 3)
             m.pole = str_field(v, "hipGoal", at, false);
             m.hip_weight = static_cast<float>(num_field(v, "hipWeight", at, 1.0));
             iterations();
@@ -578,7 +578,6 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                     m.aim.push_back(std::move(aj));
                 }
             }
-            if (m.aim.size() > 15) fail(at + ": an orientation warp takes at most 15 spine joints");
             m.angle_param = str_field(v, "angleParam", at, true);
             m.max_angle = static_cast<float>(num_field(v, "maxAngle", at, 90.0));
             m.rate = static_cast<float>(num_field(v, "rate", at, 0.0));
@@ -614,7 +613,7 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                 }
                 m.legs.push_back(std::move(l));
             }
-            if (!t_draft && (m.legs.empty() || m.legs.size() > 5)) fail(at + ": needs 1..5 legs");
+            if (!t_draft && m.legs.empty()) fail(at + ": needs at least one leg");  // any number (rig ABI 3)
             auto nonneg = [&](const char* key, double fallback) {
                 const double x = num_field(v, key, at, fallback);
                 if (x < 0.0) fail(at + ": " + key + " must be >= 0");

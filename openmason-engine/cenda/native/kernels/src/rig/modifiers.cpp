@@ -139,17 +139,30 @@ struct LegRt {
     double fade = 0.0;    // the pull while releasing
 };
 
+// Per-leg / per-limb working values of one apply, sized at create (no allocation per frame).
+struct LegScratch {
+    Vec goal, ankle, toe, normal, sum;
+    Quat foot;
+    double ground = 0.0;
+    bool has = false;
+    int ties = 0;
+};
+
 struct ModRt {
-    cr_modifier_desc d{};
+    cr_modifier_desc d{};    // d.joints / d.joint_weights point into joints / weights below (ABI 3: any length)
+    std::vector<int32_t> joints;
+    std::vector<float> weights;
     std::vector<int> chain;  // FABRIK / CCD / SPRING: start .. end
     std::vector<Vec> cur, prev;
     bool spring_init = false;
     double acc = 0.0;
-    // Locomotion (#159).
+    // Locomotion (#159; any number of legs since ABI 3).
     float v[CR_VALUE_INPUT_COUNT]{};
-    LegRt legs[CR_MAX_LEGS];
-    bool has_toe[CR_MAX_LEGS]{};
-    bool with_pelvis[CR_MAX_LEGS]{};  // the thigh moves with the pelvis
+    std::vector<LegRt> legs;
+    std::vector<float> lock;          // per leg: CR_VALUE_LEG(k, CR_LEG_LOCK)
+    std::vector<uint8_t> has_toe;
+    std::vector<uint8_t> with_pelvis;  // the thigh moves with the pelvis
+    std::vector<LegScratch> scratch;   // per leg (or per FULL_BODY limb)
     int probe_count = 0;
     double angle = 0.0;
     bool angle_init = false;
@@ -158,7 +171,7 @@ struct ModRt {
     double out_pelvis = 0.0;
 
     void reset_locomotion() {
-        for (LegRt& l : legs) l = LegRt{};
+        for (LegRt& l : legs) l = LegRt{};  // (lock inputs are kept, like v[])
         angle = pelvis = out_pelvis = 0.0;
         angle_init = pelvis_init = false;
     }
@@ -608,26 +621,27 @@ void spring(cr_modstack& s, ModRt& m, double dt) {
     }
 }
 
-void full_body(cr_modstack& s, const cr_modifier_desc& d) {
+void full_body(cr_modstack& s, ModRt& m) {
+    const cr_modifier_desc& d = m.d;
     const int body = d.joints[0];
     const int limbs = (d.joint_count - 1) / 3;
     const int iterations = d.p[0] > 0.f ? static_cast<int>(d.p[0]) : 3;
-    Vec goals[5];
-    bool has[5]{};
+    LegScratch* sc = m.scratch.data();
     Quat unused;
     for (int it = 0; it < iterations; ++it) {
         Vec shift;
         double pulls = 0.0;
         for (int k = 0; k < limbs; ++k) {
-            has[k] = target_frame(s, d.target + k, goals[k], unused);
-            if (!has[k]) continue;
+            Vec& goal = sc[k].goal;
+            sc[k].has = target_frame(s, d.target + k, goal, unused);
+            if (!sc[k].has) continue;
             const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
             const Vec a = pivot(s, up);
             const double reach = length(pivot(s, mid) - a) + length(pivot(s, end) - pivot(s, mid));
             const double pull = std::clamp(static_cast<double>(d.joint_weights[1 + 3 * k]), 0.0, 1.0);
             if (pull <= 0.0) continue;
             pulls += pull;
-            const Vec to = goals[k] - a;
+            const Vec to = goal - a;
             const double excess = length(to) - reach * 0.999;
             if (excess > 0.0) shift = shift + normalized(to) * (excess * pull);
         }
@@ -640,11 +654,12 @@ void full_body(cr_modstack& s, const cr_modifier_desc& d) {
         move_world(s, body, shift);
     }
     for (int k = 0; k < limbs; ++k) {
-        if (!target_frame(s, d.target + k, goals[k], unused)) continue;
+        Vec& goal = sc[k].goal;
+        if (!target_frame(s, d.target + k, goal, unused)) continue;
         const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
         const double reach = std::clamp(static_cast<double>(d.joint_weights[2 + 3 * k]), 0.0, 1.0);
         const Vec c = pivot(s, end);
-        two_bone(s, up, mid, end, c + (goals[k] - c) * reach, nullptr, 0.0, nullptr);
+        two_bone(s, up, mid, end, c + (goal - c) * reach, nullptr, 0.0, nullptr);
     }
 }
 
@@ -663,16 +678,16 @@ double ease(double cur, double want, double rate, double dt) {
 
 // The highest pelvis offset along up, at most `cap` (what the caller wants), that lets every leg moving with the
 // pelvis reach its goal: |goal - (thigh + up * P)| <= its length. A leg already in reach at `cap` sets no bound.
-double reach_bound(const cr_modstack& s, const ModRt& m, const Vec* goals, double cap) {
+double reach_bound(const cr_modstack& s, const ModRt& m, double cap) {
     double bound = cap;
     const cr_modifier_desc& d = m.d;
     for (int k = 0, n = leg_count(d); k < n; ++k) {
-        if (!m.with_pelvis[k]) continue;
+        if (!m.with_pelvis[static_cast<size_t>(k)]) continue;
         const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
         const Vec a = pivot(s, up);
         const Vec b = pivot(s, mid);
         const double full = length(b - a) + length(effector(s, mid, end) - b);
-        const Vec g = goals[k] - a;
+        const Vec g = m.scratch[static_cast<size_t>(k)].goal - a;
         if (length(g - UP * cap) <= full) continue;  // already in reach at the offset the caller wants
         const double reach = full * (1.0 - 1e-9);
         const double h2 = g.x * g.x + g.z * g.z;
@@ -704,7 +719,7 @@ void place_leg(cr_modstack& s, const ModRt& m, int k, const Vec& goal, const Qua
     const cr_modifier_desc& d = m.d;
     const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
     Vec pole;
-    const bool use_pole = straight_leg_pole(s, up, mid, end, m.has_toe[k], goal, pole);
+    const bool use_pole = straight_leg_pole(s, up, mid, end, m.has_toe[static_cast<size_t>(k)] != 0, goal, pole);
     two_bone(s, up, mid, end, goal, use_pole ? &pole : nullptr, 0.0, nullptr);
     if (foot != nullptr && end >= 0) rotate_world(s, end, qnormalize(qmul(*foot, qconj(world_rot(s, end)))));
 }
@@ -741,23 +756,22 @@ void stride_warp(cr_modstack& s, ModRt& m) {
     if (length(dir) < 1e-9 || std::fabs(scale - 1.0) < 1e-9) return;
     dir = normalized(dir);
     const int legs = leg_count(d);
-    Vec goals[CR_MAX_LEGS];
-    Quat feet[CR_MAX_LEGS];
+    LegScratch* sc = m.scratch.data();
     for (int k = 0; k < legs; ++k) {
         const int up = d.joints[1 + 3 * k], mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
         const Vec a = pivot(s, up), f = effector(s, mid, end);
-        goals[k] = f + dir * (dot(f - a, dir) * (scale - 1.0));
-        if (end >= 0) feet[k] = world_rot(s, end);
+        sc[k].goal = f + dir * (dot(f - a, dir) * (scale - 1.0));
+        if (end >= 0) sc[k].foot = world_rot(s, end);
     }
     const double pw = std::clamp(static_cast<double>(m.v[CR_VALUE_PELVIS]), 0.0, 1.0);
     if (pw > 0.0) {
-        const double need = reach_bound(s, m, goals, 0.0);
+        const double need = reach_bound(s, m, 0.0);
         if (need < 0.0) {
             m.out_pelvis = need * pw;
             move_world(s, d.joints[0], UP * m.out_pelvis);
         }
     }
-    for (int k = 0; k < legs; ++k) place_leg(s, m, k, goals[k], d.joints[3 + 3 * k] >= 0 ? &feet[k] : nullptr);
+    for (int k = 0; k < legs; ++k) place_leg(s, m, k, sc[k].goal, d.joints[3 + 3 * k] >= 0 ? &sc[k].foot : nullptr);
 }
 
 // The leg length average of a foot-placement / stride modifier on the current pose.
@@ -792,27 +806,28 @@ int32_t foot_placement(cr_modstack& s, ModRt& m, double dt) {
     const double unlock_time = std::max(0.0, static_cast<double>(m.v[CR_VALUE_UNLOCK_TIME]));
 
     // The animated feet.
-    Vec ankle[CR_MAX_LEGS], toe[CR_MAX_LEGS];
-    Quat foot[CR_MAX_LEGS];
+    LegScratch* sc = m.scratch.data();
     for (int k = 0; k < legs; ++k) {
         const int mid = d.joints[2 + 3 * k], end = d.joints[3 + 3 * k];
-        ankle[k] = effector(s, mid, end);
-        if (end >= 0) foot[k] = world_rot(s, end);
-        if (m.has_toe[k]) toe[k] = transform_point(s.child[static_cast<size_t>(end)], Vec{});
+        sc[k].ankle = effector(s, mid, end);
+        if (end >= 0) sc[k].foot = world_rot(s, end);
+        if (m.has_toe[static_cast<size_t>(k)]) sc[k].toe = transform_point(s.child[static_cast<size_t>(end)], Vec{});
+        sc[k].ground = 0.0;
+        sc[k].normal = UP;
+        sc[k].has = false;
+        sc[k].ties = 0;
+        sc[k].sum = Vec{};
     }
 
     // The ground: one host call for every probe.
-    double ground[CR_MAX_LEGS]{};
-    Vec normal[CR_MAX_LEGS];
-    for (Vec& n : normal) n = UP;
     if (s.ground != nullptr && m.probe_count > 0) {
         const Vec up_w = transform_dir(s.frame, UP);
         const double units = length(up_w);  // world units per model unit
         const Vec down_w = normalized(up_w) * -1.0;
         int count = 0;
         for (int k = 0; k < legs; ++k) {
-            for (int point = 0; point < (m.has_toe[k] ? 2 : 1); ++point) {
-                const Vec p = point == 0 ? ankle[k] : toe[k];
+            for (int point = 0; point < (m.has_toe[static_cast<size_t>(k)] ? 2 : 1); ++point) {
+                const Vec p = point == 0 ? sc[k].ankle : sc[k].toe;
                 const Vec o = transform_point(s.frame, Vec{p.x, ground_y + probe_up, p.z});
                 cr_ground_probe& pr = s.probes[static_cast<size_t>(count++)];
                 pr.origin[0] = o.x;
@@ -831,9 +846,6 @@ int32_t foot_placement(cr_modstack& s, ModRt& m, double dt) {
             set_error("cr_modstack: the ground query failed");
             return CR_ERR_HOST;
         }
-        bool has[CR_MAX_LEGS]{};
-        int ties[CR_MAX_LEGS]{};
-        Vec sum[CR_MAX_LEGS];
         for (int i = 0; i < count; ++i) {
             const cr_ground_hit& h = s.hits[static_cast<size_t>(i)];
             if (h.hit == 0 || !finite3(h.point)) continue;
@@ -841,41 +853,43 @@ int32_t foot_placement(cr_modstack& s, ModRt& m, double dt) {
             const double height = transform_point(s.frame_inv, Vec{h.point[0], h.point[1], h.point[2]}).y - ground_y;
             Vec n = transform_dir(s.frame_inv, Vec{h.normal[0], h.normal[1], h.normal[2]});
             n = std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z) && length(n) > EPS ? normalized(n) : UP;
-            if (!has[k] || height > ground[k] + 1e-6) {
-                has[k] = true;
-                ground[k] = height;
-                sum[k] = n;
-                ties[k] = 1;
-            } else if (std::fabs(height - ground[k]) <= 1e-6) {
-                sum[k] = sum[k] + n;
-                ++ties[k];
+            LegScratch& l = sc[k];
+            if (!l.has || height > l.ground + 1e-6) {
+                l.has = true;
+                l.ground = height;
+                l.sum = n;
+                l.ties = 1;
+            } else if (std::fabs(height - l.ground) <= 1e-6) {
+                l.sum = l.sum + n;
+                ++l.ties;
             }
         }
         for (int k = 0; k < legs; ++k) {
-            if (has[k] && length(sum[k]) > EPS) normal[k] = normalized(sum[k]);
+            if (sc[k].has && length(sc[k].sum) > EPS) sc[k].normal = normalized(sc[k].sum);
         }
     }
 
     // Easing, locks, goals.
-    Vec goals[CR_MAX_LEGS];
     for (int k = 0; k < legs; ++k) {
-        LegRt& l = m.legs[k];
-        const double lock = std::clamp(static_cast<double>(m.v[CR_VALUE_LOCK + k]), 0.0, 1.0);
+        LegRt& l = m.legs[static_cast<size_t>(k)];
+        const double lock = std::clamp(static_cast<double>(m.lock[static_cast<size_t>(k)]), 0.0, 1.0);
+        const Vec& ankle_k = sc[k].ankle;
+        const double ground_k = sc[k].ground;
         if (!l.init) {
-            l.ground = ground[k];
+            l.ground = ground_k;
             l.init = true;
         } else if (!l.locked) {
-            l.ground = ease(l.ground, ground[k], m.v[CR_VALUE_FOOT_RATE], dt);
+            l.ground = ease(l.ground, ground_k, m.v[CR_VALUE_FOOT_RATE], dt);
         }
-        const Vec live = ankle[k] + UP * l.ground;
+        const Vec live = ankle_k + UP * l.ground;
         if (lock > 0.0 && !l.locked) {
             l.locked = true;
             l.fade = 0.0;
-            l.lock_w = transform_point(s.frame, ankle[k] + UP * ground[k]);
-            l.lock_height = ankle[k].y;
+            l.lock_w = transform_point(s.frame, ankle_k + UP * ground_k);
+            l.lock_height = ankle_k.y;
         }
         // Pinned where it locked; its height above that ground follows the animation (heel roll, a late contact).
-        Vec lock_m = transform_point(s.frame_inv, l.lock_w) + UP * (ankle[k].y - l.lock_height);
+        Vec lock_m = transform_point(s.frame_inv, l.lock_w) + UP * (ankle_k.y - l.lock_height);
         if (l.locked && (lock <= 0.0 || length(lock_m - live) > max_lock)) {
             l.locked = false;
             l.fade = l.alpha;
@@ -888,12 +902,12 @@ int32_t foot_placement(cr_modstack& s, ModRt& m, double dt) {
             a = l.fade;
         }
         l.alpha = a;
-        goals[k] = a > 0.0 ? live + (lock_m - live) * a : live;
+        sc[k].goal = a > 0.0 ? live + (lock_m - live) * a : live;
     }
 
     // The pelvis: down to the lowest foot's need, eased, never so high a goal is out of reach.
     double need = std::numeric_limits<double>::infinity();
-    for (int k = 0; k < legs; ++k) need = std::min(need, goals[k].y - ankle[k].y);
+    for (int k = 0; k < legs; ++k) need = std::min(need, sc[k].goal.y - sc[k].ankle.y);
     need = std::clamp(need, -max_drop, max_rise);
     if (!m.pelvis_init) {
         m.pelvis = need;
@@ -901,7 +915,7 @@ int32_t foot_placement(cr_modstack& s, ModRt& m, double dt) {
     } else {
         m.pelvis = ease(m.pelvis, need, m.v[CR_VALUE_PELVIS_RATE], dt);
     }
-    m.pelvis = std::max(reach_bound(s, m, goals, m.pelvis), -max_drop);
+    m.pelvis = std::max(reach_bound(s, m, m.pelvis), -max_drop);
     m.out_pelvis = m.pelvis;
     if (m.pelvis != 0.0) move_world(s, d.joints[0], UP * m.pelvis);
 
@@ -910,18 +924,26 @@ int32_t foot_placement(cr_modstack& s, ModRt& m, double dt) {
         const int end = d.joints[3 + 3 * k];
         Quat aligned;
         if (end >= 0) {
-            Quat q = from_to(UP, normal[k]);
+            Quat q = from_to(UP, sc[k].normal);
             double axis[3];
             const double angle = qangle_axis(q, axis);
             if (angle > max_align) q = qaxis(axis[0], axis[1], axis[2], max_align);
-            aligned = qnormalize(qmul(q, foot[k]));
+            aligned = qnormalize(qmul(q, sc[k].foot));
         }
-        place_leg(s, m, k, goals[k], end >= 0 ? &aligned : nullptr);
+        place_leg(s, m, k, sc[k].goal, end >= 0 ? &aligned : nullptr);
     }
     return CR_OK;
 }
 
-// Which keyed values a modifier type reads (inputs) / reports (outputs).
+// A per-leg key (rig.h CR_VALUE_LEG): its leg and field, false when the key is not one or the leg does not exist.
+bool leg_key(const cr_modifier_desc& d, int key, int& leg, int& field) {
+    if (key < CR_VALUE_LEG_BASE || (d.type != CR_MOD_FOOT_PLACEMENT && d.type != CR_MOD_STRIDE_WARP)) return false;
+    leg = (key - CR_VALUE_LEG_BASE) / CR_VALUE_LEG_STRIDE;
+    field = (key - CR_VALUE_LEG_BASE) % CR_VALUE_LEG_STRIDE;
+    return leg < leg_count(d);
+}
+
+// Which scalar keyed values a modifier type reads (inputs); per-leg keys are leg_key's.
 bool reads_value(const cr_modifier_desc& d, int key) {
     switch (d.type) {
         case CR_MOD_ORIENT_WARP:
@@ -929,8 +951,7 @@ bool reads_value(const cr_modifier_desc& d, int key) {
         case CR_MOD_STRIDE_WARP:
             return key >= CR_VALUE_SCALE && key <= CR_VALUE_PELVIS;
         case CR_MOD_FOOT_PLACEMENT:
-            return (key >= CR_VALUE_LOCK && key < CR_VALUE_LOCK + leg_count(d))
-                || (key >= CR_VALUE_PROBE_UP && key < CR_VALUE_INPUT_COUNT);
+            return key >= CR_VALUE_PROBE_UP && key < CR_VALUE_INPUT_COUNT;
         default:
             return false;
     }
@@ -954,9 +975,11 @@ void blend_back(cr_modstack& s, float w) {
 bool valid_joint(const cr_rig& rig, int j) { return j >= 0 && static_cast<size_t>(j) < rig.joints.size(); }
 
 bool check_mod(const cr_rig& rig, const cr_modifier_desc& d, int targets, std::vector<int>& chain, std::string& why) {
+    // need_max < 0 = no upper bound (ABI 3: joint lists of any length).
     auto joints_ok = [&](int need_min, int need_max) {
-        if (d.joint_count < need_min || d.joint_count > need_max) {
-            why = "needs " + std::to_string(need_min) + ".." + std::to_string(need_max) + " joints";
+        if (d.joint_count < need_min || (need_max >= 0 && d.joint_count > need_max)) {
+            why = need_max >= 0 ? "needs " + std::to_string(need_min) + ".." + std::to_string(need_max) + " joints"
+                                : "needs at least " + std::to_string(need_min) + " joints";
             return false;
         }
         for (int k = 0; k < d.joint_count; ++k) {
@@ -985,7 +1008,7 @@ bool check_mod(const cr_rig& rig, const cr_modifier_desc& d, int targets, std::v
             }
             return true;
         case CR_MOD_AIM:
-            return joints_ok(1, CR_MOD_MAX_JOINTS);
+            return joints_ok(1, -1);
         case CR_MOD_CONSTRAINT:
             if (d.kind < CR_CONSTRAINT_POINT || d.kind > CR_CONSTRAINT_COPY) {
                 why = "unknown constraint kind";
@@ -993,11 +1016,11 @@ bool check_mod(const cr_rig& rig, const cr_modifier_desc& d, int targets, std::v
             }
             return joints_ok(1, 1);
         case CR_MOD_ORIENT_WARP:
-            return joints_ok(1, CR_MOD_MAX_JOINTS);
+            return joints_ok(1, -1);
         case CR_MOD_STRIDE_WARP:
         case CR_MOD_FOOT_PLACEMENT: {
-            if (d.joint_count < 4 || d.joint_count > 1 + 3 * CR_MAX_LEGS || (d.joint_count - 1) % 3 != 0) {
-                why = "needs the pelvis and 3 joints per leg (1..5 legs)";
+            if (d.joint_count < 4 || (d.joint_count - 1) % 3 != 0) {
+                why = "needs the pelvis and 3 joints per leg (at least one leg)";
                 return false;
             }
             for (int k = 0; k < d.joint_count; ++k) {
@@ -1010,7 +1033,7 @@ bool check_mod(const cr_rig& rig, const cr_modifier_desc& d, int targets, std::v
             return true;
         }
         case CR_MOD_FULL_BODY:
-            if (!joints_ok(4, 16) || (d.joint_count - 1) % 3 != 0) {
+            if (!joints_ok(4, -1) || (d.joint_count - 1) % 3 != 0) {
                 why = d.joint_count >= 4 ? "needs the body and 3 joints per limb" : why;
                 return false;
             }
@@ -1082,7 +1105,7 @@ int32_t modstack_apply(cr_modstack& s, PoseBuf& pose, float dt) {
                 spring(s, m, dt);
                 break;
             case CR_MOD_FULL_BODY:
-                full_body(s, d);
+                full_body(s, m);
                 break;
             case CR_MOD_ORIENT_WARP:
                 orient_warp(s, m, dt);
@@ -1129,6 +1152,21 @@ cr_modstack* cr_modstack_create(const cr_rig* rig, const cr_modifier_desc* mods,
     for (int32_t i = 0; i < mod_count; ++i) {
         ModRt m;
         m.d = mods[i];
+        // The joint list is copied (ABI 3): the caller's arrays need only live for this call.
+        if (m.d.joint_count < 0 || (m.d.joint_count > 0 && m.d.joints == nullptr)) {
+            set_error("cr_modstack_create: modifier " + std::to_string(i) + ": a joint list needs joints");
+            delete s;
+            return nullptr;
+        }
+        const size_t jc = static_cast<size_t>(m.d.joint_count);
+        m.joints.assign(m.d.joints, m.d.joints + jc);
+        if (m.d.joint_weights != nullptr) {
+            m.weights.assign(m.d.joint_weights, m.d.joint_weights + jc);
+        } else {
+            m.weights.assign(jc, 0.f);
+        }
+        m.d.joints = m.joints.data();
+        m.d.joint_weights = m.weights.data();
         std::string why;
         if (!check_mod(*rig, m.d, target_count, m.chain, why)) {
             set_error("cr_modstack_create: modifier " + std::to_string(i) + ": " + why);
@@ -1148,22 +1186,29 @@ cr_modstack* cr_modstack_create(const cr_rig* rig, const cr_modifier_desc* mods,
         m.v[CR_VALUE_PELVIS_RATE] = 10.f;
         m.v[CR_VALUE_FOOT_RATE] = 15.f;
         m.v[CR_VALUE_UNLOCK_TIME] = 0.15f;
+        if (m.d.type == CR_MOD_FULL_BODY) m.scratch.resize(static_cast<size_t>((m.d.joint_count - 1) / 3));
         if (m.d.type == CR_MOD_STRIDE_WARP || m.d.type == CR_MOD_FOOT_PLACEMENT) {
             const int pelvis = m.d.joints[0];
+            const size_t nl = static_cast<size_t>(leg_count(m.d));
+            m.legs.assign(nl, LegRt{});
+            m.lock.assign(nl, 0.f);
+            m.has_toe.assign(nl, 0);
+            m.with_pelvis.assign(nl, 0);
+            m.scratch.assign(nl, LegScratch{});
             for (int k = 0, legs = leg_count(m.d); k < legs; ++k) {
                 const int end = m.d.joints[3 + 3 * k];
                 if (end >= 0) {
                     const Joint& j = rig->joints[static_cast<size_t>(end)];
-                    m.has_toe[k] = j.kind == CR_JOINT_BONE
+                    m.has_toe[static_cast<size_t>(k)] = j.kind == CR_JOINT_BONE
                         && length(vec_of(j.endpoint)) > 1e-6;
                 }
                 for (int a = m.d.joints[1 + 3 * k]; a >= 0; a = rig->joints[static_cast<size_t>(a)].parent) {
                     if (a == pelvis) {
-                        m.with_pelvis[k] = true;
+                        m.with_pelvis[static_cast<size_t>(k)] = 1;
                         break;
                     }
                 }
-                m.probe_count += m.has_toe[k] ? 2 : 1;
+                m.probe_count += m.has_toe[static_cast<size_t>(k)] ? 2 : 1;
             }
             if (m.d.type == CR_MOD_FOOT_PLACEMENT && static_cast<size_t>(m.probe_count) > s->probes.size()) {
                 s->probes.resize(static_cast<size_t>(m.probe_count));
@@ -1171,6 +1216,11 @@ cr_modstack* cr_modstack_create(const cr_rig* rig, const cr_modifier_desc* mods,
             }
         }
         s->mods.push_back(std::move(m));
+    }
+    // (Moving a ModRt keeps its vectors' buffers, but re-point anyway: the descs must address the stack's copies.)
+    for (ModRt& m : s->mods) {
+        m.d.joints = m.joints.data();
+        m.d.joint_weights = m.weights.data();
     }
     s->targets.resize(static_cast<size_t>(target_count));
     s->limits.resize(n);
@@ -1317,6 +1367,15 @@ int32_t cr_modstack_set_value(cr_modstack* stack, int32_t mod, int32_t key, floa
         return CR_ERR_ARG;
     }
     ModRt& m = stack->mods[static_cast<size_t>(mod)];
+    int leg = 0, field = 0;
+    if (leg_key(m.d, key, leg, field)) {
+        if (m.d.type == CR_MOD_FOOT_PLACEMENT && field == CR_LEG_LOCK) {
+            m.lock[static_cast<size_t>(leg)] = value;
+            return CR_OK;
+        }
+        set_error("cr_modstack_set_value: modifier " + std::to_string(mod) + " does not read leg value " + std::to_string(key));
+        return CR_ERR_RANGE;
+    }
     if (!reads_value(m.d, key)) {
         set_error("cr_modstack_set_value: modifier " + std::to_string(mod) + " does not read value " + std::to_string(key));
         return CR_ERR_RANGE;
@@ -1329,22 +1388,24 @@ float cr_modstack_get_value(const cr_modstack* stack, int32_t mod, int32_t key) 
     if (stack == nullptr || mod < 0 || static_cast<size_t>(mod) >= stack->mods.size()) return 0.f;
     const ModRt& m = stack->mods[static_cast<size_t>(mod)];
     if (reads_value(m.d, key)) return m.v[key];
-    const int legs = m.d.type == CR_MOD_FOOT_PLACEMENT ? leg_count(m.d) : 0;
+    int leg = 0, field = 0;
+    if (leg_key(m.d, key, leg, field)) {
+        if (m.d.type != CR_MOD_FOOT_PLACEMENT) return 0.f;
+        const size_t k = static_cast<size_t>(leg);
+        switch (field) {
+            case CR_LEG_LOCK: return m.lock[k];
+            case CR_LEG_OUT_LOCKED: return m.legs[k].locked ? 1.f : 0.f;
+            case CR_LEG_OUT_GROUND: return static_cast<float>(m.legs[k].ground);
+            case CR_LEG_OUT_ALPHA: return static_cast<float>(m.legs[k].alpha);
+            default: return 0.f;
+        }
+    }
     switch (m.d.type) {
         case CR_MOD_ORIENT_WARP:
             return key == CR_VALUE_OUT_ANGLE ? static_cast<float>(m.angle) : 0.f;
         case CR_MOD_STRIDE_WARP:
         case CR_MOD_FOOT_PLACEMENT:
             if (key == CR_VALUE_OUT_PELVIS) return static_cast<float>(m.out_pelvis);
-            if (key >= CR_VALUE_OUT_LOCKED && key < CR_VALUE_OUT_LOCKED + legs) {
-                return m.legs[key - CR_VALUE_OUT_LOCKED].locked ? 1.f : 0.f;
-            }
-            if (key >= CR_VALUE_OUT_GROUND && key < CR_VALUE_OUT_GROUND + legs) {
-                return static_cast<float>(m.legs[key - CR_VALUE_OUT_GROUND].ground);
-            }
-            if (key >= CR_VALUE_OUT_ALPHA && key < CR_VALUE_OUT_ALPHA + legs) {
-                return static_cast<float>(m.legs[key - CR_VALUE_OUT_ALPHA].alpha);
-            }
             return 0.f;
         default:
             return 0.f;

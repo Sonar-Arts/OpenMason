@@ -739,17 +739,15 @@ cc_retargeter* cc_retarget_create(const cr_rig* source_rig, const cc_char* sourc
     }
     // IK goals: one two-bone modifier each (targets 2g = goal, 2g + 1 = pole).
     std::vector<cr_modifier_desc> descs;
+    std::vector<std::array<int32_t, 3>> desc_joints;  // rig ABI 3: the desc points at them; create copies
     std::vector<int> src_goal_joints, dst_goal_joints;
     for (size_t pi = 0; pi < rt->chains.size(); ++pi) {
         Pair& p = rt->chains[pi];
         if (p.goal < 0) continue;
         cr_modifier_desc d{};
         d.type = CR_MOD_TWO_BONE;
-        for (int& j : d.joints) j = -1;
         d.joint_count = 3;
-        d.joints[0] = p.d.joints.front();
-        d.joints[1] = p.d.joints[p.d.joints.size() - 2];
-        d.joints[2] = p.d.joints.back();
+        desc_joints.push_back({p.d.joints.front(), p.d.joints[p.d.joints.size() - 2], p.d.joints.back()});
         d.target = static_cast<int32_t>(2 * descs.size());
         d.pole = d.target + 1;
         d.flags = CR_MOD_MATCH_ROTATION;
@@ -760,6 +758,7 @@ cc_retargeter* cc_retarget_create(const cr_rig* source_rig, const cc_char* sourc
         src_goal_joints.push_back(p.s.joints.back());
         dst_goal_joints.push_back(p.d.joints.back());
     }
+    for (size_t k = 0; k < descs.size(); ++k) descs[k].joints = desc_joints[k].data();
     if (!descs.empty()) {
         rt->ik = cr_modstack_create(target_rig, descs.data(), static_cast<int32_t>(descs.size()),
                                     static_cast<int32_t>(2 * descs.size()));

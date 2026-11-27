@@ -30,6 +30,11 @@ import java.util.Map;
  * @param rig        the model's rig: one joint per part (joint i = part i), then its
  *                   bones, plus skin weights. Posed by the native rig
  *                   ({@link com.openmason.engine.rig.RigPoser}); never null
+ * @param normals    corner normals (OpenMason #169), 2 octahedral snorm16 values per vertex
+ *                   ({@code model_shading.h}); the pair {@code (-32768, -32768)}
+ *                   ({@link com.openmason.engine.rendering.model.draw.ModelNormalGlsl#FLAT}) marks a flat-shaded
+ *                   corner, lit with its drawn face's exact normal. Null = every corner flat (a model without
+ *                   smooth faces or custom normals: every OMO before 1.9)
  */
 public record EntityGeometry(
         float[] vertices,
@@ -39,7 +44,8 @@ public record EntityGeometry(
         Map<Integer, MaterialImage> materials,
         float restMinY,
         List<EntityAttachmentPoint> attachmentPoints,
-        RigModel rig
+        RigModel rig,
+        short[] normals
 ) {
     public EntityGeometry {
         parts = parts == null ? List.of() : List.copyOf(parts);
@@ -48,13 +54,33 @@ public record EntityGeometry(
         if (rig == null) {
             rig = RigModel.ofParts(partSpecs(parts), partJointOfVertex(parts, indices, vertices));
         }
+        if (normals != null && vertices != null && normals.length != (vertices.length / 3) * 2) {
+            throw new IllegalArgumentException("normals hold 2 values per vertex: " + normals.length + " for "
+                    + vertices.length / 3 + " vertices");
+        }
+    }
+
+    /** Geometry without normals (every corner flat). */
+    public EntityGeometry(float[] vertices, float[] texCoords, int[] indices, List<EntityPart> parts,
+                          Map<Integer, MaterialImage> materials, float restMinY,
+                          List<EntityAttachmentPoint> attachmentPoints, RigModel rig) {
+        this(vertices, texCoords, indices, parts, materials, restMinY, attachmentPoints, rig, null);
+    }
+
+    /** True when some corner has its own (smooth or custom) normal. */
+    public boolean hasSmoothNormals() {
+        if (normals == null) return false;
+        for (int i = 0; i + 1 < normals.length; i += 2) {
+            if (normals[i] != Short.MIN_VALUE || normals[i + 1] != Short.MIN_VALUE) return true;
+        }
+        return false;
     }
 
     /** Geometry whose rig is its parts alone (no bones, no skin). */
     public EntityGeometry(float[] vertices, float[] texCoords, int[] indices, List<EntityPart> parts,
                           Map<Integer, MaterialImage> materials, float restMinY,
                           List<EntityAttachmentPoint> attachmentPoints) {
-        this(vertices, texCoords, indices, parts, materials, restMinY, attachmentPoints, null);
+        this(vertices, texCoords, indices, parts, materials, restMinY, attachmentPoints, null, null);
     }
 
     /** The parts as rig joints (joint i = part i). */

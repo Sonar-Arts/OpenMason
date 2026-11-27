@@ -51,19 +51,19 @@
 //     constraint      kind: point | orient | parent | aim | copy, joint, target, offset?: [x,y,z],
 //                     offsetRot?: [x,y,z] degrees, axis?: [x,y,z] (aim)
 //     spring          start, end, stiffness?: 1, drag?: 0.4, gravity?: [x,y,z], radius?: 0, step?: 1/60
-//     fullBody        body, limbs: [ {upper, mid, end, target, pull?: 1, reach?: 1} ] (1..5), hipGoal?,
+//     fullBody        body, limbs: [ {upper, mid, end, target, pull?: 1, reach?: 1} ] (1 or more), hipGoal?,
 //                     hipWeight?: 1, iterations?: 3
 //     orientationWarp hips, spine?: [ {joint, weight?: 1} ] parents first, angleParam (float, degrees: the
 //                     movement direction relative to the facing, counter-clockwise seen from above), maxAngle?: 90,
 //                     rate?: 0 (easing 1/s, 0 = instant), counter?: 1 (share of the turn the spine takes back)
-//     strideWarp      pelvis, legs: [ {upper, mid, end?} ] (1..5; no end = the mid joint's tail is the ankle),
+//     strideWarp      pelvis, legs: [ {upper, mid, end?} ] (1 or more; no end = the mid joint's tail is the ankle),
 //                     speedParam (float: the real ground speed), directionParam? (vec2: travel direction in model
 //                     x/z; default the character's facing), animSpeed?: the clips' speed at play rate 1,
 //                     animSpeedCurve?: a curve that says it (wins when present), node?: the node whose clips get the
 //                     play rate (default the root), rateMin?: 0.8, rateMax?: 1.2, strideMin?: 0.5, strideMax?: 2,
 //                     pelvisWeight?: 1. Play rate = clamp(speed / animSpeed, rateMin, rateMax); the stride scales
 //                     by the rest, clamped to [strideMin, strideMax]
-//     footPlacement   pelvis, legs: [ {upper, mid, end?, lockCurve?, lockMarkers?: [down, up]} ] (1..5), probeUp?,
+//     footPlacement   pelvis, legs: [ {upper, mid, end?, lockCurve?, lockMarkers?: [down, up]} ] (1 or more), probeUp?,
 //                     probeDown?, maxDrop?, maxLockDistance? (0 = from the leg length), maxRise?: 0, maxAlign?: 30,
 //                     pelvisRate?: 10, footRate?: 15, groundHeight?: 0 (the clips' flat ground, model y),
 //                     unlockTime?: 0.15. The host answers the ground query (cg_instance_set_ground)

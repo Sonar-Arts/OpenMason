@@ -596,10 +596,11 @@ cc_garment* cc_garment_create(const cc_char* target, const cr_rig* target_rig, c
                 }
                 return moves.emplace(j, m).first->second;
             };
-            int32_t joints[CR_MAX_INFLUENCES];
-            float weights[CR_MAX_INFLUENCES];
+            // Every influence of a vertex (rig ABI 3: any number).
+            std::vector<int32_t> joints(static_cast<size_t>(std::max(1, cr_skin_max_influences(d->skin))));
+            std::vector<float> weights(joints.size());
             for (int32_t v = 0; v < n; ++v) {
-                int32_t count = cr_skin_get(d->skin, v, joints, weights);
+                int32_t count = cr_skin_get(d->skin, v, joints.data(), weights.data(), static_cast<int32_t>(joints.size()));
                 if (count <= 0) {
                     joints[0] = 0;
                     weights[0] = 1.f;
@@ -611,22 +612,22 @@ cc_garment* cc_garment_create(const cc_char* target, const cr_rig* target_rig, c
                 Mat4 kb{};
                 double wsum = 0.0;
                 for (int i = 0; i < count; ++i) {
-                    const int r = joints[i];
+                    const int r = joints[static_cast<size_t>(i)];
                     if (r < 0 || r >= refs) continue;
                     int sj = src_joint[static_cast<size_t>(r)];
                     if (sj < 0) continue;
-                    wsum += weights[i];
+                    wsum += weights[static_cast<size_t>(i)];
                 }
                 if (wsum <= 0.0) continue;  // nothing to fit with: keep the source position
                 for (int i = 0; i < count; ++i) {
-                    const int r = joints[i];
+                    const int r = joints[static_cast<size_t>(i)];
                     if (r < 0 || r >= refs || src_joint[static_cast<size_t>(r)] < 0) continue;
-                    aref = aref + apply(A.skin[static_cast<size_t>(src_joint[static_cast<size_t>(r)])], rest) * (weights[i] / wsum);
+                    aref = aref + apply(A.skin[static_cast<size_t>(src_joint[static_cast<size_t>(r)])], rest) * (weights[static_cast<size_t>(i)] / wsum);
                 }
                 for (int i = 0; i < count; ++i) {
-                    const int r = joints[i];
+                    const int r = joints[static_cast<size_t>(i)];
                     if (r < 0 || r >= refs || src_joint[static_cast<size_t>(r)] < 0) continue;
-                    const double w = weights[i] / wsum;
+                    const double w = weights[static_cast<size_t>(i)] / wsum;
                     const Move& m = move_of(src_joint[static_cast<size_t>(r)]);
                     V3 x = aref - m.pa;
                     if (m.has_axis) {
@@ -675,10 +676,12 @@ int32_t cc_garment_positions(const cc_garment* g, float* out) {
 
 const cr_skin* cc_garment_skin(const cc_garment* g) { return g == nullptr ? nullptr : g->skin; }
 
-int32_t cc_garment_pack(const cc_garment* g, uint16_t* out_joints, uint8_t* out_weights) {
-    if (g == nullptr || out_joints == nullptr || out_weights == nullptr) return error(CC_ERR_ARG, "cc_garment_pack: bad arguments");
+int32_t cc_garment_pack_size(const cc_garment* g) { return g == nullptr ? 0 : cr_skin_pack_size(g->skin); }
+
+int32_t cc_garment_pack(const cc_garment* g, int32_t influence_capacity, uint32_t* out_ranges, uint16_t* out_influences) {
+    if (g == nullptr || out_ranges == nullptr || out_influences == nullptr) return error(CC_ERR_ARG, "cc_garment_pack: bad arguments");
     std::vector<int32_t> rigid(g->positions.size() / 3, g->fallback);
-    if (cr_skin_pack(g->skin, rigid.data(), out_joints, out_weights) != CR_OK) {
+    if (cr_skin_pack(g->skin, rigid.data(), influence_capacity, out_ranges, out_influences) != CR_OK) {
         return error(CC_ERR_ARG, std::string("cc_garment_pack: ") + cr_last_error());
     }
     return CC_OK;

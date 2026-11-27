@@ -5,7 +5,7 @@ a mesh-less segment: head at `origin + position` in its parent's frame,
 rotated by `rotation`, tail at `endpoint` (bone-local). Bones drive:
 - **parts parented to them** (`bone_bind_part {part, bone}`) — the part hangs
   off the bone's TAIL, so rotating the bone swings the part;
-- **skinned vertices** — per-vertex weights blend up to 4 bones/parts (topic
+- **skinned vertices** — per-vertex weights blend any number of bones/parts (topic
   `skinning`, `skin_*` tools); unweighted vertices follow their own part.
 Parents may mix freely: bone under part, part under bone, bone under bone.
 

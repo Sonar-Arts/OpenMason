@@ -160,6 +160,12 @@ public final class SkinEditingService {
     }
 
     public McpAck autoWeights(List<String> parts, List<String> bones, Float falloff, Float minWeight, boolean rigid) {
+        return autoWeights(parts, bones, falloff, minWeight, rigid, null);
+    }
+
+    /** {@code maxInfluences}: null / 0 = every bone (unlimited), n > 0 = the n nearest bones per vertex. */
+    public McpAck autoWeights(List<String> parts, List<String> bones, Float falloff, Float minWeight, boolean rigid,
+                              Integer maxInfluences) {
         return onMain(() -> {
             Context c = require();
             SkinAuthoring a = c.authoring();
@@ -176,8 +182,9 @@ public final class SkinEditingService {
             }
             float f = rigid ? 0f : (falloff == null ? 2f : falloff);
             float m = minWeight == null ? 0.05f : minWeight;
+            int limit = maxInfluences == null ? 0 : Math.max(0, maxInfluences);
             int[] written = new int[1];
-            c.history().record("Auto Weights", () -> written[0] = a.autoWeights(partIds, boneIds, f, m));
+            c.history().record("Auto Weights", () -> written[0] = a.autoWeights(partIds, boneIds, f, m, limit));
             return McpAck.ok().with("parts", partIds.size()).with("vertices", written[0]);
         });
     }

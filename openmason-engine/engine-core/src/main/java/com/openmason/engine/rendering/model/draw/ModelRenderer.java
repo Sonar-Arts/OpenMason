@@ -27,8 +27,9 @@ import java.util.function.Consumer;
  * {@link ModelSkinGlsl} when the mesh carries skin attributes) — and a
  * {@link ModelLighting}. Passes:
  * <ul>
- *   <li>{@link #drawLit} — textured, flat-normal lighting with CSM shadows, fog,
- *       self-glow and the host's {@link ModelShaderExtension} extra light.</li>
+ *   <li>{@link #drawLit} — textured (times the material's base colour), lit with the mesh's corner normals
+ *       ({@link ModelNormalGlsl}: smooth where the model says so, the exact face normal elsewhere) with CSM
+ *       shadows, fog, self-glow and the host's {@link ModelShaderExtension} extra light.</li>
  *   <li>{@link #drawFlat} — one solid colour, depth-tested (untextured models,
  *       shadow casters into a bound depth target).</li>
  *   <li>{@link #drawWireframe} — see-through line overlay.</li>
@@ -49,6 +50,9 @@ public final class ModelRenderer {
     private final Vector3f scratch = new Vector3f();
     private final JointPaletteTexture paletteTexture = new JointPaletteTexture();
     private static final Matrix4f IDENTITY = new Matrix4f();
+    private static final Vector4f WHITE = new Vector4f(1f);
+    private final Vector4f materialColor = new Vector4f(1f);
+    private float[] currentMaterialColor;
 
     public ModelRenderer() {
         this(ModelShaderExtension.NONE);
@@ -65,7 +69,7 @@ public final class ModelRenderer {
         flatShader = build(ModelShaderSource.FLAT_VERTEX, ModelShaderSource.FLAT_FRAGMENT, "flat");
         if (litShader != null) {
             for (String u : new String[]{"model", "view", "projection", "textureSampler", "u_cameraPos",
-                    "u_fogDensity", "u_fogColor", "u_jointPalette", "u_skinned"}) {
+                    "u_fogDensity", "u_fogColor", "u_jointPalette", "u_skinned", "u_skinInfluences"}) {
                 litShader.createUniform(u);
             }
             // Fully lit until the first draw sets the real environment.
@@ -76,6 +80,9 @@ public final class ModelRenderer {
             litShader.setBool("u_useTexture", true);
             litShader.setUniform("u_jointPalette", JointPaletteTexture.DEFAULT_UNIT);
             litShader.setUniform("u_skinned", false);
+            litShader.setUniform("u_skinInfluences", ModelSkinGlsl.INFLUENCES_UNIT);
+            litShader.setBool("u_hasNormals", false);
+            litShader.setVec4("u_materialColor", WHITE);
             litShader.setInt("u_dyeMode", 0);
             litShader.setInt("u_dyeMask", ModelAppearance.MASK_UNIT);
             currentUseTexture = true;
@@ -83,12 +90,14 @@ public final class ModelRenderer {
             litShader.unbind();
         }
         if (flatShader != null) {
-            for (String u : new String[]{"model", "view", "projection", "color", "u_jointPalette", "u_skinned"}) {
+            for (String u : new String[]{"model", "view", "projection", "color", "u_jointPalette", "u_skinned",
+                    "u_skinInfluences"}) {
                 flatShader.createUniform(u);
             }
             flatShader.bind();
             flatShader.setUniform("u_jointPalette", JointPaletteTexture.DEFAULT_UNIT);
             flatShader.setUniform("u_skinned", false);
+            flatShader.setUniform("u_skinInfluences", ModelSkinGlsl.INFLUENCES_UNIT);
             flatShader.unbind();
         }
         initialized = true;
@@ -194,12 +203,15 @@ public final class ModelRenderer {
             ShadowUniforms.applyDisabled(shader, extension.shadowTextureUnit());
         }
 
-        beginSkin(shader, skinPalette);
+        beginSkin(shader, skinPalette, mesh);
+        shader.setBool("u_hasNormals", mesh.hasNormals());
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL30.glBindVertexArray(mesh.vao());
 
         boolean dyed = appearance != null && appearance.hasDyes();
         currentDye = null;
+        currentMaterialColor = null;
+        shader.setVec4("u_materialColor", WHITE);
         parts.forEachPart((partIndex, partMatrix) -> {
             if (appearance != null && !appearance.partVisible(partIndex)) return;
             shader.setUniform("model", partMatrix);
@@ -208,6 +220,7 @@ public final class ModelRenderer {
                 if (texture < 0) continue;
                 setUseTexture(shader, texture > 0);
                 if (dyed) applyDye(shader, appearance.dye(batch.materialId()));
+                applyMaterialColor(shader, textures.baseColorFor(batch.materialId()));
                 if (texture > 0) {
                     GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
                 }
@@ -222,6 +235,7 @@ public final class ModelRenderer {
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
         }
         setUseTexture(shader, true);
+        applyMaterialColor(shader, null);
         endSkin(shader, skinPalette);
 
         GL30.glBindVertexArray(0);
@@ -257,6 +271,17 @@ public final class ModelRenderer {
             shader.setInt("u_dyeMode", 2);
         } else {
             shader.setInt("u_dyeMode", 1);
+        }
+    }
+
+    /** Sets the material base colour for the next batch (null = white); skips a repeat. */
+    private void applyMaterialColor(ShaderProgram shader, float[] rgba) {
+        if (rgba == currentMaterialColor) return;
+        currentMaterialColor = rgba;
+        if (rgba == null || rgba.length < 4) {
+            shader.setVec4("u_materialColor", WHITE);
+        } else {
+            shader.setVec4("u_materialColor", materialColor.set(rgba[0], rgba[1], rgba[2], rgba[3]));
         }
     }
 
@@ -374,7 +399,7 @@ public final class ModelRenderer {
         shader.setUniform("view", view);
         shader.setUniform("projection", projection);
         shader.setUniform("color", color);
-        beginSkin(shader, skinPalette);
+        beginSkin(shader, skinPalette, mesh);
 
         GL30.glBindVertexArray(mesh.vao());
         parts.forEachPart((partIndex, partMatrix) -> {
@@ -389,10 +414,11 @@ public final class ModelRenderer {
         shader.unbind();
     }
 
-    private void beginSkin(ShaderProgram shader, JointPalette skinPalette) {
+    private void beginSkin(ShaderProgram shader, JointPalette skinPalette, ModelGpuMesh mesh) {
         if (skinPalette == null) return;
         paletteTexture.upload(skinPalette);
         paletteTexture.bind(JointPaletteTexture.DEFAULT_UNIT);
+        mesh.bindSkinInfluences(ModelSkinGlsl.INFLUENCES_UNIT);
         shader.setUniform("u_skinned", true);
     }
 
@@ -400,6 +426,7 @@ public final class ModelRenderer {
         if (skinPalette == null) return;
         shader.setUniform("u_skinned", false);
         JointPaletteTexture.unbind(JointPaletteTexture.DEFAULT_UNIT);
+        JointPaletteTexture.unbind(ModelSkinGlsl.INFLUENCES_UNIT);
     }
 
     /** Every part of the plan drawn once with the identity (the palette moves the vertices). */

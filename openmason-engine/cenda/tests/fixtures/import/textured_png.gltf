@@ -1,0 +1,179 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "OpenMason import fixtures"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 32
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 128,
+   "byteLength": 32
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 160,
+   "byteLength": 6
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "max": [
+    1,
+    1,
+    0
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5121,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "images": [
+  {
+   "name": "checker",
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwRZGME0QyMAP4AGgcRVmEEAAAAASUVORK5CYII="
+  }
+ ],
+ "samplers": [
+  {
+   "magFilter": 9728,
+   "minFilter": 9728,
+   "wrapS": 33071,
+   "wrapT": 33648
+  }
+ ],
+ "textures": [
+  {
+   "source": 0,
+   "sampler": 0
+  }
+ ],
+ "materials": [
+  {
+   "name": "Checker",
+   "doubleSided": true,
+   "alphaMode": "MASK",
+   "alphaCutoff": 0.25,
+   "emissiveFactor": [
+    0.5,
+    0.25,
+    0
+   ],
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.5,
+     0.75,
+     1.0,
+     0.5
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.5,
+    "baseColorTexture": {
+     "index": 0,
+     "texCoord": 0,
+     "extensions": {
+      "KHR_texture_transform": {
+       "offset": [
+        0.5,
+        0.25
+       ],
+       "rotation": 1.5,
+       "scale": [
+        2,
+        3
+       ],
+       "texCoord": 1
+      }
+     }
+    }
+   },
+   "extras": {
+    "source": "fixture"
+   }
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Quad",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2,
+      "TEXCOORD_1": 3
+     },
+     "indices": 4,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Quad",
+   "mesh": 0
+  }
+ ],
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "extensionsUsed": [
+  "KHR_texture_transform",
+  "KHR_materials_emissive_strength"
+ ],
+ "buffers": [
+  {
+   "byteLength": 168,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8AAAAAAAAAPwAAAD8AAAAAAAAAPwABAgACAwAA"
+  }
+ ]
+}

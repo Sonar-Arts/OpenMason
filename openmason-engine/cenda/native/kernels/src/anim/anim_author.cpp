@@ -268,6 +268,7 @@ struct Evaluator {
     void build_stack() {
         if (s->effectors.empty()) return;
         std::vector<cr_modifier_desc> mods;
+        std::vector<std::vector<float>> weights;  // per modifier (rig ABI 3: the desc points at chains / weights)
         for (size_t i = 0; i < s->effectors.size(); ++i) {
             const oz::Effector& e = s->effectors[i];
             cr_modifier_desc d{};
@@ -275,6 +276,7 @@ struct Evaluator {
             d.target = static_cast<int32_t>(i * 2);
             d.pole = -1;
             std::vector<int32_t> chain;
+            std::vector<float> w;
             if (e.kind == "twoBone") {
                 for (const std::string* ref : {&e.upper, &e.mid, &e.end}) chain.push_back(resolve(*ref));
                 d.type = CR_MOD_TWO_BONE;
@@ -286,16 +288,20 @@ struct Evaluator {
                 for (const std::string& ref : e.joints) chain.push_back(resolve(ref));
                 d.type = CR_MOD_AIM;
                 for (int k = 0; k < 3; ++k) d.p[k] = e.axis[k];
-                for (size_t k = 0; k < chain.size(); ++k) d.joint_weights[k] = 1.f / static_cast<float>(chain.size());
+                w.assign(chain.size(), chain.empty() ? 0.f : 1.f / static_cast<float>(chain.size()));
             }
-            if (chain.empty() || chain.size() > CR_MOD_MAX_JOINTS ||
-                std::any_of(chain.begin(), chain.end(), [](int32_t j) { return j < 0; })) {
+            if (chain.empty() || std::any_of(chain.begin(), chain.end(), [](int32_t j) { return j < 0; })) {
                 raise("effector " + e.name + ": a joint is not in the rig");
             }
             d.joint_count = static_cast<int32_t>(chain.size());
-            for (size_t k = 0; k < chain.size(); ++k) d.joints[k] = chain[k];
             chains.push_back(chain);
+            weights.push_back(std::move(w));
             mods.push_back(d);
+        }
+        const size_t first = chains.size() - mods.size();  // this build's chains
+        for (size_t i = 0; i < mods.size(); ++i) {
+            mods[i].joints = chains[first + i].data();
+            mods[i].joint_weights = weights[i].empty() ? nullptr : weights[i].data();
         }
         stack = cr_modstack_create(rig, mods.data(), static_cast<int32_t>(mods.size()),
                                    static_cast<int32_t>(s->effectors.size() * 2));

@@ -40,7 +40,8 @@
 extern "C" {
 #endif
 
-#define CC_ABI_VERSION 1
+/* 2 since OpenMason #170: cc_garment_pack writes the variable-length rig ABI 3 skin packing (appearance.h). */
+#define CC_ABI_VERSION 2
 
 typedef struct cc_char cc_char;
 typedef struct cc_report cc_report;

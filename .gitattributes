@@ -39,3 +39,7 @@
 *.pt     binary
 *.omui   binary
 *.sbui   binary
+# Model import fixtures (glTF binary chunks, buffers, images)
+*.glb    binary
+*.bin    binary
+*.jpg    binary

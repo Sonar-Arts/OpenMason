@@ -127,6 +127,7 @@ add_library(cenda_kernels SHARED
         src/rig/pose.cpp
         src/rig/modifiers.cpp
         src/rig/skin.cpp
+        src/rig/morph.cpp
         src/rig/first_person.cpp
         src/rig/sockets.cpp
         src/character/character.cpp
@@ -137,6 +138,12 @@ add_library(cenda_kernels SHARED
         src/character/character_edit.cpp
         src/anim/anim_clip.cpp
         src/anim/anim_author.cpp
+        src/model/model_abi.cpp
+        src/model/normals.cpp
+        src/model/shading.cpp
+        src/model/import_omo.cpp
+        src/model/mask.cpp
+        src/model/mesh_pipeline.cpp
         src/graph/anim_graph.cpp
         src/graph/anim_graph_edit.cpp)
 

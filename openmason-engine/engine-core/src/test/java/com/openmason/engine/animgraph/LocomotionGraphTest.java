@@ -168,8 +168,9 @@ class LocomotionGraphTest {
                 flat.evaluate(DT, at(0, z), fp);
                 assertEquals(f + 1, stairs.calls, "one ground query per evaluate");
                 for (int k = 0; k < 2; k++) {
-                    boolean full = placed.modifierValue(FOOT, AnimGraphInstance.VALUE_OUT_LOCKED + k) == 1f
-                        && placed.modifierValue(FOOT, AnimGraphInstance.VALUE_OUT_ALPHA + k) == 1f;
+                    boolean full = placed.modifierValue(FOOT,
+                            AnimGraphInstance.valueLeg(k, AnimGraphInstance.LEG_OUT_LOCKED)) == 1f
+                        && placed.modifierValue(FOOT, AnimGraphInstance.valueLeg(k, AnimGraphInstance.LEG_OUT_ALPHA)) == 1f;
                     Vector3f ankle = pos(pp, feet[k]);
                     if (full && !was[k]) {
                         // Locked this frame, on the ground the host reported under the foot.

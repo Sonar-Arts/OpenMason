@@ -40,9 +40,21 @@
  * graph (#157) compiles to such lists. Clip-time helpers sit beside it: root-motion extraction
  * (cr_clip_root_motion) here, sync groups over sync markers in anim_clip.h (cm_sync_advance).
  *
- * SKIN AUTHORING (cr_skin_*): an editable per-vertex weight set (up to CR_MAX_INFLUENCES influences
- * per vertex, sparse: vertices without entries follow their part). Auto weights, brush painting,
- * smoothing, normalize, prune, mirror, transfer onto an edited mesh, and the packed GPU attributes.
+ * SKIN AUTHORING (cr_skin_*): an editable per-vertex weight set (any number of influences per
+ * vertex since ABI 3, OpenMason #170 - no cap; sparse: vertices without entries follow their part).
+ * Auto weights, brush painting, smoothing, normalize, prune, mirror, transfer onto an edited mesh,
+ * and the packed GPU form (a per-vertex range into a flat influence list, unorm16 weights).
+ *
+ * ABI 3 (OpenMason #170): unbounded skin influences (cr_skin_get takes a capacity, CSR import /
+ * export, a variable-length GPU packing that cr_skin_deform uses exactly), modifier joint lists of
+ * any length (cr_modifier_desc holds a pointer + count) and any number of legs (per-leg values are
+ * keyed CR_VALUE_LEG(leg, field)). Pose results of the ABI 2 entry points are unchanged.
+ *
+ * ABI 3 (#171 additions, OpenMason #171): MORPH TARGETS (shape keys). A mesh's targets (cr_morphs: sparse deltas,
+ * CPU apply, GPU packing), MORPH CHANNELS on a rig (named weights every pose carries next to its joints; clips
+ * key them with morph tracks bound by name, the pose ops blend / layer / mask / inertialize them, CR_OP_MORPH
+ * overrides them). A rig without morph channels and clips without morph tracks pose bit-identically to before.
+ * See "Morph targets" below.
  *
  * Threading: rigs and clips are immutable after create and may be posed from any number of threads at
  * once (the clip-binding cache is internally locked). A skin belongs to one thread at a time.
@@ -56,7 +68,7 @@
 extern "C" {
 #endif
 
-#define CR_ABI_VERSION 2
+#define CR_ABI_VERSION 3
 
 typedef struct cr_rig cr_rig;
 typedef struct cr_clip cr_clip;
@@ -75,7 +87,7 @@ enum {
 };
 
 #define CR_MAX_JOINTS 65535
-#define CR_MAX_INFLUENCES 4
+/* (CR_MAX_INFLUENCES is gone since ABI 3: a vertex may carry any number of influences.) */
 
 /* Joint kinds. */
 enum {
@@ -265,9 +277,12 @@ enum {
                                          from the REST pose, not from the layers below */
     CR_POSE_CLIP_MASK = 1u << 3,      /* SAMPLE: drive only the joints the clip's name mask covers
                                          (an ABI 1 overlay) */
-    CR_POSE_DRIVE_ALL = 1u << 4       /* SAMPLE: every joint is driven, a joint the clip does not key at its
+    CR_POSE_DRIVE_ALL = 1u << 4,      /* SAMPLE: every joint is driven, a joint the clip does not key at its
                                          rest pose - a pose an override LAYER applies outright (a montage,
-                                         Stonebreak #460) */
+                                         Stonebreak #460); every morph channel too (#171) */
+    CR_POSE_MORPHS_ONLY = 1u << 5     /* SAMPLE (#171): only the morph weights are sampled (reset to the
+                                         channel defaults, then the clip's morph tracks); joints untouched (a
+                                         retargeted clip's morph tracks onto the target's pose) */
 };
 
 /* Layer blend modes (cr_pose_op.mode for CR_OP_LAYER). */
@@ -308,6 +323,10 @@ enum {
                                back to it (what cr_clip_root_motion reported moves the character) */
     ,CR_OP_MODIFY = 8       /* dst (in/out) through the modifier stack `object` (cr_modstack), spring bones
                                advanced by `param` (dt) seconds (pose modifiers, #158) */
+    ,CR_OP_MORPH = 9        /* (#171) dst's morph weights overridden by `object` = const float values[morph channel
+                               count]: channel c = lerp(c, values[c], min(weight, 1)); a NaN value leaves its
+                               channel alone; the channels set become driven. Joints untouched. (Graph morph
+                               drives: a weight from a float parameter.) */
 };
 
 /* One operation (48 bytes on every 64-bit platform). Unused fields 0. */
@@ -434,7 +453,7 @@ enum {
                              (default 1), p[1] drag 0..1 (0.4), p[2..4] gravity (world units/s^2, a vector),
                              p[5] tail radius, p[6] fixed step (1/60 s; at most 8 steps a frame). Collides
                              with the stack's colliders. */
-    CR_MOD_FULL_BODY = 6  /* joints[0] = the body (hips); limb k (k < 5) = joints [1+3k, 2+3k, 3+3k] (upper,
+    CR_MOD_FULL_BODY = 6  /* joints[0] = the body (hips); limb k (any number) = joints [1+3k, 2+3k, 3+3k] (upper,
                              mid, end) with target slot `target + k` (kind NONE = no goal), pull weight
                              joint_weights[1+3k] (how far an unreachable goal drags the body) and reach weight
                              joint_weights[2+3k]; `pole` = an optional hip goal with weight joint_weights[0];
@@ -455,16 +474,19 @@ enum {
     CR_MOD_LIMITS = 1u << 2
 };
 
-#define CR_MOD_MAX_JOINTS 16
-
-/* One modifier (192 bytes). Unused joints -1. */
+/* One modifier (80 bytes on 64-bit hosts: 4 x i32, 2 pointers, 2 x i32, f32, f32[8], u32; 8-byte aligned).
+ * ABI 3: the joint list is a pointer + count of any length (ABI 2 had joints[16] / joint_weights[16] inline,
+ * CR_MOD_MAX_JOINTS, 192 bytes). cr_modstack_create COPIES both arrays, so they only have to live for that call.
+ * Each type still asks for the joint counts it documents above (TWO_BONE 3, FABRIK / CCD / SPRING 2,
+ * CONSTRAINT 1, AIM / ORIENT_WARP >= 1, FULL_BODY / STRIDE_WARP / FOOT_PLACEMENT 1 + 3 per limb or leg). */
 typedef struct cr_modifier_desc {
     int32_t type;          /* CR_MOD_* */
     uint32_t flags;        /* CR_MOD_MATCH_ROTATION | ... */
     int32_t kind;          /* CONSTRAINT: CR_CONSTRAINT_* */
-    int32_t joint_count;
-    int32_t joints[CR_MOD_MAX_JOINTS];
-    float joint_weights[CR_MOD_MAX_JOINTS];
+    int32_t joint_count;   /* entries of joints (and of joint_weights); >= 0 */
+    const int32_t* joints;       /* joint_count joint indices (a leg's end may be -1, see below); NULL only when
+                                    joint_count is 0 */
+    const float* joint_weights;  /* joint_count weights, or NULL = every weight 0 */
     int32_t target;        /* target slot, -1 = none */
     int32_t pole;          /* TWO_BONE: pole slot; FULL_BODY: hip goal slot; -1 = none */
     float weight;          /* influence 0..1 (cr_modstack_set_weight changes it) */
@@ -534,7 +556,8 @@ int32_t cr_modstack_apply(cr_modstack* stack, cr_poses* poses, int32_t slot, flo
 /*      from above = toward the character's left for a -Z facing), clamped to MAX_ANGLE and eased  */
 /*      by RATE; the spine turns back COUNTER x that angle, so the legs run toward the movement    */
 /*      while the chest keeps facing forward.                                                       */
-/*  CR_MOD_STRIDE_WARP   joints[0] = the pelvis, legs k < 5 at [1+3k, 2+3k, 3+3k]. Each foot's      */
+/*  CR_MOD_STRIDE_WARP   joints[0] = the pelvis, legs k >= 0 at [1+3k, 2+3k, 3+3k] (any number of   */
+/*      legs since ABI 3; ABI 2 stopped at 5). Each foot's                                          */
 /*      offset from its thigh along the travel direction (DIR_X, DIR_Z) is scaled by SCALE (the    */
 /*      host's speed / (the clip's speed x the play rate it allowed)); with PELVIS > 0 the pelvis  */
 /*      drops (PELVIS x what it takes) until every stretched leg reaches; two-bone per leg, the    */
@@ -544,7 +567,8 @@ int32_t cr_modstack_apply(cr_modstack* stack, cr_poses* poses, int32_t slot, flo
 /*      length), rays straight down from PROBE_UP above the clips' flat ground (GROUND_Y, model y)  */
 /*      to PROBE_DOWN below it. A foot's ground offset = its highest hit - GROUND_Y (it sits on the */
 /*      higher tread at a stair edge; no hit = 0: the animation), eased by FOOT_RATE while free.   */
-/*      LOCK + k in [0,1] (the graph feeds foot_lock curves or sync-marker contacts): rising above */
+/*      CR_VALUE_LEG(k, CR_LEG_LOCK) in [0,1] (the graph feeds foot_lock curves or sync-marker      */
+/*      contacts): rising above                                                                     */
 /*      0 pins foot k where it stands, on the ground there, in WORLD space (its height above that  */
 /*      ground keeps following the animation: heel roll, a contact keyed a frame early); its target */
 /*      is lerp(live, lock, lock value); at 0 (or when the lock is MAX_LOCK_DISTANCE from the live */
@@ -560,9 +584,11 @@ enum {
     CR_MOD_FOOT_PLACEMENT = 9
 };
 
-#define CR_MAX_LEGS 5
+/* (CR_MAX_LEGS is gone since ABI 3: STRIDE_WARP / FOOT_PLACEMENT take any number of legs.) */
 
-/* Keyed modifier values. Inputs (set and get; defaults in brackets): */
+/* Keyed modifier values. Inputs (set and get; defaults in brackets). Retired in ABI 3 (per-leg values are keyed
+ * by CR_VALUE_LEG below): keys 8..12 (the ABI 2 locks CR_VALUE_LOCK + k, k < 5) - set: CR_ERR_RANGE, get: 0 - and
+ * keys 66..80 (the ABI 2 outputs OUT_LOCKED / OUT_GROUND / OUT_ALPHA + k) - get: 0. */
 enum {
     CR_VALUE_ANGLE = 0,              /* ORIENT: degrees [0] */
     CR_VALUE_MAX_ANGLE = 1,          /* ORIENT: degrees [90] */
@@ -572,7 +598,6 @@ enum {
     CR_VALUE_DIR_X = 5,              /* STRIDE: travel direction in model XZ [0, -1] */
     CR_VALUE_DIR_Z = 6,
     CR_VALUE_PELVIS = 7,             /* STRIDE: pelvis adjustment 0..1 [1] */
-    CR_VALUE_LOCK = 8,               /* FOOT: lock of leg k = CR_VALUE_LOCK + k, 0..1 [0] */
     CR_VALUE_PROBE_UP = 13,          /* FOOT: [0 = the mean leg length: a ray never starts below the hips] */
     CR_VALUE_PROBE_DOWN = 14,        /* FOOT: [0 = 0.75 x the mean leg length] */
     CR_VALUE_MAX_DROP = 15,          /* FOOT: [0 = half the mean leg length] */
@@ -583,15 +608,30 @@ enum {
     CR_VALUE_GROUND_Y = 20,          /* FOOT: the clips' flat ground, model y [0] */
     CR_VALUE_UNLOCK_TIME = 21,       /* FOOT: seconds [0.15] */
     CR_VALUE_MAX_LOCK_DISTANCE = 22, /* FOOT: [0 = half the mean leg length] */
-    CR_VALUE_INPUT_COUNT = 23
+    CR_VALUE_INPUT_COUNT = 23        /* one past the last scalar input key */
 };
 /* Outputs of the last apply (get only): */
 enum {
     CR_VALUE_OUT_ANGLE = 64,         /* ORIENT: the eased angle */
-    CR_VALUE_OUT_PELVIS = 65,        /* STRIDE / FOOT: the pelvis offset along up */
-    CR_VALUE_OUT_LOCKED = 66,        /* FOOT: + k, 1 while leg k is locked */
-    CR_VALUE_OUT_GROUND = 71,        /* FOOT: + k, leg k's eased ground offset */
-    CR_VALUE_OUT_ALPHA = 76          /* FOOT: + k, how far leg k is pulled to its lock */
+    CR_VALUE_OUT_PELVIS = 65         /* STRIDE / FOOT: the pelvis offset along up */
+};
+
+/* Per-leg values (ABI 3; replaces the 5-wide ABI 2 numbering LOCK + k = 8.., OUT_LOCKED + k = 66..,
+ * OUT_GROUND + k = 71.., OUT_ALPHA + k = 76..). The key of field f of leg k (0-based, in the modifier's leg
+ * order) is
+ *     CR_VALUE_LEG(k, f) = CR_VALUE_LEG_BASE + CR_VALUE_LEG_STRIDE * k + f      (256 + 16k + f)
+ * read / written through the same cr_modstack_set_value / cr_modstack_get_value (and cg_instance_modifier_value).
+ * Keys at or above CR_VALUE_LEG_BASE belong to legs only; a leg index >= the modifier's leg count, or a field
+ * the type does not have, is not a key of that modifier (set: CR_ERR_RANGE, get: 0). Fields 4..15 of each leg
+ * are reserved. */
+#define CR_VALUE_LEG_BASE 256
+#define CR_VALUE_LEG_STRIDE 16
+#define CR_VALUE_LEG(leg, field) (CR_VALUE_LEG_BASE + CR_VALUE_LEG_STRIDE * (leg) + (field))
+enum {
+    CR_LEG_LOCK = 0,        /* FOOT input: the leg's lock 0..1 [0] */
+    CR_LEG_OUT_LOCKED = 1,  /* FOOT output: 1 while the leg is locked */
+    CR_LEG_OUT_GROUND = 2,  /* FOOT output: the leg's eased ground offset */
+    CR_LEG_OUT_ALPHA = 3    /* FOOT output: how far the leg is pulled to its lock */
 };
 
 /* Sets an input value; CR_ERR_RANGE when the modifier's type does not read that key. */
@@ -636,43 +676,87 @@ int32_t cr_skin_vertex_count(const cr_skin* skin);
 /* Number of vertices that carry authored weights. */
 int32_t cr_skin_weighted_count(const cr_skin* skin);
 
-/* Replace one vertex's influences (count 0 = unweighted: follows its part). Joints must be >= 0;
- * weights <= 0 are dropped; more than CR_MAX_INFLUENCES keep the heaviest; the rest are normalized
- * to sum 1. */
+/* Replace one vertex's influences (count 0 = unweighted: follows its part). Joints must be >= 0 and weights
+ * finite (NaN / inf, or a joint listed twice whose merged weight overflows to inf: CR_ERR_ARG, nothing changed);
+ * a joint listed twice is merged (weights add); weights <= 0 are dropped; the rest are normalized to sum 1 and
+ * kept heaviest first (ties: lower joint first). A weight whose normalized float underflows to 0 is dropped too
+ * (the rest renormalized), so every stored weight is > 0. ABI 3: every influence is kept (ABI 2 kept the heaviest
+ * 4). Storage: one pool per skin, compacted as it goes (at most about 2x the live influences + 4096);
+ * CR_ERR_RANGE when the skin would hold more than 2^32 - 1 influences, CR_ERR_ARG (cr_last_error says so) when
+ * out of memory - no skin function lets an exception out. */
 int32_t cr_skin_set(cr_skin* skin, int32_t vertex, const int32_t* joints, const float* weights,
                     int32_t count);
-/* A vertex's influences (up to CR_MAX_INFLUENCES, heaviest first) — returns the count (0 = none). */
-int32_t cr_skin_get(const cr_skin* skin, int32_t vertex, int32_t* out_joints, float* out_weights);
+/* A vertex's influences, heaviest first: writes the first min(count, capacity) of them (either output may be
+ * NULL; capacity <= 0 writes nothing) and returns the vertex's FULL count (0 = unweighted or a bad vertex), so a
+ * return above capacity means the arrays were too small. */
+int32_t cr_skin_get(const cr_skin* skin, int32_t vertex, int32_t* out_joints, float* out_weights,
+                    int32_t capacity);
+/* A vertex's influence count (0 = unweighted or a bad vertex); no copy. */
+int32_t cr_skin_influence_count(const cr_skin* skin, int32_t vertex);
+/* The largest influence count of any vertex (0 = nothing weighted). */
+int32_t cr_skin_max_influences(const cr_skin* skin);
+/* The number of influences over every weighted vertex (the joints / weights length of cr_skin_export);
+ * CR_ERR_RANGE (negative) when that exceeds INT32_MAX - never a clamped value. */
+int32_t cr_skin_influence_total(const cr_skin* skin);
 /* Weight of one joint at every vertex (0 for unweighted vertices unless part_joint_of_vertex is given:
  * then an unweighted vertex reports 1 for its part's joint). out: vertex_count floats. */
 int32_t cr_skin_joint_weights(const cr_skin* skin, int32_t joint, const int32_t* part_joint_of_vertex,
                               float* out);
 
-/* Bulk import/export in the sparse file layout: entries of (vertex, count, joints[4], weights[4]).
- * Export: returns the number of weighted vertices; writes up to capacity entries. */
-typedef struct cr_skin_entry {
-    int32_t vertex;
-    int32_t count;
-    int32_t joints[CR_MAX_INFLUENCES];
-    float weights[CR_MAX_INFLUENCES];
-} cr_skin_entry; /* 40 bytes */
-int32_t cr_skin_import(cr_skin* skin, const cr_skin_entry* entries, int32_t count);
-int32_t cr_skin_export(const cr_skin* skin, cr_skin_entry* out, int32_t capacity);
+/* Bulk import/export in a sparse CSR layout (ABI 3; replaces the 40-byte cr_skin_entry with 4 fixed slots):
+ *   vertices[i]                      the vertex of entry i (i < count),
+ *   offsets[i] .. offsets[i+1]       its influences in joints[] / weights[] (count + 1 offsets, non-decreasing,
+ *                                    offsets[0] >= 0; the arrays hold offsets[count] entries),
+ *   joints[k], weights[k]            int32 joint, float weight.
+ * Import: each entry is cr_skin_set(vertices[i], joints + offsets[i], weights + offsets[i], offsets[i+1] -
+ * offsets[i]) (an entry with no influences makes its vertex unweighted). vertices may be NULL = entry i is
+ * vertex i (a dense layout). CR_ERR_ARG on a bad layout or a non-finite weight anywhere in
+ * [offsets[0], offsets[count]) (nothing written); CR_ERR_RANGE when an entry fails cr_skin_set (a vertex outside
+ * the skin, a negative joint, merged weights overflowing, a full pool / out of memory; the entries before it are
+ * applied). */
+int32_t cr_skin_import(cr_skin* skin, int32_t count, const int32_t* vertices, const int32_t* offsets,
+                       const int32_t* joints, const float* weights);
+/* Export: every weighted vertex in ascending order, its influences heaviest first (what cr_skin_get returns).
+ * Returns the number of weighted vertices n (= cr_skin_weighted_count). Writes out_vertices[n],
+ * out_offsets[n + 1] (out_offsets[0] = 0, out_offsets[n] = cr_skin_influence_total), out_joints and
+ * out_weights[cr_skin_influence_total] only when all four are non-NULL, vertex_capacity >= n and
+ * influence_capacity >= the total; otherwise it writes nothing (a size query). CR_ERR_RANGE when the total
+ * exceeds INT32_MAX. */
+int32_t cr_skin_export(const cr_skin* skin, int32_t vertex_capacity, int32_t influence_capacity,
+                       int32_t* out_vertices, int32_t* out_offsets, int32_t* out_joints, float* out_weights);
 
-/* Packed GPU attributes for every vertex: 4 x uint16 joint indices + 4 x uint8 normalized weights
- * (summing to exactly 255). An unweighted vertex gets (part_joint_of_vertex[v], 0,0,0)/(255,0,0,0);
- * part_joint_of_vertex may be null when every vertex is weighted (others then use joint 0). */
-int32_t cr_skin_pack(const cr_skin* skin, const int32_t* part_joint_of_vertex,
-                     uint16_t* out_joints, uint8_t* out_weights);
+/* GPU packing (ABI 3, OpenMason #170; GL 3.3: a vertex attribute + a buffer texture, no SSBO). Two arrays:
+ *   RANGES      2 x uint32 per vertex (vertex_count entries, every vertex): (offset, count) into INFLUENCES -
+ *               an integer vertex attribute (uvec2, glVertexAttribIPointer GL_UNSIGNED_INT).
+ *   INFLUENCES  2 x uint16 per influence: (joint, weight) - a buffer texture of format GL_RG16UI (texelFetch
+ *               -> uvec2: x = joint index into the palette, y = weight as unorm16: w = y / 65535.0).
+ * Vertex v's influences are INFLUENCES[offset .. offset + count), laid out in vertex order (offset of v + 1 =
+ * offset + count of v), heaviest first. A weighted vertex's quantized weights sum to EXACTLY 65535: q_k =
+ * floor(65535 w_k / sum w) plus one unit to the largest remainders (ties: the earlier, i.e. heavier,
+ * influence) until the sum is 65535; a q_k may be 0 (a tiny influence; it still occupies its slot). An
+ * unweighted vertex gets one influence (part_joint_of_vertex[v], 65535); joint 0 when part_joint_of_vertex is
+ * NULL or the entry is outside [0, CR_MAX_JOINTS]. An influence joint above 65535 is written as 65535. Every count
+ * is >= 1. The skinned position is sum_k (q_k / 65535) K(joint_k) v - cr_skin_deform computes exactly that (same
+ * q_k), so CPU picking / bounds match the GPU. */
+/* The number of influence records cr_skin_pack writes: sum over every vertex of max(count, 1); CR_ERR_RANGE
+ * (negative) when that exceeds INT32_MAX. */
+int32_t cr_skin_pack_size(const cr_skin* skin);
+/* out_ranges: vertex_count * 2 uint32; out_influences: influence_capacity * 2 uint16 (influence_capacity >=
+ * cr_skin_pack_size, else CR_ERR_ARG and nothing written; CR_ERR_RANGE when the record count exceeds INT32_MAX).
+ * Joints are written as uint16 (CR_MAX_JOINTS). */
+int32_t cr_skin_pack(const cr_skin* skin, const int32_t* part_joint_of_vertex, int32_t influence_capacity,
+                     uint32_t* out_ranges, uint16_t* out_influences);
 
 /* Auto weights: each vertex in [vertex_first, vertex_first+vertex_count) is weighted to the bones in
  * `bones` by its distance to their rest-pose segments (head->tail in model space, from the rig):
- * w ~ 1/(d^2 + eps)^falloff over the CR_MAX_INFLUENCES nearest, then normalized and pruned below
- * min_weight. falloff 0 = rigid to the nearest bone. positions: vertex_count_total*3 floats. */
+ * w ~ 1/(d^2 + eps)^falloff over EVERY bone (nearest first; ties: lower joint), or only the max_influences
+ * nearest when max_influences > 0 (0 = unlimited; ABI 2 always took the 4 nearest - max_influences 4 gives
+ * exactly the ABI 2 weights); then normalized and pruned below min_weight (the heaviest always stays) and
+ * renormalized. falloff 0 = rigid to the nearest bone. positions: vertex_count_total*3 floats. */
 int32_t cr_skin_auto_weights(cr_skin* skin, const cr_rig* rig, const float* positions,
                              int32_t vertex_first, int32_t vertex_count,
                              const int32_t* bones, int32_t bone_count,
-                             float falloff, float min_weight);
+                             float falloff, float min_weight, int32_t max_influences);
 
 /* Brush modes. */
 enum {
@@ -711,8 +795,14 @@ int32_t cr_skin_mirror(cr_skin* skin, const float* positions, int32_t axis, int3
 cr_skin* cr_skin_transfer(const cr_skin* skin, const float* old_positions,
                           const float* new_positions, int32_t new_vertex_count);
 
-/* Deform positions on the CPU with a palette (K matrices from cr_rig_pose): out = sum w·K·v, using
- * the same packed weights as the GPU. For picking/bounds on a posed mesh. */
+/* Deform positions on the CPU with a palette (K matrices from cr_rig_pose): out = sum (q/65535)·K·v with the
+ * SAME quantized unorm16 weights q as cr_skin_pack (accumulated in double, one float cast per component). ABI 3
+ * CHANGED THE NUMBERS: ABI 2 blended with the float weights (and the GPU with unorm8), so a weighted vertex moves
+ * by up to about 1/65535 of its influences' spread. An unweighted vertex is rigid to part_joint_of_vertex[v], or
+ * joint 0 when the array is NULL or the entry is outside [0, joint_count) (pack's rule; ABI 2 left such a vertex
+ * at the origin); a weighted influence whose joint is outside [0, joint_count) is skipped (its share is lost).
+ * skin may be NULL (every vertex rigid). No heap allocation per call once a thread has run it (per-thread scratch).
+ * For picking/bounds on a posed mesh. */
 int32_t cr_skin_deform(const cr_skin* skin, const int32_t* part_joint_of_vertex,
                        const float* positions, int32_t vertex_count,
                        const float* skin_matrices, int32_t joint_count, float* out_positions);
@@ -799,6 +889,204 @@ int32_t cr_stabilizer_reset(cr_stabilizer* s);
  * the frame (16 floats, NULL = identity); dt seconds (<= 0 = no time passes); out: the stabilized world
  * point (3 floats; may alias point). */
 int32_t cr_stabilizer_update(cr_stabilizer* s, const float* point, const float* base, float dt, float* out);
+
+/* ---------------------------------------------------------------------------------------------- */
+/* Morph targets / shape keys (ABI 3, #171 additions; src/rig/morph.cpp, ctest `morph`).           */
+/*                                                                                                 */
+/* Blender's RELATIVE shape keys: a TARGET is a set of sparse per-vertex position deltas (and,      */
+/* optionally, normal deltas) from the basis mesh; the deformed vertex is                          */
+/*     v = basis + sum_k w_k d_k        n = normalize(n_basis + sum_k w_k dn_k)                     */
+/* before skinning (morph, then skin: cr_skin_deform_morphed). Weights are clamped to each target's */
+/* [min, max] when APPLIED (cr_morph_apply, cr_morphs_clamp_weights for the GPU upload): Blender's  */
+/* shape key "Range Min / Max" are the value's hard range (slider_min / slider_max; keyed, driven   */
+/* and typed values all land clamped, -10..10 at most). Weights inside the pose pipeline are NOT    */
+/* clamped (an additive layer may push past a range; the mesh clamps).                             */
+/*                                                                                                 */
+/* MORPH CHANNELS: a rig may carry named weight channels (cr_rig_set_morph_channels, normally the  */
+/* targets of the mesh it poses, in target order: cr_rig_set_morph_channels_from). Every pose slot   */
+/* then holds one weight + a DRIVEN flag per channel beside its joints:                            */
+/*   REST          weights = the channel defaults, none driven                                     */
+/*   SAMPLE        the clip's morph tracks bound BY NAME (exact, then case-insensitive; a track     */
+/*                 naming no channel is ignored, a channel no track names keeps its default and is  */
+/*                 not driven); CLIP_MASK: a channel is covered when the clip's mask is empty or    */
+/*                 lists the channel name or "morph:<name>" (case-insensitive); DRIVE_ALL drives     */
+/*                 every channel; MORPHS_ONLY samples the channels and leaves the joints            */
+/*   COPY          copies them                                                                     */
+/*   BLEND         weighted like joint translations (Euler mode: the running lerp; CR_POSE_QUAT:    */
+/*                 the normalized weighted sum in double); a single positive weight copies exactly; */
+/*                 drives the union                                                                */
+/*   LAYER         OVERRIDE: on channels src drives, w = min(weight x the mask's morph weight, 1),   */
+/*                 dst = dst + (src - dst) w (w >= 1: src exactly; NO_PASSTHROUGH: from the default) */
+/*                 ADDITIVE: dst += delta x w on channels the delta drives                          */
+/*   MAKE_ADDITIVE delta = a - b (driven = a | b, both spaces; equal values: exact 0)               */
+/*   INERTIALIZE   per channel the same quintic (Bollo) on the offset magnitude, its sign kept      */
+/*   REMOVE_ROOT / MODIFY   leave the channels alone                                               */
+/*   MORPH         (CR_OP_MORPH) overrides channels from a value array                             */
+/* cr_mask carries a weight per channel too (filled like the joints at create / cr_mask_fill;      */
+/* cr_mask_set_morph; cr_mask_from_clip covers channels by the SAMPLE CLIP_MASK rule).             */
+/* cr_rig_pose (the ABI 1 entry points) composes joints only; read weights from cr_poses.          */
+/*                                                                                                 */
+/* Lifetimes / threading: cr_rig_set_morph_channels and cr_clip_set_morph_tracks configure an      */
+/* object BEFORE it is used: they fail (CR_ERR_ARG) once the rig has a cr_poses / cr_mask /         */
+/* cr_inertia or once a clip was bound to a rig (any pose call that samples it). A cr_morphs is     */
+/* immutable and may be read by any number of threads.                                             */
+
+typedef struct cr_morphs cr_morphs;
+struct co_doc; /* cenda/model.h */
+
+/* Morph-key interpolation (the values of anim_clip.h CM_INTERP_*). CUBIC = Hermite with the keys' tangents in
+ * value per second (glTF CUBICSPLINE: in = a_k, out = b_k). */
+enum {
+    CR_MORPH_LINEAR = 0,
+    CR_MORPH_STEP = 1,
+    CR_MORPH_CUBIC = 2
+};
+
+/* One morph-weight key (20 bytes; the layout of anim_clip.h cm_curve_key). interp shapes the segment after it. */
+typedef struct cr_morph_key {
+    float time;
+    float value;
+    float in_tangent;
+    float out_tangent;
+    int32_t interp;  /* CR_MORPH_* */
+} cr_morph_key;
+
+#define CR_MAX_MORPH_TARGETS 65535
+
+/* --- Rig morph channels ---------------------------------------------------------------------------------- */
+
+/* Sets the rig's morph channels (count 0..CR_MAX_MORPH_TARGETS; 0 clears). names: count NUL-terminated strings,
+ * unique (case-insensitive) and non-empty; defaults NULL = 0. CR_ERR_ARG on bad names or once the rig is in use
+ * (see above). */
+int32_t cr_rig_set_morph_channels(cr_rig* rig, int32_t count, const char* const* names, const float* defaults);
+/* The targets of `morphs` as the rig's channels (channel i = target i: weights index the same way everywhere). */
+int32_t cr_rig_set_morph_channels_from(cr_rig* rig, const cr_morphs* morphs);
+int32_t cr_rig_morph_count(const cr_rig* rig);
+/* NULL for a bad channel. */
+const char* cr_rig_morph_name(const cr_rig* rig, int32_t channel);
+float cr_rig_morph_default(const cr_rig* rig, int32_t channel);
+/* Channel by name (exact, then case-insensitive; a leading "morph:" is accepted); -1 when none. */
+int32_t cr_rig_morph_find(const cr_rig* rig, const char* name);
+
+/* --- Clip morph tracks ----------------------------------------------------------------------------------- */
+
+/* Sets a clip's morph tracks (replacing any): track t = names[t] (non-empty, unique by exact name), keys
+ * keys[offsets[t] .. offsets[t+1]) (count + 1 offsets, non-decreasing from 0; sorted by time here, stably; finite
+ * values; interp CR_MORPH_*). count 0 clears. Sampling follows anim_clip.h cm_clip_curve_sample exactly (clamped
+ * before the first / after the last key; in double, one float cast), at the time SAMPLE uses for the joints
+ * (wrapped / clamped like cr_rig_pose). CR_ERR_ARG on bad data or once the clip was bound (see above). */
+int32_t cr_clip_set_morph_tracks(cr_clip* clip, int32_t count, const char* const* names, const int32_t* offsets,
+                                 const cr_morph_key* keys);
+int32_t cr_clip_morph_track_count(const cr_clip* clip);
+const char* cr_clip_morph_track_name(const cr_clip* clip, int32_t track);
+/* A morph track's value at a clip time (not wrapped; clamped to its keys); 0 for a bad track. */
+float cr_clip_sample_morph(const cr_clip* clip, int32_t track, float time);
+/* The track the clip uses for a rig channel (-1 = none). */
+int32_t cr_clip_morph_track_for(const cr_clip* clip, const cr_rig* rig, int32_t channel);
+
+/* --- Pose slots and masks -------------------------------------------------------------------------------- */
+
+/* A slot's morph weights and driven flags (either output may be NULL): writes min(count, capacity) entries and
+ * returns the rig's channel count (negative = error). */
+int32_t cr_poses_morph_weights(const cr_poses* poses, int32_t slot, float* out_weights, uint8_t* out_driven,
+                               int32_t capacity);
+/* Sets a slot's morph weights (cr_rig_morph_count floats); driven NULL = every channel driven. */
+int32_t cr_poses_set_morph_weights(cr_poses* poses, int32_t slot, const float* weights, const uint8_t* driven);
+
+int32_t cr_mask_morph_count(const cr_mask* mask);
+/* Sets a channel's weight (clamped to [0,1]); channel -1 = every channel. */
+int32_t cr_mask_set_morph(cr_mask* mask, int32_t channel, float weight);
+/* cr_mask_morph_count floats. */
+int32_t cr_mask_get_morph(const cr_mask* mask, float* out_weights);
+
+/* --- Mesh targets (cr_morphs) ---------------------------------------------------------------------------- */
+
+/* A target set over vertex_count vertices (the SOUP vertex order the host draws), from a target-major CSR:
+ *   names[t]                         target names (non-empty, unique case-insensitive)
+ *   params[3t .. 3t+2]               default weight, min, max (NULL = 0, 0, 1; min <= max, finite)
+ *   offsets[t] .. offsets[t+1]       target t's rows (target_count + 1 offsets, non-decreasing from 0)
+ *   vertices[r], deltas[3r..3r+2]    a row: a vertex and its position delta
+ *   normal_deltas[3r..3r+2]          its normal delta (NULL = none for every row)
+ * Rows naming the same (target, vertex) are summed (in row order); a row whose position AND normal deltas are all
+ * exactly 0 is dropped (sparse). NULL on a bad argument (a vertex outside [0, vertex_count), non-finite data, too
+ * many targets: cr_last_error says why). */
+cr_morphs* cr_morphs_create(int32_t vertex_count, int32_t target_count, const char* const* names, const float* params,
+                            const int32_t* offsets, const int32_t* vertices, const float* deltas,
+                            const float* normal_deltas);
+/* From an OMO 1.9 document's morphs (model.h co_doc_morphs_get): part-local rows mapped to soup vertices as
+ * part_first_vertex[p] + local for the part whose id is part_ids[p] (part_count parts; a row whose part is not
+ * listed or whose local vertex is outside [0, part_vertex_count[p]) is skipped and counted in *out_skipped, which
+ * may be NULL). Morph names, defaults and ranges as stored; normal deltas where the part has them. A document
+ * without morphs gives a set with 0 targets. NULL on a bad argument. */
+cr_morphs* cr_morphs_from_doc(const struct co_doc* doc, int32_t vertex_count, int32_t part_count,
+                              const char* const* part_ids, const int32_t* part_first_vertex,
+                              const int32_t* part_vertex_count, int32_t* out_skipped);
+/* The same targets over a new vertex list: new vertex v takes every row of source_vertex[v] (-1 = none) - what a
+ * loader that splits shared vertices (or re-orders them) needs. NULL on a bad argument. */
+cr_morphs* cr_morphs_remap(const cr_morphs* morphs, int32_t vertex_count, const int32_t* source_vertex);
+void cr_morphs_destroy(cr_morphs* morphs);
+
+int32_t cr_morphs_vertex_count(const cr_morphs* morphs);
+int32_t cr_morphs_target_count(const cr_morphs* morphs);
+/* Stored rows over every target (after merging and dropping zeros) = cr_morphs_pack_size. */
+int32_t cr_morphs_row_count(const cr_morphs* morphs);
+/* 1 when any row carries a normal delta. */
+int32_t cr_morphs_has_normals(const cr_morphs* morphs);
+const char* cr_morphs_target_name(const cr_morphs* morphs, int32_t target);
+/* out3 = default weight, min, max. */
+int32_t cr_morphs_target_params(const cr_morphs* morphs, int32_t target, float* out3);
+/* Target by name (exact, then case-insensitive; a leading "morph:" is accepted); -1 when none. */
+int32_t cr_morphs_find(const cr_morphs* morphs, const char* name);
+/* A target's rows in ascending vertex order: writes min(rows, capacity) (each output may be NULL; normals 3 per
+ * row, zeros where none) and returns the row count. */
+int32_t cr_morphs_target_rows(const cr_morphs* morphs, int32_t target, int32_t* out_vertices, float* out_deltas,
+                              float* out_normal_deltas, int32_t capacity);
+
+/* Weights as applied: out[t] = clamp(in[t], min_t, max_t) for t < count; a missing weight (t >= count, or weights
+ * NULL) and a NaN read as 0 before clamping. out: target_count floats - the per-frame GPU upload (see the packing
+ * below). */
+int32_t cr_morphs_clamp_weights(const cr_morphs* morphs, const float* weights, int32_t count, float* out);
+
+/* CPU apply: positions_out = positions + sum_k w_k d_k per vertex (w = cr_morphs_clamp_weights of the given
+ * weights), accumulated in FLOAT in the packed record order (vertex, then target ascending): acc = 0; acc += w·d
+ * (x, y, z); out = in + acc - what the GPU program below does, so the two agree up to its fused-multiply-add
+ * rounding. A vertex without rows (or whose rows all have weight 0) is copied exactly. Normals (both pointers
+ * non-NULL; else ignored): a vertex with at least one row of non-zero weight that carries a normal delta gets
+ * normalize(n + sum_k w_k dn_k) (accumulated like the positions, normalized in double, one float cast; a zero-length
+ * result keeps n); every other normal is copied exactly (no renormalization). positions / normals: vertex_count x 3
+ * floats; the outputs may alias the inputs. No allocation. */
+int32_t cr_morph_apply(const cr_morphs* morphs, const float* weights, int32_t weight_count, const float* positions,
+                       const float* normals, float* out_positions, float* out_normals);
+
+/* Morph, then skin (positions only): cr_morph_apply into a per-thread scratch buffer, then cr_skin_deform (same
+ * arguments as there) on the morphed positions. morphs NULL = cr_skin_deform. The documented order for every
+ * host: shape keys act on the bind-pose mesh, skinning moves the result (Blender's modifier order). */
+int32_t cr_skin_deform_morphed(const cr_skin* skin, const int32_t* part_joint_of_vertex, const cr_morphs* morphs,
+                               const float* weights, int32_t weight_count, const float* positions, int32_t vertex_count,
+                               const float* skin_matrices, int32_t joint_count, float* out_positions);
+
+/* GPU packing (GL 3.3: a vertex attribute + buffer textures, no SSBO). Uploaded ONCE per mesh:
+ *   RANGES   2 x uint32 per vertex (vertex_count entries, every vertex): (offset, count) into the records; count 0 =
+ *            no morph rows. An integer vertex attribute (uvec2, glVertexAttribIPointer GL_UNSIGNED_INT; e.g.
+ *            location 3).
+ *   DELTAS   4 x float per record, a GL_RGBA32F buffer texture: texelFetch -> (dx, dy, dz, target), the target index
+ *            stored as an exact float (< 2^24).
+ *   NORMALS  4 x float per record, a second GL_RGBA32F buffer texture: (nx, ny, nz, 0), same record index (only
+ *            when cr_morphs_has_normals; zeros for rows without a normal delta).
+ * Records are laid out in vertex order (offset of v + 1 = offset + count of v), each vertex's rows by ascending
+ * target; zero rows are not stored. Per FRAME only the WEIGHTS are uploaded: target_count floats from
+ * cr_morphs_clamp_weights, a GL_R32F buffer texture (texelFetch(weights, int(rec.w)).r). Vertex shader, BEFORE
+ * skinning:
+ *     vec3 d = vec3(0), dn = vec3(0);
+ *     for (uint i = r.x; i < r.x + r.y; ++i) { vec4 rec = texelFetch(deltas, int(i)); float w = texelFetch(weights,
+ *         int(rec.w)).r; d += w * rec.xyz; dn += w * texelFetch(normals, int(i)).xyz; }
+ *     pos = skinPosition(s, aPos + d); normal = skinNormal(s, normalize(aNormal + dn));
+ * Sizes in bytes: ranges 8 x vertex_count, deltas / normals 16 x cr_morphs_pack_size. */
+int32_t cr_morphs_pack_size(const cr_morphs* morphs);
+/* out_ranges: vertex_count x 2 uint32; out_deltas / out_normals (may be NULL): record_capacity x 4 floats
+ * (record_capacity >= cr_morphs_pack_size, else CR_ERR_ARG and nothing written). Returns CR_OK. */
+int32_t cr_morphs_pack(const cr_morphs* morphs, int32_t record_capacity, uint32_t* out_ranges, float* out_deltas,
+                       float* out_normals);
 
 #ifdef __cplusplus
 }

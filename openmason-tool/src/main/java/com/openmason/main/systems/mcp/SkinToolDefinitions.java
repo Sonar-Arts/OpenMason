@@ -9,6 +9,7 @@ import java.util.List;
 import static com.openmason.main.systems.mcp.McpArgs.optBool;
 import static com.openmason.main.systems.mcp.McpArgs.optFloatArray;
 import static com.openmason.main.systems.mcp.McpArgs.optFloatBoxed;
+import static com.openmason.main.systems.mcp.McpArgs.optInt;
 import static com.openmason.main.systems.mcp.McpArgs.optIntArray;
 import static com.openmason.main.systems.mcp.McpArgs.optString;
 import static com.openmason.main.systems.mcp.McpArgs.optStringList;
@@ -48,7 +49,7 @@ public final class SkinToolDefinitions {
 
         registry.register(new McpTool(
                 "skin_set_weights",
-                "Set influences: entries [{vertex, joints:[bone/part], weights}], max 4, normalized; "
+                "Set influences: entries [{vertex, joints:[bone/part], weights}], any count, normalized; "
                         + "empty joints = follow the part.",
                 schema().str("part", "Part")
                         .arr("entries", "object", "[{vertex, joints, weights}]")
@@ -58,13 +59,15 @@ public final class SkinToolDefinitions {
         registry.register(new McpTool(
                 "skin_auto_weights",
                 "Bind parts to bones by distance (replaces weights). Defaults: all parts/bones, "
-                        + "falloff 2, min_weight 0.05; rigid = nearest bone.",
+                        + "falloff 2, min_weight 0.05, max_influences 0 (= every bone); rigid = nearest bone.",
                 schema().strArray("parts", "Parts").strArray("bones", "Bones")
                         .num("falloff", "Falloff exponent").num("min_weight", "Prune below")
+                        .num("max_influences", "Nearest bones per vertex, 0 = unlimited")
                         .bool("rigid", "Nearest bone only").build(),
                 args -> skin.autoWeights(optStringList(args, "parts"), optStringList(args, "bones"),
                         optFloatBoxed(args, "falloff"), optFloatBoxed(args, "min_weight"),
-                        optBool(args, "rigid", false))));
+                        optBool(args, "rigid", false),
+                        optInt(args, "max_influences", 0))));
 
         registry.register(new McpTool(
                 "skin_normalize",

@@ -203,5 +203,8 @@ check_abi "animation clips" "$HERE/native/kernels/include/cenda/anim_clip.h" CM_
   "$HERE/../engine-core/src/main/java/com/openmason/engine/anim/CendaAnimClip.java"
 check_abi "animation graph" "$HERE/native/kernels/include/cenda/anim_graph.h" CG_ABI_VERSION \
   "$HERE/../engine-core/src/main/java/com/openmason/engine/animgraph/CendaAnimGraph.java"
+# The .omo model codec (co_*, #167) has no Java fallback either: OMOReader / OMOSerializer throw with this diagnostic.
+check_abi "model" "$HERE/native/kernels/include/cenda/model.h" CO_ABI_VERSION \
+  "$HERE/../engine-core/src/main/java/com/openmason/engine/format/omo/CendaOmo.java"
 
 echo "[cenda] kernels ready: $LIB"

@@ -1,0 +1,150 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "OpenMason import fixtures"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 96
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 36
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 132,
+   "byteLength": 96
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 228,
+   "byteLength": 4
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 232,
+   "byteLength": 24
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 8,
+   "type": "VEC3",
+   "min": [
+    -1,
+    -1,
+    -1
+   ],
+   "max": [
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5121,
+   "count": 36,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 8,
+   "type": "VEC3",
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "max": [
+    0,
+    0.5,
+    0
+   ]
+  },
+  {
+   "componentType": 5126,
+   "count": 8,
+   "type": "VEC3",
+   "min": [
+    0,
+    0,
+    -0.75
+   ],
+   "max": [
+    0.25,
+    0,
+    0
+   ],
+   "sparse": {
+    "count": 2,
+    "indices": {
+     "bufferView": 3,
+     "componentType": 5123
+    },
+    "values": {
+     "bufferView": 4
+    }
+   }
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Cube",
+   "weights": [
+    0.25,
+    0.75
+   ],
+   "extras": {
+    "targetNames": [
+     "Smile",
+     "Frown"
+    ],
+    "note": "kept"
+   },
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0
+     },
+     "indices": 1,
+     "mode": 4,
+     "targets": [
+      {
+       "POSITION": 2
+      },
+      {
+       "POSITION": 3
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Cube",
+   "mesh": 0
+  }
+ ],
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 256,
+   "uri": "data:application/octet-stream;base64,AACAvwAAgL8AAIC/AACAPwAAgL8AAIC/AACAPwAAgD8AAIC/AACAvwAAgD8AAIC/AACAvwAAgL8AAIA/AACAPwAAgL8AAIA/AACAPwAAgD8AAIA/AACAvwAAgD8AAIA/AAIBAAMCBAUGBAYHAAEFAAUEAwcGAwYCAAQHAAcDAQIGAQYFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8AAAAAAAAAAAAAAD8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8AAAAAAAAAAAAAAD8AAAAAAQAGAAAAgD4AAAAAAAAAAAAAAAAAAAAAAABAvw=="
+  }
+ ]
+}

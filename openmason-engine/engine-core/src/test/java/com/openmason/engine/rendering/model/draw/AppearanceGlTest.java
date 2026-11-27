@@ -312,7 +312,7 @@ class AppearanceGlTest {
         int[] idx = tri.stream().mapToInt(Integer::intValue).toArray();
         int n = pos.length / 3;
         Skin skin = keep(Skin.create(n));
-        skin.autoWeights(rig, pos, 0, n, new int[]{shoulder, elbow, wrist}, 2f, 0.01f);
+        skin.autoWeights(rig, pos, 0, n, new int[]{shoulder, elbow, wrist}, 2f, 0.01f, Skin.UNLIMITED_INFLUENCES);
         Garment sleeve = keep(Garment.fit(def, rig, null, null, rig.joints().stream().map(RigJoint::name).toList(), pos, skin));
         List<EntityPart> parts = List.of(new EntityPart("s", "sleeve", null, new Vector3f(), new Vector3f(), new Vector3f(),
             new Vector3f(1), List.of(new EntityFace(0, -1, 0, idx.length))));

@@ -90,8 +90,9 @@ class SkinPoseDeformerTest {
         skin.set(2, new int[]{skins.jointIndex("elbow"), skins.jointIndex(armId)}, new float[]{0.5f, 0.5f});
         bones.setPose(Map.of("elbow", new BoneStore.BonePose(new Vector3f(), new Vector3f(0, 0, 90))),
                 id -> armId.equals(id) ? rest : null, true);
-        // (3,2,0): bone -> (-1,4,0), part -> (3,2,0); halfway = (1,3,0).
+        // (3,2,0): bone -> (-1,4,0), part -> (3,2,0); halfway = (1,3,0). Rig ABI 3 deforms with the GPU's unorm16
+        // weights (0.5 / 0.5 -> 32768 / 32767 of 65535): within 1/65535 of the 4-unit spread.
         float[] v = last.get().combinedVertices();
-        assertArrayEquals(new float[]{1, 3, 0}, new float[]{v[6], v[7], v[8]}, 1e-5f);
+        assertArrayEquals(new float[]{1, 3, 0}, new float[]{v[6], v[7], v[8]}, 1e-4f);
     }
 }

@@ -247,15 +247,22 @@ public final class SkinAuthoring {
         skins.fireChanged();
     }
 
+    /** {@link #autoWeights(Collection, Collection, float, float, int)} with no influence limit (Blender's default). */
+    public int autoWeights(Collection<String> partIds, Collection<String> boneIds, float falloff, float minWeight) {
+        return autoWeights(partIds, boneIds, falloff, minWeight, Skin.UNLIMITED_INFLUENCES);
+    }
+
     /**
      * Auto weights for {@code partIds} against {@code boneIds} (null/empty = every bone): each vertex
-     * gets up to four bones by distance to their rest segments, {@code falloff} shaping the decay
-     * ({@code <= 0} = rigid to the nearest bone), influences below {@code minWeight} pruned. Replaces
-     * the parts' weights. Returns the number of vertices written.
+     * is weighted to the bones by distance to their rest segments ({@code maxInfluences} > 0 = only that many
+     * nearest bones, 0 = every bone), {@code falloff} shaping the decay ({@code <= 0} = rigid to the nearest
+     * bone), influences below {@code minWeight} pruned. Replaces the parts' weights. Returns the number of
+     * vertices written.
      *
      * @throws IllegalArgumentException when there is no bone to weight to
      */
-    public int autoWeights(Collection<String> partIds, Collection<String> boneIds, float falloff, float minWeight) {
+    public int autoWeights(Collection<String> partIds, Collection<String> boneIds, float falloff, float minWeight,
+                           int maxInfluences) {
         List<String> targets = new ArrayList<>();
         Set<String> wanted = boneIds == null || boneIds.isEmpty() ? null : new LinkedHashSet<>(boneIds);
         for (OMOFormat.BoneEntry b : boneList()) {
@@ -279,7 +286,7 @@ public final class SkinAuthoring {
                 if (n == 0) continue;
                 try (Skin temp = Skin.create(n)) {
                     temp.autoWeights(rig, cachedModelPositions(partId), 0, n, rigBones, Math.max(0f, falloff),
-                            Math.max(0f, minWeight));
+                            Math.max(0f, minWeight), Math.max(0, maxInfluences));
                     temp.remapJoints(rigToRegistry);
                     Skin target = skinFor(partId);
                     clearSkin(target);

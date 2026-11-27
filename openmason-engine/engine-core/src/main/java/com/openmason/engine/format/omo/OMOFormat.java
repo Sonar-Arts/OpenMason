@@ -19,11 +19,16 @@ import java.util.Objects;
  *   <li>1.8 - Rig revamp: parts and bones form one joint hierarchy (a part's {@code parentId} may name a
  *       bone, a bone's {@code parentBoneId} may name a part), clip tracks may key bones, and optional
  *       per-vertex skin weights ({@link SkinData}). Read by the native rig ({@code cenda/rig.h}).</li>
+ *   <li>1.9 - Optional sections ({@link ShadingData}, {@link VertexGroupData}, {@link MorphData}) and a material
+ *       base colour ({@link MaterialEntry#baseColor()}); a file carrying any of them is written as 1.9.</li>
  * </ul>
+ *
+ * <p>The codec itself is native ({@code libomformat}, C ABI {@code cenda/model.h}, OpenMason #167): these records
+ * are the Java-side data carriers, {@link OmoDocument} moves them across the binding.
  */
 public final class OMOFormat {
 
-    /** Current format version */
+    /** The version a new document is written as (1.9 data raises it to "1.9" natively). */
     public static final String FORMAT_VERSION = "1.8";
 
     /** Minimum supported format version for reading */
@@ -69,6 +74,33 @@ public final class OMOFormat {
             return false;
         }
         return filePath.trim().toLowerCase().endsWith(FILE_EXTENSION);
+    }
+
+    /**
+     * A 1x1 PNG of an OMO 1.9 material base colour (RGBA 0..1): the stand-in image for a material that has a base
+     * colour and no PNG, so loaders that need a texture keep the material instead of dropping it.
+     *
+     * @param rgba 4 floats
+     * @return PNG bytes
+     */
+    public static byte[] solidColorPng(float[] rgba) {
+        if (rgba == null || rgba.length != 4) {
+            throw new IllegalArgumentException("rgba must hold 4 floats");
+        }
+        int argb = 0;
+        for (int k : new int[]{3, 0, 1, 2}) {
+            argb = (argb << 8) | Math.round(Math.max(0f, Math.min(1f, rgba[k])) * 255f);
+        }
+        java.awt.image.BufferedImage image =
+                new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        image.setRGB(0, 0, argb);
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try {
+            javax.imageio.ImageIO.write(image, "png", out);
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        return out.toByteArray();
     }
 
     /**
@@ -188,7 +220,52 @@ public final class OMOFormat {
      * @param tintColor   RGBA tint color
      */
     public record MaterialEntry(int materialId, String name, String textureFile,
-                                String renderLayer, boolean emissive, int tintColor) {}
+                                String renderLayer, boolean emissive, int tintColor, float[] baseColor) {
+
+        /**
+         * @param baseColor OMO 1.9: RGBA base colour (4 floats), or null. A material with a base colour may have
+         *                  no image ({@code textureFile} null).
+         */
+        public MaterialEntry {
+            if (baseColor != null) {
+                if (baseColor.length != 4) {
+                    throw new IllegalArgumentException("baseColor must hold 4 floats (RGBA)");
+                }
+                baseColor = baseColor.clone();
+            }
+        }
+
+        /** A material without a base colour (pre-1.9 data). */
+        public MaterialEntry(int materialId, String name, String textureFile,
+                             String renderLayer, boolean emissive, int tintColor) {
+            this(materialId, name, textureFile, renderLayer, emissive, tintColor, null);
+        }
+
+        @Override
+        public float[] baseColor() {
+            return baseColor == null ? null : baseColor.clone();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof MaterialEntry m && m.materialId == materialId && Objects.equals(m.name, name)
+                    && Objects.equals(m.textureFile, textureFile) && Objects.equals(m.renderLayer, renderLayer)
+                    && m.emissive == emissive && m.tintColor == tintColor
+                    && java.util.Arrays.equals(m.baseColor, baseColor);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(materialId, name, textureFile, renderLayer, emissive, tintColor)
+                    * 31 + java.util.Arrays.hashCode(baseColor);
+        }
+
+        @Override
+        public String toString() {
+            return "MaterialEntry[" + materialId + ", " + name + ", " + textureFile + ", " + renderLayer + ", "
+                    + emissive + ", " + tintColor + ", " + java.util.Arrays.toString(baseColor) + "]";
+        }
+    }
 
     /**
      * Aggregated per-face texture data for serialization (v1.2+).
@@ -522,94 +599,10 @@ public final class OMOFormat {
     }
 
     /**
-     * Extended document structure (v1.1+) with optional mesh data and face textures.
-     *
-     * <p>Extends the base Document to include custom mesh data for
-     * subdivided or edited models, and per-face texture data (v1.2+).
-     *
-     * @param version Format version
-     * @param objectName Model name
-     * @param modelType Model type identifier
-     * @param geometry Base geometry dimensions (used for standard cubes or as reference)
-     * @param textureFile Embedded texture filename
-     * @param mesh Custom mesh data (null for standard cube, present for edited models)
-     * @param faceTextures Per-face texture data (null for pre-1.2 files)
-     */
-    public record ExtendedDocument(
-            String version,
-            String objectName,
-            String modelType,
-            GeometryData geometry,
-            String textureFile,
-            MeshData mesh,
-            FaceTextureData faceTextures
-    ) {
-        public ExtendedDocument {
-            Objects.requireNonNull(version, "version cannot be null");
-            Objects.requireNonNull(objectName, "objectName cannot be null");
-            Objects.requireNonNull(modelType, "modelType cannot be null");
-            Objects.requireNonNull(geometry, "geometry cannot be null");
-            Objects.requireNonNull(textureFile, "textureFile cannot be null");
-            // mesh can be null (standard cube)
-            // faceTextures can be null (pre-1.2 files)
-        }
-
-        /**
-         * Backward-compatible constructor for pre-1.2 code paths.
-         */
-        public ExtendedDocument(String version, String objectName, String modelType,
-                                GeometryData geometry, String textureFile, MeshData mesh) {
-            this(version, objectName, modelType, geometry, textureFile, mesh, null);
-        }
-
-        /**
-         * Check if this document has custom mesh data.
-         *
-         * @return true if custom mesh data is present
-         */
-        public boolean hasCustomMesh() {
-            return mesh != null && mesh.hasCustomGeometry();
-        }
-
-        /**
-         * Check if this document has per-face texture data.
-         *
-         * @return true if face texture data is present
-         */
-        public boolean hasFaceTextures() {
-            return faceTextures != null
-                    && faceTextures.mappings() != null
-                    && !faceTextures.mappings().isEmpty();
-        }
-
-        /**
-         * Convert to base Document for backward compatibility checks.
-         *
-         * @return Document with same base fields
-         */
-        public Document toBaseDocument() {
-            return new Document(version, objectName, modelType, geometry, textureFile);
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof ExtendedDocument that)) return false;
-            return Objects.equals(version, that.version) &&
-                    Objects.equals(objectName, that.objectName) &&
-                    Objects.equals(modelType, that.modelType) &&
-                    Objects.equals(geometry, that.geometry) &&
-                    Objects.equals(textureFile, that.textureFile) &&
-                    Objects.equals(mesh, that.mesh) &&
-                    Objects.equals(faceTextures, that.faceTextures);
-        }
-    }
-
-    /**
      * Per-vertex skin weights (v1.8+). Weights are stored per PART, indexed by the vertex's position
      * inside that part's geometry (so hiding, reordering or editing other parts never shifts them);
      * a vertex not listed follows its part rigidly. Joints are named by id (part or bone ids) through
-     * {@link #jointIds()}, the influence lists index into it. At most 4 influences per vertex.
+     * {@link #jointIds()}, the influence lists index into it. Any number of influences per vertex (rig ABI 3, #170).
      *
      * @param jointIds the joints the weights refer to (bone or part ids)
      * @param parts    weighted vertices per part
@@ -672,6 +665,217 @@ public final class OMOFormat {
         public String toString() {
             return "SkinVertex[" + localVertex + ", " + java.util.Arrays.toString(joints) + ", "
                     + java.util.Arrays.toString(weights) + "]";
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // OMO 1.9 (#168). Thin data carriers: the format rules live in libomformat (omformat/omo.hpp).
+    // ------------------------------------------------------------------------------------------------------
+
+    /**
+     * Shading (OMO 1.9). Every member may be empty; an all-empty instance means "no shading section".
+     *
+     * @param smoothWords         the faces that shade smooth: a bitset over face ids, bit {@code f % 32} of word
+     *                            {@code f / 32} (unsigned 32-bit words); empty = every face flat
+     * @param sharpEdges          sharp edges as soup vertex index pairs, flattened ({@code [a0, b0, a1, b1, ...]})
+     * @param autoSmoothAngle     auto-smooth angle in degrees, or null when unset
+     * @param customNormalVertices custom normals: the soup vertex of each row
+     * @param customNormalOct     custom normals: 2 octahedral snorm16 values per row ({@code [x0, y0, x1, y1, ...]})
+     */
+    public record ShadingData(int[] smoothWords, int[] sharpEdges, Float autoSmoothAngle,
+                              int[] customNormalVertices, short[] customNormalOct) {
+        public ShadingData {
+            smoothWords = smoothWords == null ? new int[0] : smoothWords.clone();
+            sharpEdges = sharpEdges == null ? new int[0] : sharpEdges.clone();
+            customNormalVertices = customNormalVertices == null ? new int[0] : customNormalVertices.clone();
+            customNormalOct = customNormalOct == null ? new short[0] : customNormalOct.clone();
+            if (sharpEdges.length % 2 != 0) {
+                throw new IllegalArgumentException("sharpEdges holds vertex pairs (even length)");
+            }
+            if (customNormalOct.length != customNormalVertices.length * 2) {
+                throw new IllegalArgumentException("customNormalOct holds 2 values per custom normal row");
+            }
+        }
+
+        /** True when nothing is set (no shading section is written). */
+        public boolean isEmpty() {
+            boolean anySmooth = false;
+            for (int w : smoothWords) anySmooth |= w != 0;
+            return !anySmooth && sharpEdges.length == 0 && autoSmoothAngle == null
+                    && customNormalVertices.length == 0;
+        }
+
+        @Override
+        public int[] smoothWords() {
+            return smoothWords.clone();
+        }
+
+        @Override
+        public int[] sharpEdges() {
+            return sharpEdges.clone();
+        }
+
+        @Override
+        public int[] customNormalVertices() {
+            return customNormalVertices.clone();
+        }
+
+        @Override
+        public short[] customNormalOct() {
+            return customNormalOct.clone();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof ShadingData s && java.util.Arrays.equals(s.smoothWords, smoothWords)
+                    && java.util.Arrays.equals(s.sharpEdges, sharpEdges)
+                    && Objects.equals(s.autoSmoothAngle, autoSmoothAngle)
+                    && java.util.Arrays.equals(s.customNormalVertices, customNormalVertices)
+                    && java.util.Arrays.equals(s.customNormalOct, customNormalOct);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(java.util.Arrays.hashCode(smoothWords), java.util.Arrays.hashCode(sharpEdges),
+                    autoSmoothAngle, java.util.Arrays.hashCode(customNormalVertices),
+                    java.util.Arrays.hashCode(customNormalOct));
+        }
+
+        @Override
+        public String toString() {
+            return "ShadingData[smooth=" + java.util.Arrays.toString(smoothWords) + ", sharpEdges="
+                    + java.util.Arrays.toString(sharpEdges) + ", autoSmoothAngle=" + autoSmoothAngle
+                    + ", customNormals=" + customNormalVertices.length + "]";
+        }
+    }
+
+    /**
+     * A named vertex group (OMO 1.9): weighted part-local vertices, skin's row layout with one influence.
+     *
+     * @param name  group name
+     * @param parts the weighted vertices per part
+     */
+    public record VertexGroupData(String name, List<GroupPart> parts) {
+        public VertexGroupData {
+            Objects.requireNonNull(name, "vertex group name cannot be null");
+            parts = parts == null ? List.of() : List.copyOf(parts);
+        }
+    }
+
+    /**
+     * One part's rows of a vertex group.
+     *
+     * @param partId   the part
+     * @param vertices part-local vertex per row
+     * @param weights  one weight per row
+     */
+    public record GroupPart(String partId, int[] vertices, float[] weights) {
+        public GroupPart {
+            Objects.requireNonNull(partId, "partId cannot be null");
+            vertices = vertices == null ? new int[0] : vertices.clone();
+            weights = weights == null ? new float[0] : weights.clone();
+            if (vertices.length != weights.length) {
+                throw new IllegalArgumentException("vertices/weights length mismatch");
+            }
+        }
+
+        @Override
+        public int[] vertices() {
+            return vertices.clone();
+        }
+
+        @Override
+        public float[] weights() {
+            return weights.clone();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof GroupPart p && p.partId.equals(partId)
+                    && java.util.Arrays.equals(p.vertices, vertices) && java.util.Arrays.equals(p.weights, weights);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(partId, java.util.Arrays.hashCode(vertices), java.util.Arrays.hashCode(weights));
+        }
+
+        @Override
+        public String toString() {
+            return "GroupPart[" + partId + ", " + java.util.Arrays.toString(vertices) + ", "
+                    + java.util.Arrays.toString(weights) + "]";
+        }
+    }
+
+    /**
+     * A shape key (OMO 1.9): sparse per-part deltas from the basis.
+     *
+     * @param name          morph name
+     * @param defaultWeight weight when nothing drives it
+     * @param min           slider minimum
+     * @param max           slider maximum
+     * @param parts         deltas per part
+     */
+    public record MorphData(String name, float defaultWeight, float min, float max, List<MorphPart> parts) {
+        public MorphData {
+            Objects.requireNonNull(name, "morph name cannot be null");
+            parts = parts == null ? List.of() : List.copyOf(parts);
+        }
+    }
+
+    /**
+     * One part's rows of a morph.
+     *
+     * @param partId   the part
+     * @param vertices part-local vertex per row
+     * @param deltas   3 position-delta floats per row
+     * @param normals  3 normal-delta floats per row, or null when this part has no normal deltas
+     */
+    public record MorphPart(String partId, int[] vertices, float[] deltas, float[] normals) {
+        public MorphPart {
+            Objects.requireNonNull(partId, "partId cannot be null");
+            vertices = vertices == null ? new int[0] : vertices.clone();
+            deltas = deltas == null ? new float[0] : deltas.clone();
+            normals = normals == null ? null : normals.clone();
+            if (deltas.length != vertices.length * 3) {
+                throw new IllegalArgumentException("deltas holds 3 floats per row");
+            }
+            if (normals != null && normals.length != vertices.length * 3) {
+                throw new IllegalArgumentException("normals holds 3 floats per row");
+            }
+        }
+
+        @Override
+        public int[] vertices() {
+            return vertices.clone();
+        }
+
+        @Override
+        public float[] deltas() {
+            return deltas.clone();
+        }
+
+        @Override
+        public float[] normals() {
+            return normals == null ? null : normals.clone();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof MorphPart p && p.partId.equals(partId)
+                    && java.util.Arrays.equals(p.vertices, vertices) && java.util.Arrays.equals(p.deltas, deltas)
+                    && java.util.Arrays.equals(p.normals, normals);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(partId, java.util.Arrays.hashCode(vertices), java.util.Arrays.hashCode(deltas),
+                    java.util.Arrays.hashCode(normals));
+        }
+
+        @Override
+        public String toString() {
+            return "MorphPart[" + partId + ", rows=" + vertices.length + ", normals=" + (normals != null) + "]";
         }
     }
 }

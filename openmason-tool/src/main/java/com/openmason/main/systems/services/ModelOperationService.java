@@ -705,6 +705,10 @@ public class ModelOperationService {
                     gpuTextureId = textureLoader.loadPNGAsTexture(pngBytes);
                 }
             }
+            // OMO 1.9: a material may have only a base colour (no PNG); keep it with a solid-colour texture
+            if (gpuTextureId <= 0 && matEntry.baseColor() != null) {
+                gpuTextureId = textureLoader.loadPNGAsTexture(OMOFormat.solidColorPng(matEntry.baseColor()));
+            }
 
             if (gpuTextureId <= 0) {
                 logger.warn("Failed to load texture for material {} ({})", matEntry.materialId(), matEntry.textureFile());

@@ -11,12 +11,15 @@ public final class ModelShaderSource {
 
     private ModelShaderSource() {}
 
-    /** Vertex stage of the lit pass ({@code model · skinPosition(aPos)}, see {@link ModelSkinGlsl}). */
+    /**
+     * Vertex stage of the lit pass ({@code model · skinPosition(aPos)}, see {@link ModelSkinGlsl}; the corner normal
+     * through the same skin matrix and the normal matrix of {@code model}, see {@link ModelNormalGlsl}).
+     */
     public static final String LIT_VERTEX = """
             #version 330 core
             layout (location = 0) in vec3 aPos;
             layout (location = 1) in vec2 aTexCoord;
-            """ + ModelSkinGlsl.VERTEX + """
+            """ + ModelSkinGlsl.VERTEX + ModelNormalGlsl.VERTEX + """
 
             uniform mat4 model;
             uniform mat4 view;
@@ -27,11 +30,14 @@ public final class ModelShaderSource {
             out float ViewDepth;
 
             void main() {
-                vec4 worldPos = model * skinPosition(aPos);
+                mat4 skin = skinMatrix();
+                vec4 worldPos = model * skinPosition(skin, aPos);
                 FragWorldPos = worldPos.xyz;
                 ViewDepth = -(view * worldPos).z;
                 gl_Position = projection * view * worldPos;
                 TexCoord = aTexCoord;
+                vSmooth = modelNormalSmooth();
+                vNormal = modelWorldNormal(model, skin);
             }
             """;
 
@@ -57,7 +63,9 @@ public final class ModelShaderSource {
             uniform int u_dyeMode;
             uniform sampler2D u_dyeMask;
             uniform vec3 u_dyeTints[4];
-            """;
+            // Material base colour (OMO 1.9): multiplies the albedo (texture x base colour; white = none).
+            uniform vec4 u_materialColor;
+            """ + ModelNormalGlsl.FRAGMENT;
 
     private static final String DEFAULT_EXTENSION = """
             vec3 modelExtraLight(vec3 worldPos, vec3 normal, float sunVisibility) {
@@ -70,7 +78,8 @@ public final class ModelShaderSource {
 
     private static final String LIT_FRAGMENT_MAIN = """
             void main() {
-                vec4 texColor = u_useTexture ? texture(textureSampler, TexCoord) : vec4(u_baseColor, 1.0);
+                vec4 texColor = u_useTexture ? texture(textureSampler, TexCoord) * u_materialColor
+                        : vec4(u_baseColor, 1.0);
                 if (u_dyeMode != 0) {
                     vec4 m = u_dyeMode == 2 ? texture(u_dyeMask, TexCoord) : vec4(1.0, 0.0, 0.0, 0.0);
                     texColor.rgb *= vec3(1.0) + m.r * (u_dyeTints[0] - 1.0) + m.g * (u_dyeTints[1] - 1.0)
@@ -78,10 +87,9 @@ public final class ModelShaderSource {
                 }
                 if (texColor.a < 0.01) discard;
 
-                // Model meshes carry no normals: derive the flat face normal from
-                // screen-space derivatives. For visible fragments this is the
-                // outward (viewer-side) normal, which is what lighting needs.
-                vec3 normal = normalize(cross(dFdx(FragWorldPos), dFdy(FragWorldPos)));
+                // Smooth corners: the interpolated corner normal; flat corners (and meshes without normals): the
+                // drawn triangle's face normal from screen-space derivatives. Viewer-side either way.
+                vec3 normal = modelShadingNormal(vNormal, vSmooth, FragWorldPos);
                 vec3 keyDir = normalize(u_keyDirection);
                 float diff = max(dot(normal, keyDir), 0.0);
                 float shadowFactor = csmShadowFactor(FragWorldPos, normal, ViewDepth);

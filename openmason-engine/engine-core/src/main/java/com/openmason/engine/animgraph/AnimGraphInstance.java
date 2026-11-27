@@ -35,14 +35,25 @@ public final class AnimGraphInstance implements AutoCloseable {
     public static final int ROOT_MOTION_EXTRACT = 1;
 
     /** {@link #modifierValue} keys (= rig.h {@code CR_VALUE_*} / anim_graph.h {@code CG_VALUE_*}, OpenMason #159). */
-    public static final int VALUE_LOCK = 8;            // footPlacement: + leg, the lock input fed this frame
     public static final int VALUE_OUT_ANGLE = 64;      // orientationWarp: the eased angle
     public static final int VALUE_OUT_PELVIS = 65;     // strideWarp / footPlacement: the pelvis offset along up
-    public static final int VALUE_OUT_LOCKED = 66;     // footPlacement: + leg, 1 while locked
-    public static final int VALUE_OUT_GROUND = 71;     // footPlacement: + leg, its eased ground offset
-    public static final int VALUE_OUT_ALPHA = 76;      // footPlacement: + leg, how far it is pulled to its lock
     public static final int VALUE_PLAY_RATE = 128;     // strideWarp: the play rate it gave its clips
     public static final int VALUE_STRIDE = 129;        // strideWarp: the stride scale
+
+    /** Per-leg value fields ({@code CR_LEG_*}, rig ABI 3): key = {@link #valueLeg(int, int)}. */
+    public static final int LEG_LOCK = 0;              // footPlacement: the lock input fed this frame
+    public static final int LEG_OUT_LOCKED = 1;        // footPlacement: 1 while locked
+    public static final int LEG_OUT_GROUND = 2;        // footPlacement: its eased ground offset
+    public static final int LEG_OUT_ALPHA = 3;         // footPlacement: how far it is pulled to its lock
+
+    /**
+     * The {@link #modifierValue} key of field {@code field} ({@code LEG_*}) of leg {@code leg} (0-based, in the
+     * modifier's leg order): rig.h {@code CR_VALUE_LEG(leg, field) = 256 + 16 * leg + field}. Any number of legs
+     * (ABI 2's keys 8 / 66 / 71 / 76 + leg stopped at 5 and are retired).
+     */
+    public static int valueLeg(int leg, int field) {
+        return 256 + 16 * leg + field;
+    }
 
     /** One upcall stub for every instance: the ground query of the evaluate in progress is a per-thread frame. */
     private static final MemorySegment GROUND_STUB;

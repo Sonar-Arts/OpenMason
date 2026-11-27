@@ -27,8 +27,11 @@ public final class CendaCharacter {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CendaCharacter.class);
 
-    /** Must equal {@code CC_ABI_VERSION} in character.h (build-kernels.sh checks both sides). */
-    static final int EXPECTED_ABI = 1;
+    /**
+     * Must equal {@code CC_ABI_VERSION} in character.h (build-kernels.sh's {@code check_abi} compares both sides).
+     * ABI 2 (OpenMason #170): {@code cc_garment_pack} writes the rig ABI 3 variable-length skin packing.
+     */
+    static final int EXPECTED_ABI = 2;
 
     static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;

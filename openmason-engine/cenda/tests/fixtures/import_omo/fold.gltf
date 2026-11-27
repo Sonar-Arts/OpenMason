@@ -1,0 +1,75 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "OpenMason import_omo fixtures"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 144
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 144,
+   "byteLength": 36
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 12,
+   "type": "VEC3",
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "max": [
+    7,
+    1,
+    0.3535534
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5123,
+   "count": 18,
+   "type": "SCALAR"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Fold",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0
+     },
+     "indices": 1
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Fold",
+   "mesh": 0
+  }
+ ],
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "scene": 0,
+ "buffers": [
+  {
+   "byteLength": 180,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAgD8AAAAAozCJPezZbj/0BLU+AABAQAAAAAAAAAAAAACAQAAAAAAAAAAAzcxMQM3MTD4AAAAAAABAQAAAgD8AAAAAAADAQAAAAAAAAAAAAADgQAAAAAAAAAAAAADgQAAAgD8AAAAAKADAQMH+fz+/Mso7AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsA"
+  }
+ ]
+}

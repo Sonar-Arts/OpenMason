@@ -1,7 +1,7 @@
 # Skinning (per-vertex weights)
 
-Skin weights let one mesh bend over several bones. Each vertex has up to 4
-influences (joint + weight, normalized to 1); a joint is a bone OR a part. A
+Skin weights let one mesh bend over several bones. Each vertex has any number
+of influences (joint + weight, normalized to 1; no cap); a joint is a bone OR a part. A
 vertex with no weights follows its own part rigidly (the old per-part
 behaviour), so weighting is optional and can be partial. Weights are stored per
 part by part-local vertex index and saved in the .omo (`skin`).
@@ -12,8 +12,9 @@ over a part name.
 
 ## Tools
 - `skin_info` — per part: verts, weighted count, joints used.
-- `skin_auto_weights {parts?, bones?, falloff?, min_weight?, rigid?}` — bind by
-  distance to each bone's rest head->tail segment (4 nearest, w ~ 1/d^2^falloff).
+- `skin_auto_weights {parts?, bones?, falloff?, min_weight?, max_influences?, rigid?}`
+  — bind by distance to each bone's rest head->tail segment (every bone, or the
+  `max_influences` nearest; w ~ 1/d^2^falloff, then `min_weight` prunes).
   Replaces the parts' weights. `rigid:true` = nearest bone only.
 - `skin_get_weights {part, vertices?}` / `skin_set_weights {part, entries:
   [{vertex, joints:[...], weights:[...]}]}` — exact per-vertex control.

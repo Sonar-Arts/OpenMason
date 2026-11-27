@@ -1,0 +1,44 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "OpenMason import fixtures"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  }
+ ],
+ "meshes": [
+  {
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0
+     }
+    }
+   ]
+  }
+ ],
+ "extensionsUsed": [
+  "KHR_draco_mesh_compression"
+ ],
+ "extensionsRequired": [
+  "KHR_draco_mesh_compression"
+ ],
+ "buffers": [
+  {
+   "byteLength": 48,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAAAA"
+  }
+ ]
+}

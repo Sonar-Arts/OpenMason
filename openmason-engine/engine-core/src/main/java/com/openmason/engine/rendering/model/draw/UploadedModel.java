@@ -16,7 +16,7 @@ import static org.lwjgl.system.MemoryUtil.memFree;
 /**
  * An upload-once model on the GPU: its static {@link ModelGpuMesh}, the
  * {@link ModelDrawPlan} and one texture per referenced material — everything
- * {@link ModelRenderer} needs to draw a loaded entity model.
+ * {@link ModelRenderer} needs to draw a loaded entity model (skin, corner normals, material base colours).
  *
  * <p>Only materials the plan's textured batches reference get a texture (model
  * files can retain many unused editor materials). Textures are nearest-filtered
@@ -27,6 +27,7 @@ public final class UploadedModel implements AutoCloseable, MaterialTextures {
     private final ModelGpuMesh mesh;
     private final ModelDrawPlan plan;
     private final Map<Integer, Integer> textures = new HashMap<>();
+    private final Map<Integer, float[]> baseColors = new HashMap<>();
     private long trackedTextureBytes;
 
     private UploadedModel(ModelGpuMesh mesh, ModelDrawPlan plan) {
@@ -40,9 +41,12 @@ public final class UploadedModel implements AutoCloseable, MaterialTextures {
         ModelGpuMesh mesh = new ModelGpuMesh(false, GpuMemoryTracker.Category.ENTITY_MESH);
         mesh.upload(geometry.vertices(), geometry.texCoords(), geometry.indices());
         mesh.updateSkin(geometry.rig().packed());
+        mesh.updateNormals(geometry.normals());
         UploadedModel model = new UploadedModel(mesh, plan);
         for (int materialId : plan.materialIds()) {
-            model.textures.put(materialId, model.uploadTexture(geometry.materials().get(materialId)));
+            MaterialImage image = geometry.materials().get(materialId);
+            model.textures.put(materialId, model.uploadTexture(image));
+            if (image.baseColor() != null) model.baseColors.put(materialId, image.baseColor());
         }
         return model;
     }
@@ -60,6 +64,12 @@ public final class UploadedModel implements AutoCloseable, MaterialTextures {
     public int textureFor(int materialId) {
         Integer texture = textures.get(materialId);
         return texture != null ? texture : -1;
+    }
+
+    /** The material's OMO 1.9 base colour (multiplies its texture), or null = white. */
+    @Override
+    public float[] baseColorFor(int materialId) {
+        return baseColors.get(materialId);
     }
 
     private int uploadTexture(MaterialImage image) {

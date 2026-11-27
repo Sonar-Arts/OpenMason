@@ -5,10 +5,14 @@
 
 #include "cenda/rig.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
+#include <numeric>
 #include <vector>
 
 namespace {
@@ -51,12 +55,40 @@ cr_joint_desc bone(int parent, float px, float py, float pz, float ex, float ey,
 
 cr_rig* make(const std::vector<cr_joint_desc>& j) { return cr_rig_create(j.data(), static_cast<int32_t>(j.size()), nullptr, nullptr); }
 
-cr_modifier_desc mod(int type, std::initializer_list<int> joints, int target) {
-    cr_modifier_desc d{};
+// The ABI 3 desc layout the Java binding writes (64-bit hosts).
+static_assert(sizeof(void*) != 8 || (sizeof(cr_modifier_desc) == 80 && offsetof(cr_modifier_desc, joints) == 16
+                                     && offsetof(cr_modifier_desc, joint_weights) == 24 && offsetof(cr_modifier_desc, target) == 32
+                                     && offsetof(cr_modifier_desc, pole) == 36 && offsetof(cr_modifier_desc, weight) == 40
+                                     && offsetof(cr_modifier_desc, p) == 44 && offsetof(cr_modifier_desc, reserved) == 76));
+
+// A modifier desc owning its joint / weight lists (rig ABI 3: the desc holds pointers + a count; copies re-point).
+struct Mod : cr_modifier_desc {
+    std::vector<int32_t> js;
+    std::vector<float> ws;
+    Mod() : cr_modifier_desc{} {}
+    Mod(const Mod& o) : cr_modifier_desc(o), js(o.js), ws(o.ws) { bind(); }
+    Mod& operator=(const Mod& o) {
+        static_cast<cr_modifier_desc&>(*this) = o;
+        js = o.js;
+        ws = o.ws;
+        bind();
+        return *this;
+    }
+    void bind() {
+        joint_count = static_cast<int32_t>(js.size());
+        joints = js.data();
+        joint_weights = ws.data();
+    }
+};
+
+Mod mod(int type, std::initializer_list<int> joints, int target) {
+    Mod d;
     d.type = type;
-    d.joint_count = 0;
-    for (int& j : d.joints) j = -1;
-    for (int j : joints) d.joints[d.joint_count++] = j;
+    for (int j : joints) {
+        d.js.push_back(j);
+        d.ws.push_back(0.f);
+    }
+    d.bind();
     d.target = target;
     d.pole = -1;
     d.weight = 1.f;
@@ -112,7 +144,7 @@ std::vector<cr_joint_desc> leg() {
 void test_two_bone() {
     cr_rig* rig = make(leg());
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d = mod(CR_MOD_TWO_BONE, {0, 1, 2}, 0);
+    Mod d = mod(CR_MOD_TWO_BONE, {0, 1, 2}, 0);
     d.pole = 1;
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 2);
     CHECK(s != nullptr);
@@ -193,7 +225,7 @@ void test_chains() {
     cr_rig* rig = make(j);
     cr_poses* p = cr_poses_create(rig, 1);
     for (int type : {CR_MOD_FABRIK, CR_MOD_CCD}) {
-        cr_modifier_desc d = mod(type, {0, 5}, 0);
+        Mod d = mod(type, {0, 5}, 0);
         d.p[0] = type == CR_MOD_FABRIK ? 20.f : 50.f;
         d.p[1] = 1e-5f;
         cr_modstack* s = cr_modstack_create(rig, &d, 1, 1);
@@ -208,7 +240,7 @@ void test_chains() {
         cr_modstack_destroy(s);
     }
     // A chain whose start is not an ancestor of its end is refused.
-    cr_modifier_desc bad = mod(CR_MOD_FABRIK, {5, 0}, 0);
+    Mod bad = mod(CR_MOD_FABRIK, {5, 0}, 0);
     CHECK(cr_modstack_create(rig, &bad, 1, 1) == nullptr);
     cr_poses_destroy(p);
     cr_rig_destroy(rig);
@@ -223,9 +255,10 @@ void test_aim() {
                                     bone(3, -0.05f, -0.1f, -0.1f, 0, 0, -0.02f)};
     cr_rig* rig = make(j);
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d = mod(CR_MOD_AIM, {0, 1, 2, 3}, 0);
+    Mod d = mod(CR_MOD_AIM, {0, 1, 2, 3}, 0);
     const float weights[4] = {0.1f, 0.2f, 0.3f, 0.4f};
-    std::memcpy(d.joint_weights, weights, sizeof weights);
+    d.ws.assign(weights, weights + 4);
+    d.bind();
     d.p[2] = 1.f;  // the head's +Z axis... aim axis (0, 0, 1) is "backward"; use -Z:
     d.p[2] = -1.f;
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 1);
@@ -277,9 +310,9 @@ void test_aim() {
     cr_modstack_destroy(s);
 
     // Eyes aim separately, each fully.
-    cr_modifier_desc eyes = mod(CR_MOD_AIM, {4, 5}, 0);
+    Mod eyes = mod(CR_MOD_AIM, {4, 5}, 0);
     eyes.flags = CR_MOD_AIM_EACH;
-    eyes.joint_weights[0] = eyes.joint_weights[1] = 1.f;
+    eyes.ws[0] = eyes.ws[1] = 1.f;
     eyes.p[2] = -1.f;
     s = cr_modstack_create(rig, &eyes, 1, 1);
     cr_target near_t = model_target(0.3f, 2.f, -0.6f);
@@ -307,7 +340,7 @@ void test_constraints() {
     const float q45y[4] = {0.f, std::sin(0.3926991f), 0.f, std::cos(0.3926991f)};  // 45 deg about Y (x, y, z, w)
     // Point: the joint's pivot lands on the target (+ offset in the target's frame).
     for (int kind : {CR_CONSTRAINT_POINT, CR_CONSTRAINT_ORIENT, CR_CONSTRAINT_PARENT, CR_CONSTRAINT_COPY, CR_CONSTRAINT_AIM}) {
-        cr_modifier_desc d = mod(CR_MOD_CONSTRAINT, {1}, 0);
+        Mod d = mod(CR_MOD_CONSTRAINT, {1}, 0);
         d.kind = kind;
         if (kind == CR_CONSTRAINT_PARENT || kind == CR_CONSTRAINT_POINT) d.p[2] = 0.5f;  // offset +Z in the target frame
         if (kind == CR_CONSTRAINT_AIM) d.p[1] = 1.f;                                    // aim the bone's +Y
@@ -338,7 +371,7 @@ void test_constraints() {
         cr_modstack_destroy(s);
     }
     // A joint target: follow another joint (with its offset).
-    cr_modifier_desc d = mod(CR_MOD_CONSTRAINT, {2}, 0);
+    Mod d = mod(CR_MOD_CONSTRAINT, {2}, 0);
     d.kind = CR_CONSTRAINT_POINT;
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 1);
     cr_target jt{};
@@ -376,7 +409,7 @@ void test_spring() {
     cr_rig* rig = make(tail());
     cr_poses* pa = cr_poses_create(rig, 1);
     cr_poses* pb = cr_poses_create(rig, 1);
-    cr_modifier_desc d = mod(CR_MOD_SPRING, {1, 3}, -1);
+    Mod d = mod(CR_MOD_SPRING, {1, 3}, -1);
     d.p[0] = 2.f;    // stiffness
     d.p[1] = 0.3f;   // drag
     d.p[6] = 1.f / 120.f;
@@ -439,9 +472,9 @@ void test_full_body() {
                                     bone(2, 0, 0, 0, 0.1f, 0, 0)};
     cr_rig* rig = make(j);
     cr_poses* p = cr_poses_create(rig, 1);
-    cr_modifier_desc d = mod(CR_MOD_FULL_BODY, {0, 1, 2, 3}, 0);
-    d.joint_weights[1] = 1.f;  // pull
-    d.joint_weights[2] = 1.f;  // reach
+    Mod d = mod(CR_MOD_FULL_BODY, {0, 1, 2, 3}, 0);
+    d.ws[1] = 1.f;  // pull
+    d.ws[2] = 1.f;  // reach
     cr_modstack* s = cr_modstack_create(rig, &d, 1, 1);
     cr_target t = model_target(1.5f, 1.5f, 0.3f);  // 1.4 from the shoulder: out of the arm's 0.8 reach
     cr_modstack_set_target(s, 0, &t);
@@ -451,7 +484,7 @@ void test_full_body() {
     CHECK(len(sub(head(w, 3), V{1.5, 1.5, 0.3})) < 1e-3);  // the body came along
     CHECK(len(sub(head(w, 0), V{0, 1, 0})) > 0.5);
     // No pull: the body stays, the arm points at the goal.
-    d.joint_weights[1] = 0.f;
+    d.ws[1] = 0.f;
     cr_modstack_destroy(s);
     s = cr_modstack_create(rig, &d, 1, 1);
     cr_modstack_set_target(s, 0, &t);
@@ -462,7 +495,7 @@ void test_full_body() {
     CHECK(near(len(sub(head(w, 3), head(w, 1))), 0.8, 1e-3));
     cr_modstack_destroy(s);
     // The CR_OP_MODIFY op runs the same stack as cr_modstack_apply.
-    d.joint_weights[1] = 1.f;
+    d.ws[1] = 1.f;
     cr_modstack* s1 = cr_modstack_create(rig, &d, 1, 1);
     cr_modstack* s2 = cr_modstack_create(rig, &d, 1, 1);
     cr_modstack_set_target(s1, 0, &t);
@@ -483,6 +516,126 @@ void test_full_body() {
     cr_rig_destroy(rig);
 }
 
+// ---- no fixed joint / limb caps (rig ABI 3, OpenMason #170) ----------------------------------------------------
+
+// A 24-joint aim chain (ABI 2 stopped at 16): the turn is shared by weight over every joint.
+void test_long_aim_chain() {
+    constexpr int N = 24;
+    std::vector<cr_joint_desc> j = {bone(-1, 0, 1, 0, 0, 0.1f, 0)};
+    for (int i = 1; i < N; ++i) j.push_back(bone(i - 1, 0, 0, 0, 0, 0.1f, 0));
+    cr_rig* rig = make(j);
+    cr_poses* p = cr_poses_create(rig, 1);
+    std::vector<int32_t> joints(N);
+    std::vector<float> weights(N);
+    double total = 0.0;
+    for (int k = 0; k < N; ++k) {
+        joints[static_cast<size_t>(k)] = k;
+        weights[static_cast<size_t>(k)] = static_cast<float>(k + 1);
+        total += k + 1;
+    }
+    cr_modifier_desc d{};
+    d.type = CR_MOD_AIM;
+    d.joint_count = N;
+    d.joints = joints.data();
+    d.joint_weights = weights.data();
+    d.target = 0;
+    d.pole = -1;
+    d.weight = 1.f;
+    d.p[2] = -1.f;
+    cr_modstack* s = cr_modstack_create(rig, &d, 1, 1);
+    CHECK(s != nullptr);
+    // The stack copied the lists: scribbling over the caller's arrays changes nothing.
+    std::fill(joints.begin(), joints.end(), -7);
+    std::fill(weights.begin(), weights.end(), 0.f);
+    const double yaw = 60.0 * 3.14159265358979 / 180.0;
+    cr_target t = model_target(static_cast<float>(1e4 * std::sin(yaw)), 2.f, static_cast<float>(-1e4 * std::cos(yaw)));
+    cr_modstack_set_target(s, 0, &t);
+    rest(p, 0);
+    CHECK(cr_modstack_apply(s, p, 0, 0.f) == CR_OK);
+    const std::vector<float> v = locals(p, 0, N);
+    double sum = 0.0;
+    for (int k = 0; k < N; ++k) {
+        const double ry = v[static_cast<size_t>(k) * 9 + 4];
+        CHECK(near(ry, -60.0 * (k + 1) / total, 1e-3));
+        sum += ry;
+    }
+    CHECK(near(sum, -60.0, 1e-3));
+    cr_modstack_destroy(s);
+    // NULL joint_weights = every weight 0: the shared turn has nothing to share, the pose is untouched.
+    std::iota(joints.begin(), joints.end(), 0);
+    cr_modifier_desc zero = d;
+    zero.joint_weights = nullptr;
+    cr_modstack* sz = cr_modstack_create(rig, &zero, 1, 1);
+    CHECK(sz != nullptr);
+    cr_modstack_set_target(sz, 0, &t);
+    rest(p, 0);
+    CHECK(cr_modstack_apply(sz, p, 0, 0.f) == CR_OK);
+    const std::vector<float> still = locals(p, 0, N);
+    for (int k = 0; k < N; ++k) CHECK(still[static_cast<size_t>(k) * 9 + 4] == 0.f);
+    cr_modstack_destroy(sz);
+    // A joint list without joints is refused.
+    cr_modifier_desc bad = d;
+    bad.joints = nullptr;
+    CHECK(cr_modstack_create(rig, &bad, 1, 1) == nullptr);
+    cr_poses_destroy(p);
+    cr_rig_destroy(rig);
+}
+
+// Full body with six limbs (ABI 2 stopped at 5): every hand reaches its goal, limb 5 included.
+void test_six_limb_full_body() {
+    constexpr int LIMBS = 6;
+    std::vector<cr_joint_desc> j = {bone(-1, 0, 1, 0, 0, 0.5f, 0)};  // hips (0), tail at y 1.5
+    std::vector<V> dirs;
+    for (int k = 0; k < LIMBS; ++k) {
+        const double a = 2.0 * 3.14159265358979 * k / LIMBS;
+        const V dir{std::cos(a), 0.0, std::sin(a)};
+        dirs.push_back(dir);
+        const auto f = [](double x) { return static_cast<float>(x); };
+        const int up = static_cast<int>(j.size());
+        j.push_back(bone(0, f(0.1 * dir.x), 0, f(0.1 * dir.z), f(0.4 * dir.x), 0, f(0.4 * dir.z)));
+        j.push_back(bone(up, 0, 0, 0, f(0.4 * dir.x), 0, f(0.4 * dir.z)));
+        j.push_back(bone(up + 1, 0, 0, 0, f(0.1 * dir.x), 0, f(0.1 * dir.z)));
+    }
+    cr_rig* rig = make(j);
+    cr_poses* p = cr_poses_create(rig, 1);
+    std::vector<int32_t> joints = {0};
+    std::vector<float> weights = {0.f};
+    for (int k = 0; k < LIMBS; ++k) {
+        for (int c = 0; c < 3; ++c) joints.push_back(1 + 3 * k + c);
+        weights.insert(weights.end(), {0.f, 1.f, 0.f});  // no pull (the body stays), full reach
+    }
+    cr_modifier_desc d{};
+    d.type = CR_MOD_FULL_BODY;
+    d.joint_count = static_cast<int32_t>(joints.size());
+    d.joints = joints.data();
+    d.joint_weights = weights.data();
+    d.target = 0;
+    d.pole = -1;
+    d.weight = 1.f;
+    // One target slot per limb is required.
+    CHECK(cr_modstack_create(rig, &d, 1, LIMBS - 1) == nullptr);
+    cr_modstack* s = cr_modstack_create(rig, &d, 1, LIMBS);
+    CHECK(s != nullptr);
+    std::vector<V> goals;
+    for (int k = 0; k < LIMBS; ++k) {
+        // 0.6 from the shoulder, 30 degrees up: inside the 0.8 reach.
+        const V sh{0.1 * dirs[static_cast<size_t>(k)].x, 1.5, 0.1 * dirs[static_cast<size_t>(k)].z};
+        const double c30 = std::cos(3.14159265358979 / 6), s30 = 0.5;
+        const V g{sh.x + 0.6 * c30 * dirs[static_cast<size_t>(k)].x, sh.y + 0.6 * s30, sh.z + 0.6 * c30 * dirs[static_cast<size_t>(k)].z};
+        goals.push_back(g);
+        cr_target t = model_target(static_cast<float>(g.x), static_cast<float>(g.y), static_cast<float>(g.z));
+        CHECK(cr_modstack_set_target(s, k, &t) == CR_OK);
+    }
+    rest(p, 0);
+    CHECK(cr_modstack_apply(s, p, 0, 0.f) == CR_OK);
+    const std::vector<float> w = worlds(p, 0, static_cast<int>(j.size()));
+    CHECK(len(sub(head(w, 0), V{0, 1, 0})) < 1e-6);
+    for (int k = 0; k < LIMBS; ++k) CHECK(len(sub(head(w, 3 + 3 * k), goals[static_cast<size_t>(k)])) < 1e-3);
+    cr_modstack_destroy(s);
+    cr_poses_destroy(p);
+    cr_rig_destroy(rig);
+}
+
 }  // namespace
 
 int main() {
@@ -492,6 +645,8 @@ int main() {
     test_constraints();
     test_spring();
     test_full_body();
+    test_long_aim_chain();
+    test_six_limb_full_body();
     if (failures != 0) {
         std::fprintf(stderr, "rig_modifiers: %d check(s) failed\n", failures);
         return 1;

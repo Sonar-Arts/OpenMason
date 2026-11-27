@@ -1,34 +1,31 @@
 package com.openmason.engine.format.omo;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openmason.engine.format.mesh.ParsedFaceMapping;
 import com.openmason.engine.format.mesh.ParsedMaterialData;
 import com.openmason.engine.format.mesh.ParsedMeshData;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.util.*;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
- * Read-only OMO parser for the engine.
+ * Read-only OMO reader for the engine.
  * Produces {@link ParsedMeshData} and material data — no editor dependencies.
  *
- * <p>Unlike the editor's OMODeserializer (which produces editable BlockModel),
- * this reader produces immutable engine-level data structures suitable for
- * rendering and texture extraction.
+ * <p>The codec is native ({@code libomformat} through {@link OmoDocument}, OpenMason #167); this class only maps the
+ * document onto the engine's immutable read records. Unlike the editor's OMODeserializer (which produces an editable
+ * BlockModel), this reader is for rendering and texture extraction.
  */
 public class OMOReader {
 
-    private static final Logger logger = LoggerFactory.getLogger(OMOReader.class);
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
     /**
      * Result of reading an OMO file/stream.
+     *
+     * @param shading      OMO 1.9 shading, or null
+     * @param vertexGroups OMO 1.9 vertex groups (empty when none)
+     * @param morphs       OMO 1.9 morphs / shape keys (empty when none)
      */
     public record ReadResult(
             OMOFormat.Document document,
@@ -39,12 +36,27 @@ public class OMOReader {
             List<OMOFormat.PartEntry> parts,
             List<OMOFormat.AttachmentPointEntry> attachmentPoints,
             List<OMOFormat.BoneEntry> bones,
-            OMOFormat.SkinData skin
+            OMOFormat.SkinData skin,
+            OMOFormat.ShadingData shading,
+            List<OMOFormat.VertexGroupData> vertexGroups,
+            List<OMOFormat.MorphData> morphs
     ) {
         public ReadResult {
             parts = parts == null ? List.of() : parts;
             attachmentPoints = attachmentPoints == null ? List.of() : attachmentPoints;
             bones = bones == null ? List.of() : List.copyOf(bones);
+            vertexGroups = vertexGroups == null ? List.of() : List.copyOf(vertexGroups);
+            morphs = morphs == null ? List.of() : List.copyOf(morphs);
+        }
+
+        /** A result without OMO 1.9 data. */
+        public ReadResult(OMOFormat.Document document, ParsedMeshData meshData,
+                          List<ParsedFaceMapping> faceMappings, List<ParsedMaterialData> materials,
+                          byte[] defaultTextureBytes, List<OMOFormat.PartEntry> parts,
+                          List<OMOFormat.AttachmentPointEntry> attachmentPoints,
+                          List<OMOFormat.BoneEntry> bones, OMOFormat.SkinData skin) {
+            this(document, meshData, faceMappings, materials, defaultTextureBytes, parts, attachmentPoints,
+                    bones, skin, null, List.of(), List.of());
         }
 
         /** A result without a skeleton or skin (pre-1.6 data, tests). */
@@ -62,313 +74,49 @@ public class OMOReader {
      *
      * @param omoStream input stream containing the OMO ZIP data
      * @return parsed result
-     * @throws IOException if reading or parsing fails
+     * @throws IOException if reading or parsing fails (also when the native model module is unavailable)
      */
     public ReadResult read(InputStream omoStream) throws IOException {
-        OMOFormat.Document document = null;
-        ParsedMeshData meshData = null;
-        List<ParsedFaceMapping> faceMappings = new ArrayList<>();
-        List<OMOFormat.MaterialEntry> materialEntries = new ArrayList<>();
-        List<OMOFormat.PartEntry> parts = new ArrayList<>();
-        List<OMOFormat.AttachmentPointEntry> attachmentPoints = new ArrayList<>();
-        List<OMOFormat.BoneEntry> bones = new ArrayList<>();
-        OMOFormat.SkinData skin = null;
-        Map<String, byte[]> materialTextures = new HashMap<>();
-        byte[] defaultTextureBytes = null;
-
-        try (ZipInputStream zis = new ZipInputStream(omoStream)) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                String entryName = entry.getName();
-
-                if (OMOFormat.MANIFEST_FILENAME.equals(entryName)) {
-                    byte[] jsonBytes = readBytes(zis);
-                    ManifestResult result = parseManifest(jsonBytes);
-                    document = result.document;
-                    meshData = result.meshData;
-                    faceMappings = result.faceMappings;
-                    materialEntries = result.materialEntries;
-                    parts = result.parts;
-                    attachmentPoints = result.attachmentPoints;
-                    bones = result.bones;
-                    skin = result.skin;
-
-                } else if (OMOFormat.DEFAULT_TEXTURE_FILENAME.equals(entryName)) {
-                    defaultTextureBytes = readBytes(zis);
-
-                } else if (entryName.startsWith("material_") && entryName.endsWith(".png")) {
-                    materialTextures.put(entryName, readBytes(zis));
-                }
-
-                zis.closeEntry();
-            }
-        }
-
-        if (document == null) {
-            throw new IOException("Missing manifest.json in OMO file");
-        }
-
-        // Build ParsedMaterialData by joining materialEntries with their PNG bytes
-        List<ParsedMaterialData> materials = new ArrayList<>();
-        for (OMOFormat.MaterialEntry me : materialEntries) {
-            byte[] png = materialTextures.get(me.textureFile());
-            materials.add(new ParsedMaterialData(
-                    me.materialId(), me.name(), me.textureFile(),
-                    png, me.renderLayer(), me.emissive(), me.tintColor()
-            ));
-        }
-
-        return new ReadResult(document, meshData, faceMappings, materials, defaultTextureBytes, parts,
-                attachmentPoints, bones, skin);
-    }
-
-    private record ManifestResult(
-            OMOFormat.Document document,
-            ParsedMeshData meshData,
-            List<ParsedFaceMapping> faceMappings,
-            List<OMOFormat.MaterialEntry> materialEntries,
-            List<OMOFormat.PartEntry> parts,
-            List<OMOFormat.AttachmentPointEntry> attachmentPoints,
-            List<OMOFormat.BoneEntry> bones,
-            OMOFormat.SkinData skin
-    ) {}
-
-    private ManifestResult parseManifest(byte[] jsonBytes) throws IOException {
-        String json = new String(jsonBytes, StandardCharsets.UTF_8);
-        JsonNode root = objectMapper.readTree(json);
-
-        String version = root.get("version").asText();
-        String objectName = root.get("objectName").asText();
-        String modelType = root.get("modelType").asText();
-        String textureFile = root.get("textureFile").asText();
-
-        JsonNode geometryNode = root.get("geometry");
-        int width = geometryNode.get("width").asInt();
-        int height = geometryNode.get("height").asInt();
-        int depth = geometryNode.get("depth").asInt();
-        JsonNode posNode = geometryNode.get("position");
-        OMOFormat.Position position = new OMOFormat.Position(
-                posNode.get("x").asDouble(),
-                posNode.get("y").asDouble(),
-                posNode.get("z").asDouble()
-        );
-
-        OMOFormat.Document document = new OMOFormat.Document(
-                version, objectName, modelType,
-                new OMOFormat.GeometryData(width, height, depth, position),
-                textureFile
-        );
-
-        // Parse mesh data
-        ParsedMeshData meshData = null;
-        JsonNode meshNode = root.get("mesh");
-        if (meshNode != null && !meshNode.isNull()) {
-            meshData = parseMeshData(meshNode);
-        }
-
-        // Parse face mappings
-        List<ParsedFaceMapping> faceMappings = new ArrayList<>();
-        List<OMOFormat.MaterialEntry> materialEntries = new ArrayList<>();
-        JsonNode faceTexturesNode = root.get("faceTextures");
-        if (faceTexturesNode != null && !faceTexturesNode.isNull()) {
-            JsonNode mappingsNode = faceTexturesNode.get("mappings");
-            if (mappingsNode != null && mappingsNode.isArray()) {
-                for (JsonNode m : mappingsNode) {
-                    faceMappings.add(new ParsedFaceMapping(
-                            m.get("faceId").asInt(),
-                            m.get("materialId").asInt(),
-                            (float) m.get("u0").asDouble(),
-                            (float) m.get("v0").asDouble(),
-                            (float) m.get("u1").asDouble(),
-                            (float) m.get("v1").asDouble(),
-                            m.get("uvRotationDegrees").asInt(),
-                            !m.has("autoResize") || m.get("autoResize").asBoolean()
-                    ));
-                }
-            }
-            JsonNode materialsNode = faceTexturesNode.get("materials");
-            if (materialsNode != null && materialsNode.isArray()) {
-                for (JsonNode m : materialsNode) {
-                    materialEntries.add(new OMOFormat.MaterialEntry(
-                            m.get("materialId").asInt(),
-                            m.get("name").asText(),
-                            m.get("textureFile").asText(),
-                            m.get("renderLayer").asText(),
-                            m.has("emissive") && m.get("emissive").asBoolean(),
-                            m.has("tintColor") ? m.get("tintColor").asInt() : 0xFFFFFFFF
-                    ));
-                }
-            }
-        }
-
-        // Parse model parts (v1.3+)
-        List<OMOFormat.PartEntry> parts = new ArrayList<>();
-        JsonNode partsNode = root.get("parts");
-        if (partsNode != null && partsNode.isArray()) {
-            for (JsonNode p : partsNode) {
-                parts.add(new OMOFormat.PartEntry(
-                        p.get("id").asText(),
-                        p.get("name").asText(),
-                        (float) p.get("originX").asDouble(),
-                        (float) p.get("originY").asDouble(),
-                        (float) p.get("originZ").asDouble(),
-                        (float) p.get("posX").asDouble(),
-                        (float) p.get("posY").asDouble(),
-                        (float) p.get("posZ").asDouble(),
-                        (float) p.get("rotX").asDouble(),
-                        (float) p.get("rotY").asDouble(),
-                        (float) p.get("rotZ").asDouble(),
-                        (float) p.get("scaleX").asDouble(),
-                        (float) p.get("scaleY").asDouble(),
-                        (float) p.get("scaleZ").asDouble(),
-                        p.get("vertexStart").asInt(),
-                        p.get("vertexCount").asInt(),
-                        p.get("indexStart").asInt(),
-                        p.get("indexCount").asInt(),
-                        p.get("faceStart").asInt(),
-                        p.get("faceCount").asInt(),
-                        !p.has("visible") || p.get("visible").asBoolean(),
-                        p.has("locked") && p.get("locked").asBoolean(),
-                        textOrNull(p, "parentId"),
-                        textOrNull(p, "boneId")
-                ));
-            }
-        }
-
-        // Parse attachment points (v1.7+)
-        List<OMOFormat.AttachmentPointEntry> attachmentPoints = new ArrayList<>();
-        JsonNode attachmentsNode = root.get("attachmentPoints");
-        if (attachmentsNode != null && attachmentsNode.isArray()) {
-            for (JsonNode a : attachmentsNode) {
-                attachmentPoints.add(new OMOFormat.AttachmentPointEntry(
-                        a.get("id").asText(),
-                        a.get("name").asText(),
-                        textOrNull(a, "parentPartId"),
-                        textOrNull(a, "parentPartName"),
-                        floatOrZero(a, "posX"),
-                        floatOrZero(a, "posY"),
-                        floatOrZero(a, "posZ"),
-                        floatOrZero(a, "rotX"),
-                        floatOrZero(a, "rotY"),
-                        floatOrZero(a, "rotZ"),
-                        floatOr(a, "scaleX", 1f),
-                        floatOr(a, "scaleY", 1f),
-                        floatOr(a, "scaleZ", 1f)
-                ));
-            }
-        }
-
-        return new ManifestResult(document, meshData, faceMappings, materialEntries, parts, attachmentPoints,
-                parseBones(root.get("bones")), parseSkin(root.get("skin")));
-    }
-
-    /** Bones (v1.6+). A missing endpoint reads as a zero-length bone. */
-    public static List<OMOFormat.BoneEntry> parseBones(JsonNode bonesNode) {
-        List<OMOFormat.BoneEntry> bones = new ArrayList<>();
-        if (bonesNode == null || !bonesNode.isArray()) return bones;
-        for (JsonNode b : bonesNode) {
-            JsonNode id = b.get("id");
-            if (id == null || id.isNull()) continue;
-            String name = textOrNull(b, "name");
-            bones.add(new OMOFormat.BoneEntry(
-                    id.asText(), name == null ? id.asText() : name, textOrNull(b, "parentBoneId"),
-                    floatOrZero(b, "originX"), floatOrZero(b, "originY"), floatOrZero(b, "originZ"),
-                    floatOrZero(b, "posX"), floatOrZero(b, "posY"), floatOrZero(b, "posZ"),
-                    floatOrZero(b, "rotX"), floatOrZero(b, "rotY"), floatOrZero(b, "rotZ"),
-                    floatOrZero(b, "endpointX"), floatOrZero(b, "endpointY"), floatOrZero(b, "endpointZ")));
-        }
-        return bones;
+        return read(omoStream.readAllBytes());
     }
 
     /**
-     * Skin weights (v1.8+): {@code {"joints": [ids], "parts": [{"partId": id, "vertices": [[v, j, w, ...]]}]}}.
-     * Malformed vertex rows are skipped.
+     * Read an OMO archive held in memory.
+     *
+     * @throws IOException if parsing fails (a newer major version: {@link OmoDocument.VersionException})
      */
-    public static OMOFormat.SkinData parseSkin(JsonNode skinNode) {
-        if (skinNode == null || !skinNode.isObject()) return null;
-        List<String> jointIds = new ArrayList<>();
-        JsonNode joints = skinNode.get("joints");
-        if (joints != null && joints.isArray()) {
-            for (JsonNode j : joints) jointIds.add(j.asText());
-        }
-        List<OMOFormat.PartSkin> parts = new ArrayList<>();
-        JsonNode partsNode = skinNode.get("parts");
-        if (partsNode != null && partsNode.isArray()) {
-            for (JsonNode p : partsNode) {
-                String partId = textOrNull(p, "partId");
-                if (partId == null) continue;
-                List<OMOFormat.SkinVertex> vertices = new ArrayList<>();
-                JsonNode rows = p.get("vertices");
-                if (rows != null && rows.isArray()) {
-                    for (JsonNode row : rows) {
-                        if (!row.isArray() || row.size() < 3 || row.size() % 2 == 0) continue;
-                        int count = (row.size() - 1) / 2;
-                        int[] js = new int[count];
-                        float[] ws = new float[count];
-                        boolean ok = true;
-                        for (int k = 0; k < count; k++) {
-                            js[k] = row.get(1 + 2 * k).asInt();
-                            ws[k] = (float) row.get(2 + 2 * k).asDouble();
-                            if (js[k] < 0 || js[k] >= jointIds.size()) ok = false;
-                        }
-                        if (ok) vertices.add(new OMOFormat.SkinVertex(row.get(0).asInt(), js, ws));
-                    }
-                }
-                parts.add(new OMOFormat.PartSkin(partId, vertices));
+    public ReadResult read(byte[] omoBytes) throws IOException {
+        try (OmoDocument doc = OmoDocument.read(omoBytes)) {
+            OMOFormat.Document document;
+            try {
+                document = new OMOFormat.Document(doc.version(), doc.objectName(), doc.modelType(), doc.geometry(),
+                        doc.textureFile());
+            } catch (IllegalArgumentException e) {
+                throw new IOException("invalid .omo manifest: " + e.getMessage(), e);
             }
+
+            OMOFormat.MeshData mesh = doc.mesh();
+            ParsedMeshData meshData = mesh == null ? null : new ParsedMeshData(mesh.vertices(), mesh.texCoords(),
+                    mesh.indices(), mesh.triangleToFaceId(), mesh.uvMode());
+
+            List<ParsedFaceMapping> faceMappings = new ArrayList<>();
+            for (OMOFormat.FaceMappingEntry m : doc.faceMappings()) {
+                faceMappings.add(new ParsedFaceMapping(m.faceId(), m.materialId(), m.u0(), m.v0(), m.u1(), m.v1(),
+                        m.uvRotationDegrees(), m.autoResize()));
+            }
+
+            // Join each material with its image entry (a 1.9 material may have only a base colour).
+            Map<String, byte[]> images = doc.materialImages();
+            List<ParsedMaterialData> materials = new ArrayList<>();
+            for (OMOFormat.MaterialEntry me : doc.materials()) {
+                byte[] png = me.textureFile() == null ? null : images.get(me.textureFile());
+                materials.add(new ParsedMaterialData(me.materialId(), me.name(), me.textureFile(), png,
+                        me.renderLayer(), me.emissive(), me.tintColor(), me.baseColor()));
+            }
+
+            return new ReadResult(document, meshData, faceMappings, materials, doc.texture(), doc.parts(),
+                    doc.attachmentPoints(), doc.bones(), doc.skin(), doc.shading(), doc.vertexGroups(),
+                    doc.morphs());
         }
-        return new OMOFormat.SkinData(jointIds, parts);
-    }
-
-    static float floatOrZero(JsonNode parent, String field) {
-        return floatOr(parent, field, 0f);
-    }
-
-    static float floatOr(JsonNode parent, String field, float fallback) {
-        JsonNode node = parent.get(field);
-        return node == null || node.isNull() ? fallback : (float) node.asDouble();
-    }
-
-    static String textOrNull(JsonNode parent, String field) {
-        JsonNode node = parent.get(field);
-        if (node == null || node.isNull()) return null;
-        return node.asText();
-    }
-
-    private ParsedMeshData parseMeshData(JsonNode meshNode) {
-        float[] vertices = parseFloatArray(meshNode.get("vertices"));
-        float[] texCoords = parseFloatArray(meshNode.get("texCoords"));
-        int[] indices = parseIntArray(meshNode.get("indices"));
-        int[] triangleToFaceId = parseIntArray(meshNode.get("triangleToFaceId"));
-        String uvMode = meshNode.has("uvMode") ? meshNode.get("uvMode").asText() : null;
-        return new ParsedMeshData(vertices, texCoords, indices, triangleToFaceId, uvMode);
-    }
-
-    private float[] parseFloatArray(JsonNode node) {
-        if (node == null || !node.isArray()) return null;
-        float[] arr = new float[node.size()];
-        for (int i = 0; i < node.size(); i++) {
-            arr[i] = (float) node.get(i).asDouble();
-        }
-        return arr;
-    }
-
-    private int[] parseIntArray(JsonNode node) {
-        if (node == null || !node.isArray()) return null;
-        int[] arr = new int[node.size()];
-        for (int i = 0; i < node.size(); i++) {
-            arr[i] = node.get(i).asInt();
-        }
-        return arr;
-    }
-
-    private byte[] readBytes(ZipInputStream zis) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int bytesRead;
-        while ((bytesRead = zis.read(buffer)) != -1) {
-            baos.write(buffer, 0, bytesRead);
-        }
-        return baos.toByteArray();
     }
 }
