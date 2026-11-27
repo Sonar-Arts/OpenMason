@@ -1,13 +1,14 @@
 package com.openmason.engine.modeling.core;
 
+import com.openmason.engine.modeling.editable.CendaMesh;
 import com.openmason.engine.modeling.editable.EditableMesh;
+import com.openmason.engine.modeling.editable.MeshImporter;
 import com.openmason.engine.modeling.editable.RenderMesh;
 import com.openmason.engine.modeling.editable.RenderMeshBuilder;
 import com.openmason.engine.modeling.mapping.EditableMeshVertexMapper;
 import com.openmason.engine.modeling.mapping.ITriangleFaceMapper;
 import com.openmason.engine.modeling.notification.IMeshChangeNotifier;
 import com.openmason.engine.modeling.topology.MeshTopology;
-import com.openmason.engine.modeling.topology.MeshTopologyBuilder;
 import com.openmason.engine.modeling.uv.IFaceTextureManager;
 import com.openmason.engine.modeling.uv.IVertexDataManager;
 import org.slf4j.Logger;
@@ -27,6 +28,15 @@ import org.slf4j.LoggerFactory;
  * <p>UVs are produced during derivation ({@link RenderMeshBuilder}), so there
  * is no separate UV-regeneration re-entry and no seam-duplication pass —
  * corners are per-face by construction.
+ *
+ * <p><b>Native pipeline (#175 INTEG):</b> a derivation is ONE native pass ({@link RenderMeshBuilder#derive}: render
+ * mesh + topology) whose {@link RenderMeshBuilder.Derivation} stays alive. An import (load, part re-bake) hands its
+ * native mesh over ({@link #setImportedMesh}), so the soup is imported once and derived once. Positions-only moves
+ * ({@link #movePositions}, the drag path) refresh that derivation in place: corner positions, projected UVs,
+ * re-triangulated faces and the topology's face geometry follow every drag frame in O(moved corners), the GPU sync
+ * uploads only the touched corner ranges, and {@link #commitPositions} on release costs nothing unless a face
+ * re-triangulated. Structural edits, authored-UV and mapping changes still derive again. The derivation's native
+ * mesh is closed when it is replaced and by {@link #releaseNative()}.
  */
 public class MeshRebuildPipeline implements IMeshRebuildPipeline {
 
@@ -45,6 +55,22 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
     // Authoritative mesh + latest derivation
     private EditableMesh editableMesh = new EditableMesh();
     private RenderMesh lastRenderMesh;
+
+    // The live native derivation behind lastRenderMesh / topology (#175 INTEG); current = it matches editableMesh.
+    private RenderMeshBuilder.Derivation derivation;
+    private boolean derivationCurrent;
+    // Structure the derivation was made from (a cheap guard against a mesh edited without a rebuild).
+    private int derivedVertices;
+    private int derivedFaces;
+    // An import's native mesh waiting for the next derive (consumed by it), with the mesh it was imported into.
+    private CendaMesh pendingImport;
+    private EditableMesh pendingImportMesh;
+    private int pendingImportFaces;
+    private int pendingImportVertices;
+    // Moves since the last commit: any, ones that re-triangulated a face, ones the derivation could not take.
+    private boolean movedSinceCommit;
+    private boolean trianglesMovedSinceCommit;
+    private boolean positionsPending;
 
     // ALL combined-soup vertex indices per editable vertex id, from the last
     // import — the part system's MeshRange index space. Welding crosses part
@@ -109,6 +135,55 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
     public void setEditableMesh(EditableMesh mesh) {
         this.editableMesh = mesh != null ? mesh : new EditableMesh();
         this.vertexIdToSoupIndices = null;
+        dropPendingImport();
+        releaseDerivation();
+    }
+
+    /**
+     * Replace the authoritative mesh with a fresh import and keep the import's native mesh for the next derivation
+     * (one import + one derive, #175 INTEG). Takes ownership of {@code imported}'s native mesh.
+     */
+    public void setImportedMesh(MeshImporter.Imported imported) {
+        setEditableMesh(imported.result().mesh());
+        setImportSoupMapping(imported.result().vertexIdToSoupIndices());
+        if (imported.nativeMesh() != null) {
+            pendingImport = imported.nativeMesh();
+            pendingImportMesh = editableMesh;
+            pendingImportFaces = editableMesh.faceCount();
+            pendingImportVertices = editableMesh.vertexCount();
+        }
+    }
+
+    /**
+     * Frees the native meshes (the live derivation, a pending import). The derived Java data stays readable; the next
+     * move falls back to the full refresh on commit and the next derivation starts a new native mesh. Safe to call
+     * twice (model cleanup / dispose).
+     */
+    public void releaseNative() {
+        dropPendingImport();
+        releaseDerivation();
+    }
+
+    private void dropPendingImport() {
+        if (pendingImport != null) {
+            pendingImport.close();
+            pendingImport = null;
+            pendingImportMesh = null;
+        }
+    }
+
+    private void releaseDerivation() {
+        if (derivation != null) {
+            derivation.close();
+            derivation = null;
+        }
+        derivationCurrent = false;
+    }
+
+    /** True while moves refresh the live derivation incrementally (diagnostics and tests). */
+    public boolean isDerivationLive() {
+        return derivation != null && derivationCurrent && !deferredPending
+            && derivedVertices == editableMesh.vertexCount() && derivedFaces == editableMesh.faceCount();
     }
 
     /** Record the import's vertexId→soup-indices mapping (part index space). */
@@ -152,10 +227,123 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
             lastRenderMesh != null ? lastRenderMesh.triangleCount() : 0);
     }
 
+    /**
+     * Positions changed (which ones unknown: a scale op, a bulk update). With a live derivation every vertex moves
+     * through it in one native call (no re-import of the structure, no new topology); otherwise a full derive.
+     * Listeners get the usual "rebuilt" notices either way.
+     */
     @Override
     public void refreshPositionsFromEditable() {
-        derive(false);
-        logger.trace("Position refresh complete");
+        if (!isDerivationLive() || positionsPending || deferDepth > 0) {
+            derive(false);
+            logger.trace("Position refresh complete");
+            return;
+        }
+        long span = EditCostStats.begin();
+        beforeDerive.run();
+        int n = editableMesh.vertexCount();
+        int[] all = new int[n];
+        for (int v = 0; v < n; v++) all[v] = v;
+        int changes = moveLive(all);
+        if (changes != 0) {
+            gpuSync.verticesChanged();
+        }
+        movedSinceCommit = false;
+        trianglesMovedSinceCommit = false;
+        afterDerive.run();
+        long t = EditCostStats.begin();
+        changeNotifier.notifyTopologyRebuilt(topology);
+        changeNotifier.notifyGeometryRebuilt();
+        EditCostStats.end(EditCostStats.Span.OVERLAY_REBUILD, t);
+        EditCostStats.end(EditCostStats.Span.DERIVE, span);
+    }
+
+    /**
+     * Positions-only refresh of the live derivation after {@code EditableMesh.setPosition} on {@code vertexIds}
+     * (a drag frame, #175 INTEG): the render mesh's corner positions / projected UVs / triangles and the topology's
+     * face geometry are updated in place, the GPU copy is marked stale for the touched corner ranges only, and the
+     * draw batches when a face re-triangulated. Listeners are NOT notified (the caller sends the batched move, then
+     * {@link #notifyRetriangulated()} when the result has {@code CHANGED_INDICES}).
+     *
+     * @return the {@link CendaMesh} {@code CHANGED_*} bits, or -1 when there is no live derivation (deferred or stale:
+     *         the caller writes the corners itself and {@link #commitPositions} derives in full)
+     */
+    public int movePositions(int[] vertexIds) {
+        if (!isDerivationLive()) {
+            positionsPending = true;
+            return -1;
+        }
+        if (vertexIds == null || vertexIds.length == 0) {
+            return 0;
+        }
+        int changes = moveLive(vertexIds);
+        if (changes != 0) {
+            gpuSync.cornersChanged(derivation.lastCornerSpans(), (changes & CendaMesh.CHANGED_UVS) != 0);
+            movedSinceCommit = true;
+        }
+        return changes;
+    }
+
+    /** The native move in place + the derived-state bookkeeping shared by every live move. */
+    private int moveLive(int[] vertexIds) {
+        long t = EditCostStats.begin();
+        int changes = derivation.movePositionsInPlace(editableMesh, vertexIds);
+        EditCostStats.end(EditCostStats.Span.MOVE_REFRESH, t);
+        if (changes == 0) {
+            return 0;
+        }
+        invalidateBounds();
+        if ((changes & CendaMesh.CHANGED_INDICES) != 0) {
+            // A face re-triangulated: the material-sorted index buffer is stale (same triangles per face).
+            drawBatchesDirty = true;
+            trianglesMovedSinceCommit = true;
+        }
+        return changes;
+    }
+
+    /**
+     * After a live move that re-triangulated a face ({@code CHANGED_INDICES}): the listeners rebuild from the current
+     * render mesh (the overlays' per-move updates only cover positions; their triangle data must follow the new
+     * triangulation). Only frames where a face's triangulation flipped pay for it.
+     */
+    public void notifyRetriangulated() {
+        if (!trianglesMovedSinceCommit) {
+            return;
+        }
+        trianglesMovedSinceCommit = false;
+        long t = EditCostStats.begin();
+        changeNotifier.notifyTopologyRebuilt(topology);
+        changeNotifier.notifyGeometryRebuilt();
+        EditCostStats.end(EditCostStats.Span.OVERLAY_REBUILD, t);
+    }
+
+    /**
+     * Ends an interactive position edit ({@link #movePositions} frames): the derivation already holds everything,
+     * so only the shading stores catch up (and the overlays rebuild if a re-triangulation was not reported yet:
+     * their per-move updates cover positions). Moves the derivation could not take, or a stale derivation, get the
+     * full position refresh instead.
+     */
+    public void commitPositions() {
+        if (positionsPending || !isDerivationLive() || deferDepth > 0) {
+            positionsPending = false;
+            derive(false);
+            return;
+        }
+        if (!movedSinceCommit) {
+            return;
+        }
+        long span = EditCostStats.begin();
+        boolean retriangulated = trianglesMovedSinceCommit;
+        movedSinceCommit = false;
+        trianglesMovedSinceCommit = false;
+        afterDerive.run();
+        if (retriangulated) {
+            long t = EditCostStats.begin();
+            changeNotifier.notifyTopologyRebuilt(topology);
+            changeNotifier.notifyGeometryRebuilt();
+            EditCostStats.end(EditCostStats.Span.OVERLAY_REBUILD, t);
+        }
+        EditCostStats.end(EditCostStats.Span.DRAG_COMMIT, span);
     }
 
     /**
@@ -201,8 +389,20 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
 
         RenderMesh previous = lastRenderMesh;
         long t = EditCostStats.begin();
-        RenderMesh rm = RenderMeshBuilder.build(editableMesh, faceTextureManager);
+        RenderMeshBuilder.Derivation next = takePendingImport();
+        if (next == null) {
+            next = RenderMeshBuilder.derive(editableMesh, faceTextureManager);
+        }
         EditCostStats.end(EditCostStats.Span.RENDER_MESH, t);
+        releaseDerivation();
+        this.derivation = next;
+        this.derivationCurrent = true;
+        this.derivedVertices = editableMesh.vertexCount();
+        this.derivedFaces = editableMesh.faceCount();
+        this.positionsPending = false;
+        this.movedSinceCommit = false;
+        this.trianglesMovedSinceCommit = false;
+        RenderMesh rm = next.renderMesh();
         this.lastRenderMesh = rm;
 
         // Write the render-facing caches (GPU sync, extractors and serialization
@@ -215,10 +415,8 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
         }
         vertexMapper.update(editableMesh, rm);
 
-        // Topology from authoritative loops — winding is never reconstructed.
-        t = EditCostStats.begin();
-        this.topology = MeshTopologyBuilder.build(editableMesh, rm);
-        EditCostStats.end(EditCostStats.Span.TOPOLOGY, t);
+        // Topology from authoritative loops (same native pass) — winding is never reconstructed.
+        this.topology = next.topology();
 
         if (structural) {
             gpuSync.structureChanged();
@@ -241,6 +439,24 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
         EditCostStats.end(EditCostStats.Span.DERIVE, span);
     }
 
+    /** The pending import's native mesh as a derivation when it still matches the mesh, else null (dropped). */
+    private RenderMeshBuilder.Derivation takePendingImport() {
+        CendaMesh imported = pendingImport;
+        if (imported == null) {
+            return null;
+        }
+        boolean matches = pendingImportMesh == editableMesh
+            && pendingImportFaces == editableMesh.faceCount()
+            && pendingImportVertices == editableMesh.vertexCount();
+        pendingImport = null;
+        pendingImportMesh = null;
+        if (!matches) {
+            imported.close();
+            return null;
+        }
+        return RenderMeshBuilder.deriveImported(imported, editableMesh, faceTextureManager);
+    }
+
     /** Same triangles in the same order with the same faces (the draw batches stay valid). */
     private static boolean sameTriangles(RenderMesh a, RenderMesh b) {
         return a != null && b != null
@@ -257,6 +473,9 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
 
     @Override
     public void setTopology(MeshTopology topology) {
+        if (topology != this.topology) {
+            derivationCurrent = false; // moves can no longer refresh this topology
+        }
         this.topology = topology;
     }
 

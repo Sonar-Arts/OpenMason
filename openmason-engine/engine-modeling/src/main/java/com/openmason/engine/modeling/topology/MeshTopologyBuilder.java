@@ -98,21 +98,27 @@ public final class MeshTopologyBuilder {
         if (movedFaceIds.length == 0) {
             return;
         }
-        float[] normals = nativeMesh.floats(CendaMesh.A_FACE_NORMALS);
-        float[] centroids = nativeMesh.floats(CendaMesh.A_FACE_CENTROIDS);
-        float[] areas = nativeMesh.floats(CendaMesh.A_FACE_AREAS);
-        float[] dihedral = nativeMesh.floats(CendaMesh.A_EDGE_DIHEDRAL);
+        // Zero-copy views: a drag frame touches a handful of faces of arrays sized by the whole mesh.
+        java.lang.foreign.MemorySegment normals = nativeMesh.view(CendaMesh.A_FACE_NORMALS);
+        java.lang.foreign.MemorySegment centroids = nativeMesh.view(CendaMesh.A_FACE_CENTROIDS);
+        java.lang.foreign.MemorySegment areas = nativeMesh.view(CendaMesh.A_FACE_AREAS);
+        java.lang.foreign.MemorySegment dihedral = nativeMesh.view(CendaMesh.A_EDGE_DIHEDRAL);
+        java.lang.foreign.ValueLayout.OfFloat f32 = java.lang.foreign.ValueLayout.JAVA_FLOAT;
+        long dihedralCount = dihedral.byteSize() / 4;
         DihedralAngleCache angles = topology.dihedralAngleCache();
         for (int fid : movedFaceIds) {
+            long o = fid * 3L;
             geometry.update(fid,
-                new Vector3f(normals[fid * 3], normals[fid * 3 + 1], normals[fid * 3 + 2]),
-                new Vector3f(centroids[fid * 3], centroids[fid * 3 + 1], centroids[fid * 3 + 2]),
-                areas[fid]);
+                new Vector3f(normals.getAtIndex(f32, o), normals.getAtIndex(f32, o + 1),
+                    normals.getAtIndex(f32, o + 2)),
+                new Vector3f(centroids.getAtIndex(f32, o), centroids.getAtIndex(f32, o + 1),
+                    centroids.getAtIndex(f32, o + 2)),
+                areas.getAtIndex(f32, fid));
             MeshFace face = topology.getFace(fid);
             if (face != null) {
                 for (int e : face.edgeIds()) {
-                    if (e >= 0 && e < dihedral.length) {
-                        angles.update(e, dihedral[e]);
+                    if (e >= 0 && e < dihedralCount) {
+                        angles.update(e, dihedral.getAtIndex(f32, e));
                     }
                 }
             }
@@ -131,7 +137,8 @@ public final class MeshTopologyBuilder {
         int[][] edgeFaces = m.csr(CendaMesh.A_EDGE_FACE_OFFSETS, CendaMesh.A_EDGE_FACES);
         int edgeCount = edgeFaces.length;
         MeshEdge[] edges = new MeshEdge[edgeCount];
-        Map<Long, Integer> edgeKeyToId = new HashMap<>(edgeCount * 2);
+        // Packed-pair keys collide under Long.hashCode: a primitive table with a mixed hash (LongKeyIntMap).
+        LongKeyIntMap edgeKeyToId = new LongKeyIntMap(edgeCount);
         for (int e = 0; e < edgeCount; e++) {
             edges[e] = new MeshEdge(e, edgeVertices[2 * e], edgeVertices[2 * e + 1], edgeFaces[e]);
             edgeKeyToId.put(MeshEdge.canonicalKey(edgeVertices[2 * e], edgeVertices[2 * e + 1]), e);
@@ -160,7 +167,7 @@ public final class MeshTopologyBuilder {
         // Face-to-face adjacency by face id (gaps: empty) + the shared edge per pair.
         int[][] adjacent = m.csr(CendaMesh.A_FACE_ADJ_OFFSETS, CendaMesh.A_FACE_ADJ);
         int[][] adjacentEdges = m.csr(CendaMesh.A_FACE_ADJ_OFFSETS, CendaMesh.A_FACE_ADJ_EDGES);
-        Map<Long, Integer> facePairToEdgeId = new HashMap<>();
+        LongKeyIntMap facePairToEdgeId = new LongKeyIntMap(edgeCount * 2);
         for (int fid = 0; fid < adjacent.length; fid++) {
             for (int i = 0; i < adjacent[fid].length; i++) {
                 facePairToEdgeId.put(MeshGeometry.canonicalFacePairKey(fid, adjacent[fid][i]), adjacentEdges[fid][i]);

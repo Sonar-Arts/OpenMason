@@ -437,4 +437,109 @@ public final class VertexDataAuthoring {
         }
         return RigMorphs.fromParts(keys, ids, first, count, total);
     }
+
+    /**
+     * The vertex groups as CSR rows over the COMBINED soup (part-local vertex + its part's {@code MeshRange.vertexStart};
+     * rows past a part's current vertex count are skipped), or null without groups.
+     */
+    public com.openmason.engine.modeling.VertexDataPreviewSource.SoupGroups soupGroups() {
+        List<OMOFormat.VertexGroupData> all = groups().groups();
+        if (all.isEmpty()) return null;
+        List<String> names = new ArrayList<>(all.size());
+        int[] offsets = new int[all.size() + 1];
+        int[] vertices = new int[64];
+        float[] weights = new float[64];
+        int rows = 0;
+        for (int g = 0; g < all.size(); g++) {
+            OMOFormat.VertexGroupData group = all.get(g);
+            names.add(group.name());
+            for (OMOFormat.GroupPart gp : group.parts()) {
+                MeshRange r = parts.getPartById(gp.partId()).map(ModelPartDescriptor::meshRange).orElse(null);
+                if (r == null) continue;
+                int[] v = gp.vertices();
+                float[] w = gp.weights();
+                for (int k = 0; k < v.length; k++) {
+                    if (v[k] < 0 || v[k] >= r.vertexCount()) continue;
+                    if (rows == vertices.length) {
+                        vertices = java.util.Arrays.copyOf(vertices, rows * 2);
+                        weights = java.util.Arrays.copyOf(weights, rows * 2);
+                    }
+                    vertices[rows] = r.toGlobalVertex(v[k]);
+                    weights[rows++] = w == null || k >= w.length ? 1f : w[k];
+                }
+            }
+            offsets[g + 1] = rows;
+        }
+        return new com.openmason.engine.modeling.VertexDataPreviewSource.SoupGroups(names, offsets,
+                java.util.Arrays.copyOf(vertices, rows), java.util.Arrays.copyOf(weights, rows));
+    }
+
+    private com.openmason.engine.modeling.VertexDataPreviewSource previewSource;
+
+    /**
+     * This data as the scene viewport's preview source ({@code EditableModel.setVertexDataPreview}, #175 INTEG): the
+     * shape keys / vertex groups over the combined soup and the {@link VertexDataPreview} choices. One per instance.
+     */
+    public com.openmason.engine.modeling.VertexDataPreviewSource previewSource() {
+        if (previewSource == null) {
+            previewSource = new com.openmason.engine.modeling.VertexDataPreviewSource() {
+                // The weights are re-read only when the preview or the data changed.
+                private long weightsKey = Long.MIN_VALUE;
+                private long weightsData = Long.MIN_VALUE;
+                private float[] weights;
+
+                @Override
+                public long dataRevision() {
+                    reconcile();
+                    return VertexDataAuthoring.this.dataRevision();
+                }
+
+                @Override
+                public RigMorphs soupMorphs() {
+                    return VertexDataAuthoring.this.soupMorphs();
+                }
+
+                @Override
+                public SoupGroups soupGroups() {
+                    return VertexDataAuthoring.this.soupGroups();
+                }
+
+                // A data change can change the key order / count the weights follow: either bumps the revision.
+                private long seenPreview = Long.MIN_VALUE;
+                private long seenData = Long.MIN_VALUE;
+                private long revision;
+
+                @Override
+                public long previewRevision() {
+                    long p = preview.revision();
+                    long d = VertexDataAuthoring.this.dataRevision();
+                    if (p != seenPreview || d != seenData) {
+                        seenPreview = p;
+                        seenData = d;
+                        revision++;
+                    }
+                    return revision;
+                }
+
+                @Override
+                public float[] previewWeights() {
+                    long key = preview.revision();
+                    long data = VertexDataAuthoring.this.dataRevision();
+                    if (weights == null || key != weightsKey || data != weightsData) {
+                        List<OMOFormat.MorphData> keys = shapeKeys().morphs();
+                        weights = keys.isEmpty() ? null : preview.weights(keys);
+                        weightsKey = key;
+                        weightsData = data;
+                    }
+                    return weights;
+                }
+
+                @Override
+                public java.util.Set<String> hiddenGroups() {
+                    return preview.hiddenGroups();
+                }
+            };
+        }
+        return previewSource;
+    }
 }

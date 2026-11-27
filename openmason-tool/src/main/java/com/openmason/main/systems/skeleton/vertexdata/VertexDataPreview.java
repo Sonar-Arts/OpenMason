@@ -13,19 +13,13 @@ import java.util.Set;
  * shape key (by name; absent = the key's default) and the vertex groups hidden in the preview. Written by the
  * rigging pane's Shape Keys / Vertex Groups sections and the {@code morph_set value} MCP member.
  *
- * <p><b>Consumer contract (scene viewport, after the GPU-skinning merge):</b> a renderer that draws the live model
- * through an engine {@code ModelGpuMesh} / {@code ModelAppearance} reads, whenever {@link #revision()} changed:
- * <ul>
- *   <li>{@link VertexDataAuthoring#soupMorphs} - the shape keys as a native {@code RigMorphs} over the editor's
- *       COMBINED soup ({@code MeshRange.vertexStart + part-local vertex}); upload with
- *       {@code ModelGpuMesh.updateMorphs} when {@link VertexDataAuthoring#dataRevision()} changed;</li>
- *   <li>{@link #weights(List)} with {@code shapeKeys().morphs()} - the raw weights in target order, for
- *       {@code ModelAppearance.setMorphWeights} (the GPU path clamps them to each key's range);</li>
- *   <li>{@link #hiddenGroups()} - for {@code ModelAppearance.setHiddenGroups} (needs a mask plan built from
- *       {@link VertexDataAuthoring#groups()}, see {@code EntityModelLoader.maskPlan}).</li>
- * </ul>
- * Today (before that merge) the Animation tab's viewport previews keyed shape-key weights of the saved model, and
- * this object only carries the editor's choices. Main thread only.
+ * <p><b>Consumer (scene viewport, #175 INTEG):</b> {@link VertexDataAuthoring#previewSource()} hands these choices,
+ * with {@link VertexDataAuthoring#soupMorphs} / {@link VertexDataAuthoring#soupGroups}, to
+ * {@code EditableModel.setVertexDataPreview}: the model re-uploads the morph targets when
+ * {@link VertexDataAuthoring#dataRevision()} or its structure changed, and copies {@link #weights(List)} and
+ * {@link #hiddenGroups()} into its {@code ModelAppearance} whenever {@link #revision()} changed, so a slider or a Hide
+ * toggle shows in the next frame with no re-bake. The Animation tab's viewport previews keyed weights of the saved
+ * model separately. Main thread only.
  */
 public final class VertexDataPreview {
 

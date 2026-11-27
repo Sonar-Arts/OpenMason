@@ -82,6 +82,16 @@ public final class ModelDrawPlan {
     }
 
     /**
+     * This plan bound to a vertex-group mask plan built over the index buffer it draws (OpenMason #172; a host that
+     * sorts its own triangles, e.g. the editor's {@link #materialSorted} buffer, then uploads {@code mask.indices()}).
+     * The mask plan keeps every triangle inside its key run, so this plan's batches stay valid on the reordered
+     * buffer as long as each batch is one key run. Null = no mask. The caller keeps owning {@code mask}.
+     */
+    public ModelDrawPlan withMaskPlan(com.openmason.engine.format.omo.MaskPlan mask) {
+        return new ModelDrawPlan(parts, materialIds, mask);
+    }
+
+    /**
      * This plan with every batch cut down to the visible index {@code ranges} ({@code first, count} pairs in buffer
      * order, as {@link com.openmason.engine.format.omo.MaskPlan#ranges} returns them); materials unchanged.
      */
@@ -162,6 +172,29 @@ public final class ModelDrawPlan {
             parts.add(new PartBatches(textured.build(), untextured.build()));
         }
         return new ModelDrawPlan(parts, usedMaterials, geometry.maskPlan());
+    }
+
+    /**
+     * The triangle order {@link #materialSorted} uploads: {@code order[slot]} = the input triangle drawn at triangle
+     * slot {@code slot} (triangles grouped by key in order of first appearance, input order inside a group). For
+     * hosts that map a GPU primitive id back to their triangles.
+     */
+    public static int[] materialSortOrder(int[] triangleKeys, int triangleCount) {
+        Map<Integer, int[]> counts = new LinkedHashMap<>();
+        for (int t = 0; t < triangleCount; t++) {
+            counts.computeIfAbsent(triangleKeys[t], k -> new int[1])[0]++;
+        }
+        Map<Integer, int[]> cursor = new java.util.HashMap<>();
+        int offset = 0;
+        for (Map.Entry<Integer, int[]> e : counts.entrySet()) {
+            cursor.put(e.getKey(), new int[]{offset});
+            offset += e.getValue()[0];
+        }
+        int[] order = new int[triangleCount];
+        for (int t = 0; t < triangleCount; t++) {
+            order[cursor.get(triangleKeys[t])[0]++] = t;
+        }
+        return order;
     }
 
     /** Result of {@link #materialSorted}: the reordered index buffer and its single-part plan. */

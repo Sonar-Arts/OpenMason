@@ -77,13 +77,13 @@ public class MeshSerializationAdapter implements IMeshSerializationAdapter {
         applyUvMode(meshData.uvMode());
         stateManager.clearParts();
 
+        // One native import whose mesh the derivation then builds on (#175 INTEG): no second hand-over of the mesh.
         long span = EditCostStats.begin();
-        MeshImporter.ImportResult result = MeshImporter.importSoup(
+        MeshImporter.Imported imported = MeshImporter.importForDerive(
             meshData.vertices(), meshData.texCoords(),
             meshData.indices(), meshData.triangleToFaceId());
         EditCostStats.end(EditCostStats.Span.IMPORT_SOUP, span);
-        rebuildPipeline.setEditableMesh(result.mesh());
-        rebuildPipeline.setImportSoupMapping(result.vertexIdToSoupIndices());
+        rebuildPipeline.setImportedMesh(imported);
         rebuildPipeline.rebuildFromEditable();
     }
 
@@ -141,11 +141,11 @@ public class MeshSerializationAdapter implements IMeshSerializationAdapter {
         }
 
         long span = EditCostStats.begin();
-        MeshImporter.ImportResult result = MeshImporter.importSoup(
+        MeshImporter.Imported imported = MeshImporter.importForDerive(
             vertices, texCoords, indices, triangleToFaceId);
         EditCostStats.end(EditCostStats.Span.IMPORT_SOUP, span);
-        rebuildPipeline.setEditableMesh(result.mesh());
-        rebuildPipeline.setImportSoupMapping(result.vertexIdToSoupIndices());
+        MeshImporter.ImportResult result = imported.result();
+        rebuildPipeline.setImportedMesh(imported);
         rebuildPipeline.rebuildFromEditable();
 
         logger.debug("Restored from snapshot: {} shared vertices, {} faces",

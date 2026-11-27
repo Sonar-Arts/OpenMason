@@ -110,6 +110,43 @@ public final class MeshImporter {
     public static ImportResult importSoup(float[] vertices, float[] texCoords,
                                           int[] indices, int[] triangleToFaceId,
                                           Consumer<ImportWarning> warningSink) {
+        try (CendaMesh m = CendaMesh.create()) {
+            return importInto(m, vertices, texCoords, indices, triangleToFaceId, warningSink);
+        }
+    }
+
+    /**
+     * An import whose native mesh stays alive for the derivation that follows (#175): the editor's load / part
+     * re-bake path hands {@link #nativeMesh()} to {@code RenderMeshBuilder.deriveImported}, so the mesh is imported
+     * once and derived once without handing the {@link EditableMesh} back to native code. The caller owns it: close
+     * it (or the derivation it was handed to). {@code nativeMesh} is null for an import too small to have faces.
+     */
+    public record Imported(ImportResult result, CendaMesh nativeMesh) implements AutoCloseable {
+        @Override
+        public void close() {
+            if (nativeMesh != null) nativeMesh.close();
+        }
+    }
+
+    /** {@link #importSoup(float[], float[], int[], int[])} keeping the native mesh (see {@link Imported}). */
+    public static Imported importForDerive(float[] vertices, float[] texCoords, int[] indices,
+                                           int[] triangleToFaceId) {
+        CendaMesh m = CendaMesh.create();
+        try {
+            ImportResult result = importInto(m, vertices, texCoords, indices, triangleToFaceId, null);
+            if (result.mesh().faceCount() == 0) {
+                m.close();
+                return new Imported(result, null);
+            }
+            return new Imported(result, m);
+        } catch (RuntimeException e) {
+            m.close();
+            throw e;
+        }
+    }
+
+    private static ImportResult importInto(CendaMesh m, float[] vertices, float[] texCoords, int[] indices,
+                                           int[] triangleToFaceId, Consumer<ImportWarning> warningSink) {
         EditableMesh mesh = new EditableMesh();
         if (vertices == null || vertices.length < 9 || indices == null || indices.length < 3) {
             return new ImportResult(mesh, new int[0][]);
@@ -121,42 +158,40 @@ public final class MeshImporter {
         int soupCount = vertices.length / 3;
         boolean hasUVs = texCoords != null && texCoords.length >= soupCount * 2;
 
-        try (CendaMesh m = CendaMesh.create()) {
-            m.importSoup(vertices, texCoords, indices, triangleToFaceId, ModelingConstants.POSITION_EPSILON, 0);
+        m.importSoup(vertices, texCoords, indices, triangleToFaceId, ModelingConstants.POSITION_EPSILON, 0);
 
-            float[] positions = m.floats(CendaMesh.A_VERTEX_POSITIONS);
-            Vector3f p = new Vector3f();
-            for (int w = 0; w < positions.length / 3; w++) {
-                mesh.addVertex(p.set(positions[w * 3], positions[w * 3 + 1], positions[w * 3 + 2]));
-            }
-
-            // Warnings in the order Java's sink received them: CORRUPT_INDICES first, then per face in face order.
-            int[] warnings = m.ints(CendaMesh.A_WARNINGS);
-            for (int i = 0; i + 2 < warnings.length; i += 3) {
-                report(warnings[i], warnings[i + 1], warnings[i + 2], soupCount, warningSink);
-            }
-
-            int[] faceIds = m.ints(CendaMesh.A_FACE_IDS);
-            int[] offsets = m.ints(CendaMesh.A_LOOP_OFFSETS);
-            int[] loops = m.ints(CendaMesh.A_LOOP_VERTICES);
-            int[] flags = m.ints(CendaMesh.A_FACE_FLAGS);
-            float[] loopUVs = m.floats(CendaMesh.A_LOOP_UVS);
-            for (int f = 0; f < faceIds.length; f++) {
-                int[] loop = Arrays.copyOfRange(loops, offsets[f], offsets[f + 1]);
-                float[] cornerUVs = (flags[f] & CendaMesh.FACE_AUTHORED_UVS) != 0
-                    ? Arrays.copyOfRange(loopUVs, offsets[f] * 2, offsets[f + 1] * 2)
-                    : null;
-                mesh.addFaceWithId(faceIds[f], loop, cornerUVs);
-            }
-
-            // All soup indices per welded vertex (part-system index space) —
-            // welding crosses part boundaries, so every occurrence matters.
-            int[][] vertexIdToSoupIndices = m.csr(CendaMesh.A_VERTEX_SOUP_OFFSETS, CendaMesh.A_VERTEX_SOUP);
-
-            logger.debug("Imported soup: {} soup vertices -> {} shared vertices, {} faces (authoredUVs={})",
-                soupCount, mesh.vertexCount(), mesh.faceCount(), hasUVs);
-            return new ImportResult(mesh, vertexIdToSoupIndices);
+        float[] positions = m.floats(CendaMesh.A_VERTEX_POSITIONS);
+        Vector3f p = new Vector3f();
+        for (int w = 0; w < positions.length / 3; w++) {
+            mesh.addVertex(p.set(positions[w * 3], positions[w * 3 + 1], positions[w * 3 + 2]));
         }
+
+        // Warnings in the order Java's sink received them: CORRUPT_INDICES first, then per face in face order.
+        int[] warnings = m.ints(CendaMesh.A_WARNINGS);
+        for (int i = 0; i + 2 < warnings.length; i += 3) {
+            report(warnings[i], warnings[i + 1], warnings[i + 2], soupCount, warningSink);
+        }
+
+        int[] faceIds = m.ints(CendaMesh.A_FACE_IDS);
+        int[] offsets = m.ints(CendaMesh.A_LOOP_OFFSETS);
+        int[] loops = m.ints(CendaMesh.A_LOOP_VERTICES);
+        int[] flags = m.ints(CendaMesh.A_FACE_FLAGS);
+        float[] loopUVs = m.floats(CendaMesh.A_LOOP_UVS);
+        for (int f = 0; f < faceIds.length; f++) {
+            int[] loop = Arrays.copyOfRange(loops, offsets[f], offsets[f + 1]);
+            float[] cornerUVs = (flags[f] & CendaMesh.FACE_AUTHORED_UVS) != 0
+                ? Arrays.copyOfRange(loopUVs, offsets[f] * 2, offsets[f + 1] * 2)
+                : null;
+            mesh.addFaceWithId(faceIds[f], loop, cornerUVs);
+        }
+
+        // All soup indices per welded vertex (part-system index space) —
+        // welding crosses part boundaries, so every occurrence matters.
+        int[][] vertexIdToSoupIndices = m.csr(CendaMesh.A_VERTEX_SOUP_OFFSETS, CendaMesh.A_VERTEX_SOUP);
+
+        logger.debug("Imported soup: {} soup vertices -> {} shared vertices, {} faces (authoredUVs={})",
+            soupCount, mesh.vertexCount(), mesh.faceCount(), hasUVs);
+        return new ImportResult(mesh, vertexIdToSoupIndices);
     }
 
     /** Logs and emits one native import warning with the Java importer's wording. */

@@ -96,10 +96,31 @@ public class EditableModel {
     // Smooth shading (#169): one native store per part; corner normals derived per rebuild
     private final com.openmason.engine.modeling.shading.ModelShading shading;
     private boolean normalsUploaded;
+    private short[] uploadedNormals;
     private ModelGpuMesh gpuMesh;
     private ModelDrawPlan drawPlan;
     private float[] uploadedUvs;
     private boolean initialized;
+
+    // Scene-viewport preview of shape keys / vertex groups (#171 / #172, #175 INTEG): fed by the host's rigging data.
+    private VertexDataPreviewSource vertexDataPreview;
+    private final com.openmason.engine.rendering.model.draw.ModelAppearance appearance =
+            new com.openmason.engine.rendering.model.draw.ModelAppearance();
+    private com.openmason.engine.rig.RigMorphs cornerMorphs;          // on the GPU mesh, owned here
+    private long morphsDataRevision = Long.MIN_VALUE;
+    private com.openmason.engine.modeling.editable.RenderMesh morphsMesh;
+    private long previewRevision = Long.MIN_VALUE;
+    private com.openmason.engine.format.omo.MaskPlan maskPlan;         // over the uploaded index buffer, owned here
+    private long maskDataRevision = Long.MIN_VALUE;
+    private com.openmason.engine.modeling.editable.RenderMesh maskMesh;
+    // The render corner -> combined-soup vertex map the preview data is translated through (per structure).
+    private int[] cornerSource;
+    private com.openmason.engine.modeling.editable.RenderMesh cornerSourceMesh;
+    private int[][] cornerSourceMapping;
+    // Triangle order of the uploaded index buffer (slot -> render triangle), built on request.
+    private int[] uploadedTriangleKeys;
+    private int[] uploadedMaskPermutation;
+    private int[] uploadedTriangleOrder;
 
     // Part / bone transforms as GPU matrices (#175 F2): a per-corner skin bound at each structural rebuild and
     // a palette filled every draw, so a gizmo drag or a preview pose costs a palette upload, not a re-bake.
@@ -223,7 +244,10 @@ public class EditableModel {
         return initialized;
     }
 
-    /** Releases the GPU mesh (GL thread). The model's data stays usable. */
+    /**
+     * Releases the GPU mesh (GL thread) and the native derivation / preview data. The model's data stays usable (the
+     * next structural edit or drag commit derives again).
+     */
     public void cleanup() {
         if (gpuMesh != null) {
             gpuMesh.close();
@@ -231,10 +255,32 @@ public class EditableModel {
         }
         drawPlan = null;
         uploadedUvs = null;
+        uploadedNormals = null;
         normalsUploaded = false;
         partPalette.invalidate();
         uploadedSkinVersion = -1;
         initialized = false;
+        releasePreviewData();
+        rebuildPipeline.releaseNative();
+    }
+
+    private void releasePreviewData() {
+        if (cornerMorphs != null) {
+            cornerMorphs.close();
+            cornerMorphs = null;
+        }
+        if (maskPlan != null) {
+            maskPlan.close();
+            maskPlan = null;
+        }
+        morphsDataRevision = Long.MIN_VALUE;
+        maskDataRevision = Long.MIN_VALUE;
+        previewRevision = Long.MIN_VALUE;
+        morphsMesh = null;
+        maskMesh = null;
+        uploadedTriangleKeys = null;
+        uploadedMaskPermutation = null;
+        uploadedTriangleOrder = null;
     }
 
     /**
@@ -253,7 +299,7 @@ public class EditableModel {
         syncGpu();
         fillPalette(modelMatrix);
         renderer.drawLit(gpuMesh, drawPlan, forceUnrendered ? MaterialTextures.UNTEXTURED : batchTextures,
-                palette, view, projection, lighting, null);
+                palette, view, projection, lighting, null, previewAppearance());
     }
 
     /** Draws the model as a see-through wireframe overlay in {@code color}. */
@@ -264,7 +310,7 @@ public class EditableModel {
         }
         syncGpu();
         fillPalette(modelMatrix);
-        renderer.drawWireframe(gpuMesh, drawPlan, palette, view, projection, color);
+        renderer.drawWireframe(gpuMesh, drawPlan, palette, view, projection, color, previewAppearance());
     }
 
     private void fillPalette(Matrix4f modelMatrix) {
@@ -325,16 +371,43 @@ public class EditableModel {
 
     /**
      * Brings the GPU mesh up to date with the latest derivation: positions only
-     * for a vertex drag, UVs only when they actually changed, and the
-     * material-sorted index buffer when triangles or face materials changed.
+     * for a vertex drag (only the touched corner ranges when the live derivation reported them, #175 INTEG), UVs only
+     * when they actually changed, the material-sorted index buffer when triangles or face materials changed, the
+     * corner normals' changed range, and the shape-key / vertex-group preview data when it changed.
      */
     private void syncGpu() {
+        long span = com.openmason.engine.modeling.core.EditCostStats.begin();
+        try {
+            syncGpuNow();
+        } finally {
+            com.openmason.engine.modeling.core.EditCostStats.end(
+                com.openmason.engine.modeling.core.EditCostStats.Span.GPU_SYNC, span);
+        }
+    }
+
+    private void syncGpuNow() {
         if (gpuState.positionsDirty()) {
-            gpuMesh.updatePositions(vertexManager.getVertices());
+            float[] positions = vertexManager.getVertices();
+            int[] spans = gpuState.positionSpans();
+            if (spans != null && positions != null && gpuMesh.vertexCount() * 3 == positions.length) {
+                for (int i = 0; i < spans.length; i += 2) {
+                    gpuMesh.updatePositionRange(positions, spans[i], spans[i + 1]);
+                }
+            } else {
+                gpuMesh.updatePositions(positions);
+            }
         }
         if (gpuState.uvsDirty()) {
             float[] uvs = vertexManager.getTexCoords();
-            if (uploadedUvs == null || !Arrays.equals(uvs, uploadedUvs)) {
+            int[] spans = gpuState.uvSpans();
+            if (spans != null && uvs != null && uploadedUvs != null && uploadedUvs.length == uvs.length) {
+                for (int i = 0; i < spans.length; i += 2) {
+                    gpuMesh.updateUvRange(uvs, spans[i], spans[i + 1]);
+                    int from = spans[i] * 2;
+                    int count = Math.min(spans[i + 1] * 2, uvs.length - from);
+                    if (count > 0) System.arraycopy(uvs, from, uploadedUvs, from, count);
+                }
+            } else if (uploadedUvs == null || !Arrays.equals(uvs, uploadedUvs)) {
                 gpuMesh.updateUvs(uvs);
                 uploadedUvs = uvs != null ? uvs.clone() : null;
             }
@@ -351,22 +424,313 @@ public class EditableModel {
             boolean covers = skin.vertexCount() > 0 && skin.vertexCount() == vertexManager.getTotalVertexCount();
             gpuMesh.updateSkin(covers ? skin : null);
         }
-        if (gpuState.indicesDirty() || rebuildPipeline.isDrawBatchesDirty() || drawPlan == null) {
-            ModelDrawPlan.Sorted sorted = ModelDrawPlan.materialSorted(vertexManager.getIndices(), triangleMaterialKeys());
-            gpuMesh.updateIndices(sorted.indices());
-            drawPlan = sorted.plan();
+        syncMorphs();
+        if (gpuState.indicesDirty() || rebuildPipeline.isDrawBatchesDirty() || drawPlan == null || masksStale()) {
+            uploadSortedIndices();
             rebuildPipeline.clearDrawBatchesDirty();
         }
+        syncPreviewChoices();
         refreshBaseColors();
         if (gpuState.normalsDirty()) {
-            // Corner normals (smooth shading): null = every corner flat, exactly as a mesh without normals.
-            short[] normals = shading.cornerNormals();
-            if (normals != null || normalsUploaded) {
-                gpuMesh.updateNormals(normals);
-                normalsUploaded = normals != null;
-            }
+            syncNormals();
         }
         gpuState.clear();
+    }
+
+    /** Corner normals (smooth shading): only the changed range is re-sent; null = every corner flat. */
+    private void syncNormals() {
+        short[] normals = shading.cornerNormals();
+        if (normals != null && normalsUploaded && uploadedNormals != null
+                && uploadedNormals.length == normals.length) {
+            int lo = 0;
+            int hi = normals.length;
+            while (lo < hi && normals[lo] == uploadedNormals[lo]) lo++;
+            if (lo == hi) return;
+            while (hi > lo && normals[hi - 1] == uploadedNormals[hi - 1]) hi--;
+            int first = lo / 2;
+            int end = (hi + 1) / 2;
+            gpuMesh.updateNormalsRange(normals, first, end - first);
+            System.arraycopy(normals, first * 2, uploadedNormals, first * 2, (end - first) * 2);
+            return;
+        }
+        if (normals != null || normalsUploaded) {
+            gpuMesh.updateNormals(normals);
+            normalsUploaded = normals != null;
+            uploadedNormals = normals != null ? normals.clone() : null;
+        }
+    }
+
+    /**
+     * Re-sorts the triangles by material into the GPU index buffer; with vertex groups to preview, a mask plan is
+     * built over that buffer (triangles keep their material run, so the batches stay valid) and its reordered
+     * indices are uploaded instead.
+     */
+    private void uploadSortedIndices() {
+        int[] indices = vertexManager.getIndices();
+        int[] keys = triangleMaterialKeys();
+        ModelDrawPlan.Sorted sorted = ModelDrawPlan.materialSorted(indices, keys);
+        int[] upload = sorted.indices();
+        ModelDrawPlan plan = sorted.plan();
+        com.openmason.engine.format.omo.MaskPlan nextMask = buildMaskPlan(upload, keys);
+        int[] permutation = null;
+        if (nextMask != null) {
+            upload = nextMask.indices();
+            permutation = nextMask.permutation();
+            plan = plan.withMaskPlan(nextMask);
+        }
+        gpuMesh.updateIndices(upload);
+        drawPlan = plan;
+        if (maskPlan != null && maskPlan != nextMask) {
+            maskPlan.close();
+        }
+        maskPlan = nextMask;
+        uploadedTriangleKeys = keys;
+        uploadedMaskPermutation = permutation;
+        uploadedTriangleOrder = null;
+    }
+
+    // =========================================================================
+    // SHAPE KEY / VERTEX GROUP PREVIEW (#171 / #172 in the scene viewport, #175 INTEG)
+    // =========================================================================
+
+    /**
+     * Feeds the scene viewport's preview of shape keys and vertex groups (null = none): the draw then deforms the
+     * mesh by the preview weights on the GPU (morph targets mapped from the combined soup onto the render corners)
+     * and leaves out the triangles of hidden groups (a mask plan over the uploaded index buffer). The overlays and the
+     * CPU picking stay on the undeformed, unmasked mesh (Blender's edit cage).
+     */
+    public void setVertexDataPreview(VertexDataPreviewSource source) {
+        if (source == vertexDataPreview) return;
+        this.vertexDataPreview = source;
+        morphsDataRevision = Long.MIN_VALUE;
+        maskDataRevision = Long.MIN_VALUE;
+        previewRevision = Long.MIN_VALUE;
+        rebuildPipeline.markDrawBatchesDirty();
+    }
+
+    /** The preview source (null = none). */
+    public VertexDataPreviewSource getVertexDataPreview() {
+        return vertexDataPreview;
+    }
+
+    /** The appearance the lit / wireframe passes draw with (null without a preview source). */
+    private com.openmason.engine.rendering.model.draw.ModelAppearance previewAppearance() {
+        return vertexDataPreview != null ? appearance : null;
+    }
+
+    /** The preview appearance (morph weights, hidden groups) of the last sync - tests and diagnostics. */
+    public com.openmason.engine.rendering.model.draw.ModelAppearance getPreviewAppearance() {
+        return appearance;
+    }
+
+    /** The draw plan of the last sync (null before one) - tests and diagnostics. */
+    public ModelDrawPlan getDrawPlan() {
+        return drawPlan;
+    }
+
+    /**
+     * The triangle order of the GPU index buffer ({@code order[slot]} = the render triangle - {@link #getIndices()}
+     * order - drawn at triangle slot {@code slot}, i.e. what {@code gl_PrimitiveID} indexes): the material sort, then
+     * the vertex-group mask plan's reorder when groups are previewed. Null before the first sync. GPU picking maps
+     * primitive ids back through it.
+     */
+    public int[] getUploadedTriangleOrder() {
+        if (uploadedTriangleOrder == null && uploadedTriangleKeys != null) {
+            int[] order = ModelDrawPlan.materialSortOrder(uploadedTriangleKeys, uploadedTriangleKeys.length);
+            if (uploadedMaskPermutation != null) {
+                int[] masked = new int[uploadedMaskPermutation.length];
+                for (int i = 0; i < masked.length; i++) masked[i] = order[uploadedMaskPermutation[i]];
+                order = masked;
+            }
+            uploadedTriangleOrder = order;
+        }
+        return uploadedTriangleOrder;
+    }
+
+    /** True when the vertex-group data or the structure changed since the mask plan was built. */
+    private boolean masksStale() {
+        if (vertexDataPreview == null) {
+            return maskPlan != null;
+        }
+        return vertexDataPreview.dataRevision() != maskDataRevision
+            || rebuildPipeline.getLastRenderMesh() != maskMesh;
+    }
+
+    /** A mask plan over {@code sortedIndices} for the preview's vertex groups, or null (no source / no groups). */
+    private com.openmason.engine.format.omo.MaskPlan buildMaskPlan(int[] sortedIndices, int[] keys) {
+        VertexDataPreviewSource source = vertexDataPreview;
+        maskMesh = rebuildPipeline.getLastRenderMesh();
+        maskDataRevision = source != null ? source.dataRevision() : Long.MIN_VALUE;
+        if (source == null || sortedIndices.length == 0
+                || !com.openmason.engine.format.omo.MaskPlan.isAvailable()) {
+            return null;
+        }
+        VertexDataPreviewSource.SoupGroups groups = source.soupGroups();
+        if (groups == null || groups.names().isEmpty()) {
+            return null;
+        }
+        int corners = vertexManager.getTotalVertexCount();
+        int[] src = cornerSource();
+        if (src == null) {
+            return null;
+        }
+        // Soup vertex -> its corners (CSR), then every group row onto those corners.
+        int soupCount = 0;
+        for (int s : src) soupCount = Math.max(soupCount, s + 1);
+        int[] start = new int[soupCount + 1];
+        for (int s : src) if (s >= 0) start[s + 1]++;
+        for (int i = 0; i < soupCount; i++) start[i + 1] += start[i];
+        int[] fill = Arrays.copyOf(start, soupCount);
+        int[] cornersOf = new int[start[soupCount]];
+        for (int c = 0; c < src.length; c++) if (src[c] >= 0) cornersOf[fill[src[c]]++] = c;
+        int groupCount = groups.names().size();
+        int[] rowOffsets = new int[groupCount + 1];
+        int[] rowVertices = new int[64];
+        float[] rowWeights = new float[64];
+        int rows = 0;
+        for (int g = 0; g < groupCount; g++) {
+            for (int r = groups.rowOffsets()[g]; r < groups.rowOffsets()[g + 1]; r++) {
+                int s = groups.vertices()[r];
+                if (s < 0 || s >= soupCount) continue;
+                for (int k = start[s]; k < start[s + 1]; k++) {
+                    if (rows == rowVertices.length) {
+                        rowVertices = Arrays.copyOf(rowVertices, rows * 2);
+                        rowWeights = Arrays.copyOf(rowWeights, rows * 2);
+                    }
+                    rowVertices[rows] = cornersOf[k];
+                    rowWeights[rows++] = groups.weights() == null ? 1f : groups.weights()[r];
+                }
+            }
+            rowOffsets[g + 1] = rows;
+        }
+        // Key of each sorted triangle = its material run (the mask plan never moves a triangle out of its run).
+        int[] order = ModelDrawPlan.materialSortOrder(keys, keys.length);
+        int[] slotKeys = new int[order.length];
+        for (int t = 0; t < order.length; t++) slotKeys[t] = keys[order[t]];
+        try {
+            return com.openmason.engine.format.omo.MaskPlan.create(sortedIndices, corners, slotKeys, groups.names(),
+                    rowOffsets, Arrays.copyOf(rowVertices, rows), Arrays.copyOf(rowWeights, rows));
+        } catch (RuntimeException e) {
+            logger.warn("Vertex-group preview unavailable: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Uploads the shape keys as corner morph targets when the data or the structure changed. */
+    private void syncMorphs() {
+        VertexDataPreviewSource source = vertexDataPreview;
+        if (source == null) {
+            if (cornerMorphs != null) {
+                gpuMesh.updateMorphs(null);
+                cornerMorphs.close();
+                cornerMorphs = null;
+            }
+            return;
+        }
+        long revision = source.dataRevision();
+        com.openmason.engine.modeling.editable.RenderMesh rm = rebuildPipeline.getLastRenderMesh();
+        if (revision == morphsDataRevision && rm == morphsMesh
+                && (cornerMorphs == null || cornerMorphs.vertexCount() == gpuMesh.vertexCount())) {
+            return;
+        }
+        morphsDataRevision = revision;
+        morphsMesh = rm;
+        previewRevision = Long.MIN_VALUE; // the weights follow the targets
+        com.openmason.engine.rig.RigMorphs next = null;
+        int[] src = cornerSource();
+        if (src != null && src.length == gpuMesh.vertexCount()) {
+            try (com.openmason.engine.rig.RigMorphs soup = source.soupMorphs()) {
+                if (soup != null && soup.targetCount() > 0) {
+                    int[] clamped = new int[src.length];
+                    for (int c = 0; c < src.length; c++) clamped[c] = src[c] < soup.vertexCount() ? src[c] : -1;
+                    next = soup.remap(src.length, clamped);
+                }
+            } catch (RuntimeException e) {
+                logger.warn("Shape-key preview unavailable: {}", e.getMessage());
+                next = null;
+            }
+        }
+        gpuMesh.updateMorphs(next);
+        if (cornerMorphs != null) cornerMorphs.close();
+        cornerMorphs = next;
+    }
+
+    /** Copies the preview choices (slider weights, hidden groups) into the appearance when they changed. */
+    private void syncPreviewChoices() {
+        VertexDataPreviewSource source = vertexDataPreview;
+        if (source == null) return;
+        long revision = source.previewRevision();
+        if (revision == previewRevision) return;
+        previewRevision = revision;
+        float[] weights = source.previewWeights();
+        appearance.setMorphWeights(cornerMorphs != null && weights != null
+                && weights.length == cornerMorphs.targetCount() ? weights : null);
+        appearance.setHiddenGroups(source.hiddenGroups());
+    }
+
+    /**
+     * Render corner -> the combined-soup vertex its preview data comes from (-1 = none, e.g. a vertex created by an
+     * edit after the import): the corner's welded vertex's soup vertex inside the part that owns the corner's face
+     * (welding joins seams across parts; each corner keeps its own part's data). Cached per structure.
+     */
+    private int[] cornerSource() {
+        com.openmason.engine.modeling.editable.RenderMesh rm = rebuildPipeline.getLastRenderMesh();
+        int[][] vertexToSoup = rebuildPipeline.getImportSoupMapping();
+        if (rm == null || vertexToSoup == null) {
+            return null;
+        }
+        if (rm == cornerSourceMesh && vertexToSoup == cornerSourceMapping && cornerSource != null) {
+            return cornerSource;
+        }
+        int corners = rm.cornerCount();
+        int[] cornerFace = new int[corners];
+        Arrays.fill(cornerFace, -1);
+        int[] idx = rm.indices();
+        int[] triToFace = rm.triangleToFaceId();
+        for (int t = 0; t < triToFace.length; t++) {
+            for (int k = 0; k < 3; k++) {
+                int c = idx[t * 3 + k];
+                if (c >= 0 && c < corners && cornerFace[c] < 0) cornerFace[c] = triToFace[t];
+            }
+        }
+        // Part ranges by face start (the owner of a face: the greatest faceStart <= face).
+        List<com.openmason.engine.modeling.parts.MeshRange> ranges = new java.util.ArrayList<>();
+        for (com.openmason.engine.modeling.parts.ModelPartDescriptor part : partManager.getAllParts()) {
+            if (part.meshRange() != null && part.meshRange().vertexCount() > 0) ranges.add(part.meshRange());
+        }
+        ranges.sort(java.util.Comparator.comparingInt(com.openmason.engine.modeling.parts.MeshRange::faceStart));
+        int[] faceStarts = new int[ranges.size()];
+        for (int i = 0; i < faceStarts.length; i++) faceStarts[i] = ranges.get(i).faceStart();
+        int[] src = new int[corners];
+        int[] cornerToVertex = rm.cornerToVertexId();
+        for (int c = 0; c < corners; c++) {
+            int v = cornerToVertex[c];
+            int[] soups = v >= 0 && v < vertexToSoup.length ? vertexToSoup[v] : null;
+            if (soups == null || soups.length == 0) {
+                src[c] = -1;
+                continue;
+            }
+            int pick = soups[0];
+            int f = cornerFace[c];
+            if (f >= 0 && soups.length > 1 && faceStarts.length > 0) {
+                int r = Arrays.binarySearch(faceStarts, f);
+                if (r < 0) r = -r - 2;
+                if (r >= 0) {
+                    com.openmason.engine.modeling.parts.MeshRange range = ranges.get(r);
+                    for (int s : soups) {
+                        if (range.containsVertex(s)) {
+                            pick = s;
+                            break;
+                        }
+                    }
+                }
+            }
+            src[c] = pick;
+        }
+        cornerSource = src;
+        cornerSourceMesh = rm;
+        cornerSourceMapping = vertexToSoup;
+        return src;
     }
 
     /** The parts' face ranges in the render mesh (shading store ownership). */
@@ -1003,7 +1367,8 @@ public class EditableModel {
      */
     public int adoptAuthoredUVs() {
         com.openmason.engine.modeling.editable.EditableMesh mesh = rebuildPipeline.getEditableMesh();
-        int adopted = 0;
+        List<com.openmason.engine.modeling.editable.EditableFace> candidates = new java.util.ArrayList<>();
+        List<FaceTextureMapping> mappings = new java.util.ArrayList<>();
         for (com.openmason.engine.modeling.editable.EditableFace face : mesh.faces()) {
             if (!face.hasAuthoredUVs()) continue;
             FaceTextureMapping mapping = faceTextureManager.getFaceMapping(face.faceId());
@@ -1011,11 +1376,16 @@ public class EditableModel {
                     || !com.openmason.engine.modeling.editable.RenderMeshBuilder.isExplicit(mapping)) {
                 continue;
             }
-            if (com.openmason.engine.modeling.editable.RenderMeshBuilder.authoredUVsMatchProjection(
-                    mesh, face, mapping, AUTHORED_UV_TOLERANCE)) {
-                continue;
-            }
-            faceTextureManager.setFaceMapping(mapping.withAuthoredUVs(true));
+            candidates.add(face);
+            mappings.add(mapping);
+        }
+        // Every candidate's projection in one native derivation (#175 INTEG), the per-face rule unchanged.
+        boolean[] matches = com.openmason.engine.modeling.editable.RenderMeshBuilder.authoredUVsMatchProjection(
+                mesh, candidates, mappings, AUTHORED_UV_TOLERANCE);
+        int adopted = 0;
+        for (int i = 0; i < candidates.size(); i++) {
+            if (matches[i]) continue;
+            faceTextureManager.setFaceMapping(mappings.get(i).withAuthoredUVs(true));
             adopted++;
         }
         if (adopted > 0) {

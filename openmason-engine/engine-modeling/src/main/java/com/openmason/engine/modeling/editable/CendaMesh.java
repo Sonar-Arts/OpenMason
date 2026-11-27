@@ -339,6 +339,17 @@ public final class CendaMesh implements AutoCloseable {
         return s.equals(MemorySegment.NULL) ? new float[0] : s.toArray(F32);
     }
 
+    /**
+     * A read-only, zero-copy view of an array (int32 or float elements, 4 bytes each; read with
+     * {@code getAtIndex(JAVA_INT / JAVA_FLOAT, i)} or {@code MemorySegment.copy}), valid until the next call that
+     * changes the mesh (#175: per-frame readers of a few elements of a large array). Null when its stage is not
+     * current; an empty segment for an empty array.
+     */
+    public MemorySegment view(int which) {
+        MemorySegment s = borrow(which);
+        return s == null ? null : s.asReadOnly();
+    }
+
     /** True when the array's stage is current. */
     public boolean has(int which) {
         return borrow(which) != null;

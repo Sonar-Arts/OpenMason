@@ -116,4 +116,21 @@ class ModelDrawPlanTest {
         assertThrows(IllegalArgumentException.class,
                 () -> ModelDrawPlan.materialSorted(new int[]{0, 1}, new int[1]));
     }
+
+    @Test
+    void theSortOrderIsTheOrderMaterialSortedUploads() {
+        java.util.Random r = new java.util.Random(3);
+        int tris = 500;
+        int[] indices = new int[tris * 3];
+        int[] keys = new int[tris];
+        for (int i = 0; i < indices.length; i++) indices[i] = r.nextInt(1000);
+        for (int t = 0; t < tris; t++) keys[t] = r.nextInt(5) * 7;
+        int[] sorted = ModelDrawPlan.materialSorted(indices, keys).indices();
+        int[] order = ModelDrawPlan.materialSortOrder(keys, tris);
+        for (int slot = 0; slot < tris; slot++) {
+            for (int k = 0; k < 3; k++) {
+                assertEquals(indices[order[slot] * 3 + k], sorted[slot * 3 + k], "slot " + slot);
+            }
+        }
+    }
 }

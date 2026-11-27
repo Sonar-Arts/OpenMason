@@ -23,10 +23,12 @@ public final class EditCostStats {
         IMPORT_SOUP("Import soup"),
         /** MeshRebuildPipeline.derive (render mesh + topology + listeners). */
         DERIVE("Derive"),
-        /** RenderMeshBuilder.build inside a derive. */
+        /** The native derivation inside a derive (render mesh + topology, one pass: RenderMeshBuilder.derive). */
         RENDER_MESH("Render mesh"),
-        /** MeshTopologyBuilder.build inside a derive. */
+        /** Java assembly of the topology query services inside a derive (MeshTopologyBuilder). */
         TOPOLOGY("Topology"),
+        /** Positions-only refresh of the live derivation (a drag frame / move: Derivation.movePositionsInPlace). */
+        MOVE_REFRESH("Move refresh"),
         /** Overlay listeners notified by a derive (vertex/edge/face overlay rebuilds). */
         OVERLAY_REBUILD("Overlay rebuild"),
         /** FaceRenderer data rebuild (lines, fills, dots). */
@@ -46,7 +48,9 @@ public final class EditCostStats {
         /** A drag release (commit). */
         DRAG_COMMIT("Drag commit"),
         /** Overlay draw calls submission (vertex + edge + face render). */
-        OVERLAY_DRAW("Overlay draw");
+        OVERLAY_DRAW("Overlay draw"),
+        /** EditableModel.syncGpu: the model mesh's uploads before a draw (positions, UVs, indices, skin, normals, morphs). */
+        GPU_SYNC("GPU sync");
 
         private final String label;
 

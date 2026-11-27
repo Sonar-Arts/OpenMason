@@ -14,6 +14,19 @@ public interface IMeshGpuSync {
     /** Corner positions and UVs were re-derived; triangles unchanged. */
     void verticesChanged();
 
+    /**
+     * Only the corners in {@code spans} ({@code first, count} pairs, ascending) changed position (and UVs when
+     * {@code uvs}): a positions-only move of the live derivation (#175). Lets the GPU sync upload those ranges only.
+     * The default treats it as a whole-buffer change.
+     */
+    default void cornersChanged(int[] spans, boolean uvs) {
+        if (uvs) {
+            verticesChanged();
+        } else {
+            positionsChanged();
+        }
+    }
+
     /** Corners and triangles were re-derived (topology or face change). */
     void structureChanged();
 

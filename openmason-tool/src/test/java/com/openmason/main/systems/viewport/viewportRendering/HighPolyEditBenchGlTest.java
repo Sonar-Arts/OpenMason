@@ -397,6 +397,41 @@ class HighPolyEditBenchGlTest {
             }
         });
 
+        // The gizmo's real path (#175 F2): a transform interaction, palette-only frames, one re-bake on release
+        pm.beginTransformInteraction();
+        frames("part gizmo drag frame (1 part)", f -> pm.setPartTransform("part1",
+                PartTransform.identity().withTranslation(new Vector3f(0, 0.02f * (f + 2), 0))));
+        EditCostStats.reset();
+        t0 = System.nanoTime();
+        pm.endTransformInteraction();
+        drawFrame();
+        endFrame();
+        row("part gizmo release (+frame)", (System.nanoTime() - t0) / 1e6);
+        pm.beginTransformInteraction();
+        frames("group gizmo drag frame (4 parts)", f -> {
+            for (int p = 0; p < PARTS; p++) {
+                pm.setPartTransform("part" + p,
+                        PartTransform.identity().withTranslation(new Vector3f(0.02f * (f + 2), 0, 0)));
+            }
+        });
+        EditCostStats.reset();
+        t0 = System.nanoTime();
+        pm.endTransformInteraction();
+        drawFrame();
+        endFrame();
+        row("group gizmo release (+frame)", (System.nanoTime() - t0) / 1e6);
+
+        // Visibility toggle (hide + show one part, each followed by a frame)
+        EditCostStats.reset();
+        t0 = System.nanoTime();
+        pm.setPartVisible("part2", false);
+        drawFrame();
+        endFrame();
+        pm.setPartVisible("part2", true);
+        drawFrame();
+        endFrame();
+        row("visibility hide+show (2 frames)", (System.nanoTime() - t0) / 1e6);
+
         // Select-all overlay frames (each mode), selection change cost first
         for (EditMode mode : new EditMode[] {EditMode.VERTEX, EditMode.EDGE, EditMode.FACE}) {
             EditModeManager.getInstance().setMode(mode);

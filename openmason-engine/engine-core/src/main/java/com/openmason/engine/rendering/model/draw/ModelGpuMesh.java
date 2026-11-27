@@ -430,6 +430,61 @@ public final class ModelGpuMesh implements AutoCloseable {
         uvFloats = uploadFloats(GL15.GL_ARRAY_BUFFER, uvVbo, uvs, uvFloats);
     }
 
+    /**
+     * Sub-upload of corners {@code [first, first + count)} of {@code positions} (#175: a drag frame re-sends only the
+     * touched corners). Falls back to {@link #updatePositions} when the buffer does not hold
+     * {@code positions.length} floats yet.
+     */
+    public void updatePositionRange(float[] positions, int first, int count) {
+        if (positions == null || positions.length != positionFloats) {
+            updatePositions(positions);
+            return;
+        }
+        uploadFloatRange(positionVbo, positions, first * 3, count * 3);
+    }
+
+    /** {@link #updatePositionRange} for the UV buffer ({@code u,v} per corner). */
+    public void updateUvRange(float[] uvs, int first, int count) {
+        if (uvs == null || uvs.length != uvFloats) {
+            updateUvs(uvs);
+            return;
+        }
+        uploadFloatRange(uvVbo, uvs, first * 2, count * 2);
+    }
+
+    /**
+     * Sub-upload of the octahedral normals of corners {@code [first, first + count)} (see {@link #updateNormals});
+     * a full upload when the buffer does not hold {@code octNormals.length / 2} corners yet.
+     */
+    public void updateNormalsRange(short[] octNormals, int first, int count) {
+        int n = octNormals == null ? 0 : octNormals.length / 2;
+        if (n == 0 || n != normalVertices || normalVbo == 0) {
+            updateNormals(octNormals);
+            return;
+        }
+        int from = Math.max(0, first);
+        int to = Math.min(n, first + count);
+        if (to <= from) return;
+        java.nio.ShortBuffer buffer = staging((long) (to - from) * 4L).asShortBuffer();
+        buffer.put(octNormals, from * 2, (to - from) * 2).flip();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, normalVbo);
+        GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, (long) from * 4L, buffer);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        uploadedBytes += (long) (to - from) * 4L;
+    }
+
+    private void uploadFloatRange(int buffer, float[] data, int firstFloat, int floatCount) {
+        int from = Math.max(0, firstFloat);
+        int to = Math.min(data.length, firstFloat + floatCount);
+        if (to <= from) return;
+        FloatBuffer fb = staging((long) (to - from) * Float.BYTES).asFloatBuffer();
+        fb.put(data, from, to - from).flip();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, buffer);
+        GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, (long) from * Float.BYTES, fb);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        uploadedBytes += (long) (to - from) * Float.BYTES;
+    }
+
     /** Replace the element buffer. */
     public void updateIndices(int[] indices) {
         ensureCreated();

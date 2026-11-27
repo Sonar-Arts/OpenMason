@@ -68,9 +68,30 @@ public final class RenderMeshBuilder {
             m.setFaces(mesh, CendaMesh.STAGE_RENDER | CendaMesh.STAGE_TOPOLOGY);
             logTriangulationFallbacks(m);
             RenderMesh rm = renderMeshOf(m);
-            return new Derivation(m, rm, MeshTopologyBuilder.fromNative(m, mesh, rm));
+            return new Derivation(m, rm, assembleTopology(m, mesh, rm));
         } catch (RuntimeException e) {
             m.close();
+            throw e;
+        }
+    }
+
+    /**
+     * Render mesh AND topology of a freshly imported mesh (#175 F3 + INTEG): {@code imported} is the native mesh of
+     * {@link MeshImporter#importForDerive} (FACES current) and {@code mesh} the {@link EditableMesh} that import
+     * returned. The mappings are set and TRIANGULATE / RENDER / TOPOLOGY built on that native mesh - the soup is
+     * imported once and derived once, the mesh is never handed back to native code. Equals {@link #derive} of
+     * {@code mesh} bit for bit. Takes ownership of {@code imported} (closed with the derivation, or on failure).
+     */
+    public static Derivation deriveImported(CendaMesh imported, EditableMesh mesh,
+                                            IFaceTextureManager textureManager) {
+        try {
+            imported.setMappings(mesh, textureManager);
+            imported.build(CendaMesh.STAGE_TRIANGULATE | CendaMesh.STAGE_RENDER | CendaMesh.STAGE_TOPOLOGY);
+            logTriangulationFallbacks(imported);
+            RenderMesh rm = renderMeshOf(imported);
+            return new Derivation(imported, rm, assembleTopology(imported, mesh, rm));
+        } catch (RuntimeException e) {
+            imported.close();
             throw e;
         }
     }
@@ -128,23 +149,7 @@ public final class RenderMeshBuilder {
          *         TOPOLOGY when the topology geometry was refreshed; 0 when nothing moved
          */
         public int movePositions(EditableMesh mesh, int[] vertexIds) {
-            if (vertexIds == null || vertexIds.length == 0) {
-                lastMovedFaceIds = new int[0];
-                return 0;
-            }
-            float[] xyz = new float[vertexIds.length * 3];
-            Vector3f p = new Vector3f();
-            for (int i = 0; i < vertexIds.length; i++) {
-                mesh.position(vertexIds[i], p);
-                xyz[i * 3] = p.x;
-                xyz[i * 3 + 1] = p.y;
-                xyz[i * 3 + 2] = p.z;
-            }
-            int changes = nativeMesh.moveVertices(vertexIds, xyz);
-            int[] slots = nativeMesh.ints(CendaMesh.A_MOVED_FACES);
-            int[] faceIds = nativeMesh.ints(CendaMesh.A_FACE_IDS);
-            lastMovedFaceIds = new int[slots.length];
-            for (int i = 0; i < slots.length; i++) lastMovedFaceIds[i] = faceIds[slots[i]];
+            int changes = moveNative(mesh, vertexIds);
             if (changes == 0) {
                 return 0;
             }
@@ -160,6 +165,110 @@ public final class RenderMeshBuilder {
             return changes;
         }
 
+        /**
+         * {@link #movePositions} for a long-lived editor mesh (#175 INTEG): the SAME {@link #renderMesh()} record is
+         * kept and only the touched corners' positions and UVs are copied into its arrays (the {@link
+         * #lastCornerSpans()}), the index array is rewritten in place when a face re-triangulated (INDICES), and the
+         * topology is refreshed in place. O(moved corners) Java work instead of copying every array per drag frame.
+         * Readers that hold {@code renderMesh()}'s arrays see the new values; take a copy to keep the old ones.
+         *
+         * @return the {@link CendaMesh} {@code CHANGED_*} bits, as {@link #movePositions}
+         */
+        public int movePositionsInPlace(EditableMesh mesh, int[] vertexIds) {
+            int changes = moveNative(mesh, vertexIds);
+            if (changes == 0) {
+                return 0;
+            }
+            RenderMesh rm = renderMesh;
+            java.lang.foreign.MemorySegment positions = nativeMesh.view(CendaMesh.A_CORNER_POSITIONS);
+            java.lang.foreign.MemorySegment uvs = (changes & CendaMesh.CHANGED_UVS) != 0
+                ? nativeMesh.view(CendaMesh.A_CORNER_UVS) : null;
+            for (int s = 0; s < lastCornerSpans.length; s += 2) {
+                int first = lastCornerSpans[s];
+                int count = lastCornerSpans[s + 1];
+                java.lang.foreign.MemorySegment.copy(positions, java.lang.foreign.ValueLayout.JAVA_FLOAT,
+                    first * 12L, rm.vertices(), first * 3, count * 3);
+                if (uvs != null) {
+                    java.lang.foreign.MemorySegment.copy(uvs, java.lang.foreign.ValueLayout.JAVA_FLOAT,
+                        first * 8L, rm.texCoords(), first * 2, count * 2);
+                }
+            }
+            if ((changes & CendaMesh.CHANGED_INDICES) != 0) {
+                java.lang.foreign.MemorySegment indices = nativeMesh.view(CendaMesh.A_TRI_INDICES);
+                java.lang.foreign.MemorySegment.copy(indices, java.lang.foreign.ValueLayout.JAVA_INT, 0L,
+                    rm.indices(), 0, rm.indices().length);
+            }
+            if (topology != null) {
+                MeshTopologyBuilder.refreshMoved(topology, nativeMesh, lastMovedFaceIds, rm.vertices());
+            }
+            return changes;
+        }
+
+        /**
+         * The render-corner ranges the last move touched: {@code first, count} pairs, ascending and disjoint (the
+         * corners of the touched faces - every moved position and re-projected UV is inside; nearby ranges are
+         * merged, at most {@value #MAX_SPANS} pairs). For range uploads of positions / UVs. Empty before a move.
+         */
+        public int[] lastCornerSpans() {
+            return lastCornerSpans.clone();
+        }
+
+        /** Merge two touched corner ranges closer than this (a few draw-sized uploads beat many tiny ones). */
+        private static final int SPAN_GAP = 256;
+        static final int MAX_SPANS = 8;
+
+        private int[] lastCornerSpans = new int[0];
+
+        /** The native move + the touched faces / corner spans (shared by both move flavours). */
+        private int moveNative(EditableMesh mesh, int[] vertexIds) {
+            if (vertexIds == null || vertexIds.length == 0) {
+                lastMovedFaceIds = new int[0];
+                lastCornerSpans = new int[0];
+                return 0;
+            }
+            float[] xyz = new float[vertexIds.length * 3];
+            Vector3f p = new Vector3f();
+            for (int i = 0; i < vertexIds.length; i++) {
+                mesh.position(vertexIds[i], p);
+                xyz[i * 3] = p.x;
+                xyz[i * 3 + 1] = p.y;
+                xyz[i * 3 + 2] = p.z;
+            }
+            int changes = nativeMesh.moveVertices(vertexIds, xyz);
+            java.lang.foreign.MemorySegment slots = nativeMesh.view(CendaMesh.A_MOVED_FACES);
+            java.lang.foreign.MemorySegment faceIds = nativeMesh.view(CendaMesh.A_FACE_IDS);
+            java.lang.foreign.MemorySegment offsets = nativeMesh.view(CendaMesh.A_LOOP_OFFSETS);
+            java.lang.foreign.ValueLayout.OfInt i32 = java.lang.foreign.ValueLayout.JAVA_INT;
+            int n = slots == null ? 0 : (int) (slots.byteSize() / 4);
+            lastMovedFaceIds = new int[n];
+            int[] spans = new int[Math.max(2, Math.min(n, 64) * 2)];
+            int spanCount = 0;
+            for (int i = 0; i < n; i++) {
+                int slot = slots.getAtIndex(i32, i);
+                lastMovedFaceIds[i] = faceIds.getAtIndex(i32, slot);
+                int start = offsets.getAtIndex(i32, slot);
+                int end = offsets.getAtIndex(i32, slot + 1);
+                if (spanCount > 0 && start - spans[spanCount - 1] <= SPAN_GAP) {
+                    spans[spanCount - 1] = Math.max(spans[spanCount - 1], end);
+                } else {
+                    if (spanCount == spans.length) spans = java.util.Arrays.copyOf(spans, spans.length * 2);
+                    spans[spanCount++] = start;
+                    spans[spanCount++] = end;
+                }
+            }
+            if (spanCount > MAX_SPANS * 2) {
+                spans[1] = spans[spanCount - 1];
+                spanCount = 2;
+            }
+            int[] out = new int[spanCount];
+            for (int s = 0; s < spanCount; s += 2) {
+                out[s] = spans[s];
+                out[s + 1] = spans[s + 1] - spans[s];
+            }
+            lastCornerSpans = out;
+            return changes;
+        }
+
         /** Face ids the last {@link #movePositions} touched (ascending face slot order). */
         public int[] lastMovedFaceIds() {
             return lastMovedFaceIds.clone();
@@ -168,6 +277,17 @@ public final class RenderMeshBuilder {
         @Override
         public void close() {
             nativeMesh.close();
+        }
+    }
+
+    /** The Java topology services over the native arrays (timed as the edit-cost TOPOLOGY span). */
+    private static MeshTopology assembleTopology(CendaMesh m, EditableMesh mesh, RenderMesh rm) {
+        long t = com.openmason.engine.modeling.core.EditCostStats.begin();
+        try {
+            return MeshTopologyBuilder.fromNative(m, mesh, rm);
+        } finally {
+            com.openmason.engine.modeling.core.EditCostStats.end(
+                com.openmason.engine.modeling.core.EditCostStats.Span.TOPOLOGY, t);
         }
     }
 
@@ -207,6 +327,63 @@ public final class RenderMeshBuilder {
         return mapping != null
             && (mapping.materialId() != MaterialDefinition.DEFAULT.materialId()
                 || !mapping.uvRegion().equals(FaceTextureMapping.FULL_REGION));
+    }
+
+    /**
+     * {@link #authoredUVsMatchProjection(EditableMesh, EditableFace, FaceTextureMapping, float)} for many faces in ONE
+     * native derivation (#175 INTEG: a load checks every mapped face; one native mesh per face was the load's largest
+     * cost after the derive): each face is copied alone (its own corners, no authored UVs) into one batch mesh, so
+     * every projection is exactly the single-face one. {@code mappings.get(i)} belongs to {@code faces.get(i)}
+     * (null = full region, no rotation).
+     */
+    public static boolean[] authoredUVsMatchProjection(EditableMesh mesh, java.util.List<EditableFace> faces,
+                                                       java.util.List<FaceTextureMapping> mappings,
+                                                       float tolerance) {
+        int n = faces.size();
+        boolean[] out = new boolean[n];
+        if (n == 0) {
+            return out;
+        }
+        EditableMesh batch = new EditableMesh();
+        int[] ids = new int[n];
+        FaceTextureMapping[] mapped = new FaceTextureMapping[n];
+        int mappedCount = 0;
+        Vector3f p = new Vector3f();
+        for (int i = 0; i < n; i++) {
+            EditableFace face = faces.get(i);
+            int[] loop = new int[face.loopLength()];
+            for (int k = 0; k < loop.length; k++) {
+                mesh.position(face.vertexAt(k), p);
+                loop[k] = batch.addVertex(p);
+            }
+            batch.addFaceWithId(i, loop);
+            FaceTextureMapping mapping = mappings.get(i);
+            if (mapping != null) {
+                ids[mappedCount] = i;
+                mapped[mappedCount++] = mapping;
+            }
+        }
+        float[] projected;
+        try (CendaMesh m = CendaMesh.create()) {
+            m.setMappings(ids, mapped, mappedCount);
+            m.setFaces(batch, CendaMesh.STAGE_RENDER);
+            projected = m.floats(CendaMesh.A_CORNER_UVS);
+        }
+        int corner = 0;
+        for (int i = 0; i < n; i++) {
+            EditableFace face = faces.get(i);
+            float[] authored = face.cornerUVs();
+            int len = face.loopLength() * 2;
+            boolean match = authored != null && authored.length >= len;
+            for (int k = 0; match && k < len; k++) {
+                if (Math.abs(projected[corner * 2 + k] - authored[k]) > tolerance) {
+                    match = false;
+                }
+            }
+            out[i] = match;
+            corner += face.loopLength();
+        }
+        return out;
     }
 
     /**

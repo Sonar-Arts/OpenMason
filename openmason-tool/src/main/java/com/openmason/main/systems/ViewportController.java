@@ -819,6 +819,8 @@ public class ViewportController {
         if (vertexData == null) {
             vertexData = new com.openmason.main.systems.skeleton.vertexdata.VertexDataAuthoring(
                     modelRenderer.getPartManager());
+            // The scene viewport previews the shape-key sliders and hidden groups live (#175 INTEG).
+            modelRenderer.setVertexDataPreview(vertexData.previewSource());
         }
         return vertexData;
     }

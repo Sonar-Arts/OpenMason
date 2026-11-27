@@ -64,10 +64,10 @@ public class MeshMutationCoordinator implements IMeshMutationCoordinator {
 
     /**
      * Move one vertex (identified by any of its render corners). Light path
-     * for interactive drags: updates the editable position and every derived
-     * corner copy, marks the GPU positions stale, and notifies — topology/normal/UV
-     * re-derivation is deferred to the next structural rebuild, exactly as
-     * the legacy path deferred it.
+     * for interactive drags: updates the editable position, refreshes the live derivation in place (corner copies,
+     * projected UVs, triangulation and topology face geometry of the touched faces, #175 INTEG; without one only the
+     * corner copies, the rest waits for {@link #commitVertexPositions()}), marks the GPU positions stale, and
+     * notifies.
      */
     @Override
     public void updateVertexPosition(int globalIndex, Vector3f position) {
@@ -80,12 +80,17 @@ public class MeshMutationCoordinator implements IMeshMutationCoordinator {
         mesh().setPosition(vertexId, position);
 
         int[] corners = uniqueMapper.getMeshIndicesForUniqueVertex(vertexId);
-        vertexManager.updateVertexPositions(corners, position);
-
-        gpuSync.positionsChanged();
+        int changes = rebuildPipeline.movePositions(new int[] {vertexId});
+        if (changes < 0) {
+            vertexManager.updateVertexPositions(corners, position);
+            gpuSync.positionsChanged();
+        }
 
         if (changeNotifier.getListenerCount() > 0) {
             changeNotifier.notifyVertexPositionChanged(vertexId, position, corners);
+        }
+        if (changes > 0 && (changes & com.openmason.engine.modeling.editable.CendaMesh.CHANGED_INDICES) != 0) {
+            rebuildPipeline.notifyRetriangulated();
         }
 
         logger.trace("Moved vertex {} ({} corners) to ({}, {}, {})",
@@ -93,11 +98,12 @@ public class MeshMutationCoordinator implements IMeshMutationCoordinator {
     }
 
     /**
-     * Positions-only move of several editable vertices at once (an interactive drag frame, an undo step, #175):
-     * each vertex's editable position and every corner copy are written once, the GPU positions are marked stale
-     * and listeners get ONE batched notification. Like {@link #updateVertexPosition}, the derived data that
-     * depends on positions (projected UVs, re-triangulation of non-planar polygons, topology face geometry) is
-     * left for {@link #commitVertexPositions()} - call it when the interaction ends.
+     * Positions-only move of several editable vertices at once (an interactive drag frame, an undo step, #175): each
+     * vertex's editable position is written, the live derivation is refreshed in place in ONE native call (corner
+     * positions, projected UVs, re-triangulated faces, topology face geometry; GPU sync of the touched corner ranges
+     * only), and listeners get ONE batched notification. Without a live derivation (a deferred load bracket, a stale
+     * one) only the corner copies are written and {@link #commitVertexPositions()} re-derives. Call
+     * {@link #commitVertexPositions()} when the interaction ends either way.
      *
      * @param vertexIds editable vertex ids (duplicates allowed: the last position wins)
      * @param positions {@code x,y,z} per id
@@ -111,32 +117,48 @@ public class MeshMutationCoordinator implements IMeshMutationCoordinator {
         int[][] corners = new int[n][];
         Vector3f p = new Vector3f();
         int vertexCount = mesh.vertexCount();
+        int[] valid = new int[n];
+        int validCount = 0;
         for (int i = 0; i < n; i++) {
             int id = vertexIds[i];
-            p.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
             if (id < 0 || id >= vertexCount) {
                 corners[i] = new int[0];
                 continue;
             }
+            p.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
             mesh.setPosition(id, p);
             int[] c = uniqueMapper.getMeshIndicesForUniqueVertex(id);
             corners[i] = c != null ? c : new int[0];
-            vertexManager.updateVertexPositions(corners[i], p);
+            valid[validCount++] = id;
         }
-        gpuSync.positionsChanged();
+        int[] moved = validCount == n ? valid : java.util.Arrays.copyOf(valid, validCount);
+        int changes = rebuildPipeline.movePositions(moved);
+        if (changes < 0) {
+            for (int i = 0; i < n; i++) {
+                if (corners[i].length == 0) continue;
+                p.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                vertexManager.updateVertexPositions(corners[i], p);
+            }
+            gpuSync.positionsChanged();
+        }
         if (changeNotifier.getListenerCount() > 0) {
             int[] ids = n == vertexIds.length ? vertexIds : java.util.Arrays.copyOf(vertexIds, n);
             changeNotifier.notifyVertexPositionsChanged(ids, positions, corners);
         }
+        // A face re-triangulated: the overlays' triangle data follows (positions alone were covered above).
+        if (changes > 0 && (changes & com.openmason.engine.modeling.editable.CendaMesh.CHANGED_INDICES) != 0) {
+            rebuildPipeline.notifyRetriangulated();
+        }
     }
 
     /**
-     * Ends an interactive position edit made through {@link #moveVertices} / {@link #updateVertexPosition}: one
-     * position refresh re-derives what follows positions (projected UVs, triangulation, topology) and tells the
-     * listeners the geometry was rebuilt. The draw batches stay valid unless the triangles changed.
+     * Ends an interactive position edit made through {@link #moveVertices} / {@link #updateVertexPosition}. With
+     * the live derivation (#175 INTEG) everything already follows the positions: the shading stores catch up and the
+     * overlays rebuild only when a face re-triangulated; otherwise one position refresh re-derives (projected UVs,
+     * triangulation, topology) and tells the listeners the geometry was rebuilt.
      */
     public void commitVertexPositions() {
-        rebuildPipeline.refreshPositionsFromEditable();
+        rebuildPipeline.commitPositions();
     }
 
     /**
