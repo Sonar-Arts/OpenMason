@@ -7,6 +7,7 @@
 #include "cenda/anim_graph.h"
 
 #include <cmath>
+#include <numbers>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -736,6 +737,81 @@ void test_modifiers() {
     cr_rig_destroy(rig);
 }
 
+// Stonebreak #460: an aim joint's own limit (degrees around the reference pose) clamps the look like the old game
+// clamps did (yaw 70 / pitch 45 here); inside it the head points straight at the target; the .omchar's limit for the
+// same joint wins; the limit round-trips through the format.
+const char* kAimLimit = R"({"format": "omanimgraph", "version": "1.0",
+  "slots": ["pose"], "targets": ["look"], "root": "c",
+  "nodes": [{"id": "c", "type": "clip", "slot": "pose"}],
+  "modifiers": [
+    {"type": "aim", "joints": [{"joint": "head", "limit": {"min": [-45, -70, -10], "max": [45, 70, 10]}}],
+     "target": "look"}
+  ]})";
+
+void test_aim_limits() {
+    auto bone = [](int parent, float py, float ey) {
+        cr_joint_desc d{};
+        d.parent = parent;
+        d.kind = CR_JOINT_BONE;
+        d.flags = CR_JOINT_HAS_GEOMETRY;
+        d.pos[1] = py;
+        d.scale[0] = d.scale[1] = d.scale[2] = 1.f;
+        d.endpoint[1] = ey;
+        return d;
+    };
+    cr_joint_desc j[2] = {bone(-1, 1.f, 0.5f), bone(0, 0.f, 0.25f)};
+    const char* names[2] = {"body", "head"};
+    cr_rig* rig = cr_rig_create(j, 2, names, names);
+    cg_graph* g = graph(kAimLimit);
+    cc_bytes* a = cg_graph_write(g);
+    std::string text(reinterpret_cast<const char*>(cc_bytes_data(a)), static_cast<size_t>(cc_bytes_size(a)));
+    CHECK(text.find("\"limit\"") != std::string::npos);
+    cg_graph* g2 = graph(text);
+    cc_bytes* b = cg_graph_write(g2);
+    CHECK(cc_bytes_size(a) == cc_bytes_size(b) && std::memcmp(cc_bytes_data(a), cc_bytes_data(b), static_cast<size_t>(cc_bytes_size(a))) == 0);
+    cc_bytes_destroy(a);
+    cc_bytes_destroy(b);
+    cg_graph_destroy(g2);
+    std::string bad = kAimLimit;
+    bad.replace(bad.find("[45, 70, 10]"), 12, "[-50, 70, 10]");
+    CHECK(refuse(bad) == CG_ERR_FORMAT);  // min > max
+
+    cm_clip* rest = cm_clip_create();
+    cm_header h{30.f, 1.f, 1, 0, 0.f, 0.f, 0};
+    cm_clip_header_set(rest, &h);
+    std::vector<float> w(2 * 16);
+    auto look_yaw = [&](cg_instance* inst, float yaw_deg) {
+        const double r = yaw_deg * std::numbers::pi / 180.0;
+        const float target[3] = {static_cast<float>(-std::sin(r) * 10.0), 1.5f, static_cast<float>(-std::cos(r) * 10.0)};
+        CHECK(cg_instance_set_target(inst, 0, CR_TARGET_MODEL, target, nullptr) == CG_OK);
+        CHECK(cg_instance_evaluate(inst, 1.f / 60.f, nullptr, 0, nullptr, nullptr, w.data(), nullptr) == CG_OK);
+        const float fx = -w[16 + 8], fz = -w[16 + 10];  // the head's -Z axis
+        const float yaw = static_cast<float>(std::atan2(-fx, -fz) * 180.0 / std::numbers::pi); return yaw;
+    };
+    int32_t unresolved = -1;
+    cg_instance* inst = cg_instance_create(g, rig, nullptr, &unresolved);
+    CHECK(unresolved == 0);
+    bind(inst, g, "pose", rest);
+    CHECK(near(look_yaw(inst, 30.f), 30.f, 0.1f));    // inside the limit: straight at the target
+    CHECK(near(look_yaw(inst, -50.f), -50.f, 0.1f));
+    CHECK(near(look_yaw(inst, 120.f), 70.f, 1.f));    // clamped at the joint's own limit
+    CHECK(near(look_yaw(inst, -150.f), -70.f, 1.f));
+    cg_instance_destroy(inst);
+
+    cc_char* c = cc_char_create();
+    CHECK(cc_char_set_skeleton(c, rig) == CC_OK);
+    const float mn[3] = {-45.f, -20.f, -10.f}, mx[3] = {45.f, 20.f, 10.f};
+    CHECK(cc_char_limit_set(c, "head", mn, mx) == CC_OK);
+    inst = cg_instance_create(g, rig, c, &unresolved);
+    bind(inst, g, "pose", rest);
+    CHECK(near(look_yaw(inst, 120.f), 20.f, 1.f));    // the character's limit wins
+    cg_instance_destroy(inst);
+    cc_char_destroy(c);
+    cm_clip_destroy(rest);
+    cg_graph_destroy(g);
+    cr_rig_destroy(rig);
+}
+
 }  // namespace
 
 // #164: shared nodes (a DAG) are evaluated once per frame: one clip clock, influence summed over the uses.
@@ -872,6 +948,7 @@ int main() {
     test_sync_root_motion_notifies_curves();
     test_determinism();
     test_modifiers();
+    test_aim_limits();
     if (failures != 0) {
         std::fprintf(stderr, "anim_graph: %d check(s) failed\n", failures);
         return 1;

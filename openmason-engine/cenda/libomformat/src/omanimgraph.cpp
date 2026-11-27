@@ -486,6 +486,15 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                 aj.joint = str_field(e, "joint", ew, true);
                 aj.weight = static_cast<float>(num_field(e, "weight", ew, 1.0));
                 if (aj.weight < 0.f) fail(ew + ": weight must be >= 0");
+                if (yyjson_val* lim = yyjson_obj_get(e, "limit"); lim != nullptr) {
+                    if (!yyjson_is_obj(lim)) fail(ew + ": limit must be an object");
+                    aj.has_limit = true;
+                    vec3_field(lim, "min", ew + " limit", aj.limit_min);
+                    vec3_field(lim, "max", ew + " limit", aj.limit_max);
+                    for (int c = 0; c < 3; ++c) {
+                        if (aj.limit_min[c] > aj.limit_max[c]) fail(ew + ": limit min must be <= max");
+                    }
+                }
                 m.aim.push_back(std::move(aj));
             }
             if (!t_draft && (m.aim.empty() || m.aim.size() > 16)) fail(at + ": aim needs 1..16 joints");
@@ -1207,6 +1216,12 @@ std::string write_impl(const Graph& g) {
                         yyjson_mut_val* jo = yyjson_mut_obj(d);
                         put(d, jo, "joint", mstr(d, a.joint));
                         if (a.weight != 1.f) put(d, jo, "weight", yyjson_mut_float(d, a.weight));
+                        if (a.has_limit) {
+                            yyjson_mut_val* lo = yyjson_mut_obj(d);
+                            put(d, lo, "min", vec3(a.limit_min));
+                            put(d, lo, "max", vec3(a.limit_max));
+                            put(d, jo, "limit", lo);
+                        }
                         yyjson_mut_arr_append(js, jo);
                     }
                     put(d, o, "joints", js);

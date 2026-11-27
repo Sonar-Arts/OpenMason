@@ -43,8 +43,9 @@
 //                     param multiplied in, weightCurve?: curve name multiplied in.
 //     twoBone         upper, mid, end, target, pole?, soft?: 0, matchRotation?: false
 //     fabrik | ccd    start, end, target, iterations?: 10, tolerance?: 1e-4
-//     aim             joints: [ {joint, weight?: 1} ] parents first, target, axis?: [0,0,-1], each?: false,
-//                     limits?: true (the .omchar joint limits)
+//     aim             joints: [ {joint, weight?: 1, limit?: {min: [x,y,z], max: [x,y,z]}} ] parents first, target,
+//                     axis?: [0,0,-1], each?: false, limits?: true (the .omchar joint limits; a joint's own `limit`
+//                     - local Euler degrees around the reference pose - applies when the .omchar has none for it)
 //     constraint      kind: point | orient | parent | aim | copy, joint, target, offset?: [x,y,z],
 //                     offsetRot?: [x,y,z] degrees, axis?: [x,y,z] (aim)
 //     spring          start, end, stiffness?: 1, drag?: 0.4, gravity?: [x,y,z], radius?: 0, step?: 1/60
@@ -200,6 +201,11 @@ enum class ConstraintKind : int { Point = 0, Orient = 1, Parent = 2, Aim = 3, Co
 struct AimJoint {
     std::string joint;
     float weight = 1.f;
+    // Optional limit (Stonebreak #460): local Euler degrees around the reference pose, per axis. Used when the
+    // character has no limit for this joint (the .omchar's wins); only with the modifier's `limits` on.
+    bool has_limit = false;
+    float limit_min[3]{0.f, 0.f, 0.f};
+    float limit_max[3]{0.f, 0.f, 0.f};
 };
 
 struct Limb {

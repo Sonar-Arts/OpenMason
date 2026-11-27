@@ -241,14 +241,34 @@ Quat parent_rot(const cr_modstack& s, int j) {
     return p >= 0 ? rotation_of(s.child[static_cast<size_t>(p)]) : Quat{};
 }
 
+// How far relative Euler angles (degrees, wrapped) lie outside a limit box: the summed excess per axis.
+double limit_excess(const Limit& l, const double rel[3]) {
+    double e = 0.0;
+    for (int c = 0; c < 3; ++c) {
+        if (rel[c] < l.mn[c]) e += l.mn[c] - rel[c];
+        else if (rel[c] > l.mx[c]) e += rel[c] - l.mx[c];
+    }
+    return e;
+}
+
 void apply_limit(cr_modstack& s, int j) {
     const Limit& l = s.limits[static_cast<size_t>(j)];
     if (!l.has) return;
     float* rot = s.pose->v[static_cast<size_t>(j)].rot;
+    // XYZ Euler angles name one rotation twice: (x, y, z) == (x + 180, 180 - y, z + 180). A turn past 90 degrees
+    // about Y decomposes on the second branch (x and z near 180), and clamping that per axis mixed a plain yaw into
+    // pitch and roll (a head looking behind it twisted sideways; Stonebreak #460). Clamp the branch nearer the box;
+    // a pose inside the limits keeps its own angles.
+    double rel[3], alt[3];
+    for (int c = 0; c < 3; ++c) rel[c] = wrap180(static_cast<double>(rot[c]) - l.ref[c]);
+    alt[0] = wrap180(static_cast<double>(rot[0]) + 180.0 - l.ref[0]);
+    alt[1] = wrap180(180.0 - static_cast<double>(rot[1]) - l.ref[1]);
+    alt[2] = wrap180(static_cast<double>(rot[2]) + 180.0 - l.ref[2]);
+    const double e = limit_excess(l, rel);
+    const double* use = (e > 0.0 && limit_excess(l, alt) < e) ? alt : rel;
     for (int c = 0; c < 3; ++c) {
-        const double rel = std::clamp(wrap180(static_cast<double>(rot[c]) - l.ref[c]), static_cast<double>(l.mn[c]),
-                                      static_cast<double>(l.mx[c]));
-        rot[c] = static_cast<float>(l.ref[c] + rel);
+        const double clamped = std::clamp(use[c], static_cast<double>(l.mn[c]), static_cast<double>(l.mx[c]));
+        rot[c] = static_cast<float>(l.ref[c] + clamped);
     }
 }
 

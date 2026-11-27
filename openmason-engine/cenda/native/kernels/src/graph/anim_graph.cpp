@@ -1537,11 +1537,23 @@ int32_t build_modifiers(cg_instance& inst) {
         }
         cr_modstack_add_collider(inst.mods, j, col.a, col.b, col.radius);
     }
+    const int32_t ref_joints = cr_rig_joint_count(inst.rig);
+    std::vector<float> ref(static_cast<size_t>(ref_joints) * 9);
+    cr_poses_get(inst.poses, inst.g->ref_slot, ref.data(), nullptr);
+    // Aim joints' own limits (Stonebreak #460), relative to the reference pose; the character's below win.
+    for (const og::Modifier& m : inst.g->doc.modifiers) {
+        if (m.type != og::ModType::Aim || !m.limits) continue;
+        for (const og::AimJoint& a : m.aim) {
+            if (!a.has_limit) continue;
+            const int j = resolve_joint(inst, a.joint);
+            if (j >= 0) {
+                cr_modstack_set_limit(inst.mods, j, ref.data() + static_cast<size_t>(j) * 9 + 3, a.limit_min,
+                                      a.limit_max);
+            }
+        }
+    }
     // Joint limits from the character, relative to its reference pose.
     if (inst.character != nullptr) {
-        const int32_t joints = cr_rig_joint_count(inst.rig);
-        std::vector<float> ref(static_cast<size_t>(joints) * 9);
-        cr_poses_get(inst.poses, inst.g->ref_slot, ref.data(), nullptr);
         for (int32_t i = 0, n = cc_char_limit_count(inst.character); i < n; ++i) {
             const char* jid = nullptr;
             float mn[3], mx[3];
