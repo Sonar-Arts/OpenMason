@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -491,6 +493,12 @@ Modifier parse_modifier(yyjson_val* v, std::size_t i) {
                     aj.has_limit = true;
                     vec3_field(lim, "min", ew + " limit", aj.limit_min);
                     vec3_field(lim, "max", ew + " limit", aj.limit_max);
+                    if (yyjson_val* ord = yyjson_obj_get(lim, "order"); ord != nullptr) {
+                        if (!yyjson_is_str(ord)) fail(ew + ": limit order must be a string");
+                        const std::string_view o = yyjson_get_str(ord);
+                        if (o == "yxz") aj.limit_yxz = true;
+                        else if (o != "xyz") fail(ew + ": limit order must be xyz or yxz");
+                    }
                     for (int c = 0; c < 3; ++c) {
                         if (aj.limit_min[c] > aj.limit_max[c]) fail(ew + ": limit min must be <= max");
                     }
@@ -1220,6 +1228,7 @@ std::string write_impl(const Graph& g) {
                             yyjson_mut_val* lo = yyjson_mut_obj(d);
                             put(d, lo, "min", vec3(a.limit_min));
                             put(d, lo, "max", vec3(a.limit_max));
+                            if (a.limit_yxz) put(d, lo, "order", mstr(d, "yxz"));
                             put(d, jo, "limit", lo);
                         }
                         yyjson_mut_arr_append(js, jo);

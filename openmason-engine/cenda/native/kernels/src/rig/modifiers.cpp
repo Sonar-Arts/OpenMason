@@ -118,6 +118,7 @@ struct Target {
 
 struct Limit {
     bool has = false;
+    int32_t order = CR_LIMIT_XYZ;  // the Euler order the box is read in (CR_LIMIT_*)
     float ref[3]{}, mn[3]{}, mx[3]{};
 };
 
@@ -251,9 +252,69 @@ double limit_excess(const Limit& l, const double rel[3]) {
     return e;
 }
 
+// YXZ Euler degrees of a rotation (R = Ry(y) Rx(x) Rz(z)), returned as [x, y, z].
+void to_euler_yxz_deg(const Quat& q, double out[3]) {
+    double r[9];
+    qmatrix(qnormalize(q), r);
+    const double sx = std::clamp(-r[5], -1.0, 1.0);
+    double x, y, z;
+    if (std::fabs(sx) < 0.9999999) {
+        x = std::asin(sx);
+        y = std::atan2(r[2], r[8]);
+        z = std::atan2(r[3], r[4]);
+    } else {  // gimbal lock: put everything in y
+        x = sx > 0 ? 1.5707963267948966 : -1.5707963267948966;
+        y = std::atan2(-r[6], r[0]);
+        z = 0.0;
+    }
+    out[0] = x * RAD_TO_DEG;
+    out[1] = y * RAD_TO_DEG;
+    out[2] = z * RAD_TO_DEG;
+}
+
+Quat from_euler_yxz_deg(const double e[3]) {
+    const Quat qx = qaxis(1, 0, 0, e[0] * DEG_TO_RAD);
+    const Quat qy = qaxis(0, 1, 0, e[1] * DEG_TO_RAD);
+    const Quat qz = qaxis(0, 0, 1, e[2] * DEG_TO_RAD);
+    return qmul(qmul(qy, qx), qz);
+}
+
+// The YXZ box (Stonebreak #460): yaw about the parent's Y, then pitch, then roll - a head's look range. The turn
+// relative to the reference rotation is read as YXZ Euler; (x, y) say where the joint's Z axis points and z is the twist
+// about it. The angles name the turn twice ((x, y, z) == (180 - x, y + 180, z + 180)): each branch is clamped per axis
+// and the one whose Z axis stays nearer the unclamped Z axis is kept (comparing summed excess instead let the twist an
+// aim leaves pick the wrong branch: a look behind and down came out facing forward). A turn inside the box is left
+// exactly as it was; a look straight behind is a tie and takes the first branch.
+void apply_limit_yxz(cr_modstack& s, int j, const Limit& l) {
+    float* rot = s.pose->v[static_cast<size_t>(j)].rot;
+    const Quat ref = from_euler_deg(l.ref);
+    const Quat rel_q = qmul(qconj(ref), from_euler_deg(rot));
+    double rel[3], alt[3];
+    to_euler_yxz_deg(rel_q, rel);
+    for (int c = 0; c < 3; ++c) rel[c] = wrap180(rel[c]);
+    if (limit_excess(l, rel) <= 0.0) return;
+    alt[0] = wrap180(180.0 - rel[0]);
+    alt[1] = wrap180(rel[1] + 180.0);
+    alt[2] = wrap180(rel[2] + 180.0);
+    double a[3], b[3];
+    for (int c = 0; c < 3; ++c) {
+        a[c] = std::clamp(rel[c], static_cast<double>(l.mn[c]), static_cast<double>(l.mx[c]));
+        b[c] = std::clamp(alt[c], static_cast<double>(l.mn[c]), static_cast<double>(l.mx[c]));
+    }
+    const Quat qa = from_euler_yxz_deg(a), qb = from_euler_yxz_deg(b);
+    const Vec z{0.0, 0.0, 1.0};
+    const Vec want = rotate(rel_q, z);
+    const Quat& keep = dot(rotate(qb, z), want) > dot(rotate(qa, z), want) + 1e-12 ? qb : qa;
+    to_euler_deg(qnormalize(qmul(ref, keep)), rot);
+}
+
 void apply_limit(cr_modstack& s, int j) {
     const Limit& l = s.limits[static_cast<size_t>(j)];
     if (!l.has) return;
+    if (l.order == CR_LIMIT_YXZ) {
+        apply_limit_yxz(s, j, l);
+        return;
+    }
     float* rot = s.pose->v[static_cast<size_t>(j)].rot;
     // XYZ Euler angles name one rotation twice: (x, y, z) == (x + 180, 180 - y, z + 180). A turn past 90 degrees
     // about Y decomposes on the second branch (x and z near 180), and clamping that per axis mixed a plain yaw into
@@ -1169,11 +1230,21 @@ int32_t cr_modstack_set_limit(cr_modstack* stack, int32_t joint, const float* re
         return CR_OK;
     }
     l.has = true;
+    l.order = CR_LIMIT_XYZ;
     for (int c = 0; c < 3; ++c) {
         l.ref[c] = ref != nullptr ? ref[c] : stack->rig->joints[static_cast<size_t>(joint)].rot[c];
         l.mn[c] = mn[c];
         l.mx[c] = mx[c];
     }
+    return CR_OK;
+}
+
+int32_t cr_modstack_set_limit_order(cr_modstack* stack, int32_t joint, int32_t order) {
+    if (stack == nullptr || !valid_joint(*stack->rig, joint) || (order != CR_LIMIT_XYZ && order != CR_LIMIT_YXZ)) {
+        set_error("cr_modstack_set_limit_order: bad joint or order");
+        return CR_ERR_ARG;
+    }
+    stack->limits[static_cast<size_t>(joint)].order = order;
     return CR_OK;
 }
 

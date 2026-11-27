@@ -971,9 +971,14 @@ bool emit(cg_instance& inst, int node) {
             SlotRt& s = inst.mslots[static_cast<size_t>(c.montage_slot)];
             if (s.montage >= 0 && s.weight > 0.f) {
                 const BoundClip& b = inst.montages[static_cast<size_t>(s.montage)].clip;
+                // A montage overrides its slot outright (Unreal's montage slot, Stonebreak #460): every joint is
+                // driven, one the clip does not key at its rest pose - as the clip poses alone, never the source pose
+                // underneath (a goblin's attack keys its parts only, and its bones' walk showed through). The blend
+                // in/out still runs from / to the source; a partial montage takes a mask.
                 cr_pose_op& sm = push(inst, CR_OP_SAMPLE, c.scratch);
                 sm.object = b.rig_clip;
                 sm.time = s.time;
+                sm.flags = static_cast<uint32_t>(CR_POSE_DRIVE_ALL);
                 if (inst.root_motion_mode == CG_ROOT_MOTION_EXTRACT && b.root_joint >= 0 && b.root_axes != 0) {
                     cr_pose_op& r = push(inst, CR_OP_REMOVE_ROOT, c.scratch);
                     r.object = b.rig_clip;
@@ -1549,6 +1554,7 @@ int32_t build_modifiers(cg_instance& inst) {
             if (j >= 0) {
                 cr_modstack_set_limit(inst.mods, j, ref.data() + static_cast<size_t>(j) * 9 + 3, a.limit_min,
                                       a.limit_max);
+                if (a.limit_yxz) cr_modstack_set_limit_order(inst.mods, j, CR_LIMIT_YXZ);
             }
         }
     }

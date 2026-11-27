@@ -43,9 +43,11 @@
 //                     param multiplied in, weightCurve?: curve name multiplied in.
 //     twoBone         upper, mid, end, target, pole?, soft?: 0, matchRotation?: false
 //     fabrik | ccd    start, end, target, iterations?: 10, tolerance?: 1e-4
-//     aim             joints: [ {joint, weight?: 1, limit?: {min: [x,y,z], max: [x,y,z]}} ] parents first, target,
-//                     axis?: [0,0,-1], each?: false, limits?: true (the .omchar joint limits; a joint's own `limit`
-//                     - local Euler degrees around the reference pose - applies when the .omchar has none for it)
+//     aim             joints: [ {joint, weight?: 1, limit?: {min: [x,y,z], max: [x,y,z], order?: xyz|yxz}} ] parents
+//                     first, target, axis?: [0,0,-1], each?: false, limits?: true (the .omchar joint limits; a
+//                     joint's own `limit` - local Euler degrees around the reference pose, read in `order`: xyz =
+//                     the pose's own Euler order, yxz = yaw, then pitch, then roll, a head's yaw x pitch rectangle -
+//                     applies when the .omchar has none for it)
 //     constraint      kind: point | orient | parent | aim | copy, joint, target, offset?: [x,y,z],
 //                     offsetRot?: [x,y,z] degrees, axis?: [x,y,z] (aim)
 //     spring          start, end, stiffness?: 1, drag?: 0.4, gravity?: [x,y,z], radius?: 0, step?: 1/60
@@ -206,6 +208,8 @@ struct AimJoint {
     bool has_limit = false;
     float limit_min[3]{0.f, 0.f, 0.f};
     float limit_max[3]{0.f, 0.f, 0.f};
+    // The Euler order the limit box is read in: false = xyz (the pose's own), true = yxz (yaw, pitch, roll).
+    bool limit_yxz = false;
 };
 
 struct Limb {

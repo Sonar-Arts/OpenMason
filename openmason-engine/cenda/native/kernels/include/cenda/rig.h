@@ -263,8 +263,11 @@ enum {
                                          delta on the spine does not swing the arms' mesh-space aim */
     CR_POSE_NO_PASSTHROUGH = 1u << 2, /* override LAYER (Maya passthrough off): a partial weight blends
                                          from the REST pose, not from the layers below */
-    CR_POSE_CLIP_MASK = 1u << 3       /* SAMPLE: drive only the joints the clip's name mask covers
+    CR_POSE_CLIP_MASK = 1u << 3,      /* SAMPLE: drive only the joints the clip's name mask covers
                                          (an ABI 1 overlay) */
+    CR_POSE_DRIVE_ALL = 1u << 4       /* SAMPLE: every joint is driven, a joint the clip does not key at its
+                                         rest pose - a pose an override LAYER applies outright (a montage,
+                                         Stonebreak #460) */
 };
 
 /* Layer blend modes (cr_pose_op.mode for CR_OP_LAYER). */
@@ -494,6 +497,13 @@ int32_t cr_modstack_set_weight(cr_modstack* stack, int32_t mod, float weight);
 /* A joint's range for CR_MOD_LIMITS: local Euler degrees ref + [min, max] per axis. */
 int32_t cr_modstack_set_limit(cr_modstack* stack, int32_t joint, const float* ref_rot_deg, const float* min_deg,
                               const float* max_deg);
+/* The Euler order a joint's limit box is read in (Stonebreak #460): CR_LIMIT_XYZ (default; every
+ * cr_modstack_set_limit resets it) or CR_LIMIT_YXZ = yaw about the parent's Y, then pitch about X, then roll about
+ * Z (a head's look range: a yaw x pitch rectangle). The YXZ box is applied to the turn relative to the reference
+ * rotation (exact for any reference); a turn inside the box is not changed. */
+#define CR_LIMIT_XYZ 0
+#define CR_LIMIT_YXZ 1
+int32_t cr_modstack_set_limit_order(cr_modstack* stack, int32_t joint, int32_t order);
 /* A collider for spring bones in `joint`'s posed frame: a sphere (a == b) or a capsule a -> b. */
 int32_t cr_modstack_add_collider(cr_modstack* stack, int32_t joint, const float* a, const float* b, float radius);
 /* Model -> world (16 floats, column-major; NULL = identity). */

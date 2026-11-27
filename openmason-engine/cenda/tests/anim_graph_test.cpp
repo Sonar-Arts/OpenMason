@@ -359,6 +359,53 @@ void test_state_machine() {
     cr_rig_destroy(rig);
 }
 
+// Stonebreak #460: a montage overrides its slot outright. A joint the montage clip does not key rests (as the clip
+// poses alone) instead of showing the source pose underneath; a masked montage keeps the source outside its mask.
+void test_montage_overrides() {
+    cr_rig* rig = make_rig();
+    cm_clip* walk = turn("spine", 30.f, 30.f, 1.f, true);  // the source drives the spine
+    cm_clip* stab = turn("arm", 60.f, 60.f, 1.f, false);   // the montage keys only the arm
+    cg_graph* g = graph(R"({"format": "omanimgraph", "version": "1.0", "slots": ["walk"], "root": "out",
+      "nodes": [{"id": "walk", "type": "clip", "slot": "walk"},
+                {"id": "out", "type": "slot", "name": "full", "source": "walk"}]})");
+    cg_instance* inst = cg_instance_create(g, rig, nullptr, nullptr);
+    bind(inst, g, "walk", walk);
+    const int32_t m = cg_instance_add_montage(inst, stab);
+    eval(inst, 0.05f);
+    CHECK(near(rot_y(inst, SPINE), 30.f));
+    CHECK(cg_instance_montage_play(inst, 0, m, 1.f, 0.f, 0.f, nullptr) == CG_OK);
+    eval(inst, 0.05f);
+    CHECK(near(rot_y(inst, ARM), 60.f));
+    CHECK(near(rot_y(inst, SPINE), 0.f));  // not keyed by the montage: rest, never the walk underneath
+    // Half way in, the unkeyed spine blends from the walk toward rest like every other joint.
+    CHECK(cg_instance_montage_stop(inst, 0, 0.f) == CG_OK);
+    eval(inst, 0.05f);
+    CHECK(cg_instance_montage_play(inst, 0, m, 1.f, 0.2f, 0.f, nullptr) == CG_OK);
+    eval(inst, 0.1f);
+    CHECK(near(rot_y(inst, SPINE), 15.f, 0.5f));
+    cg_instance_destroy(inst);
+    cg_graph_destroy(g);
+
+    // Masked to the arm: the spine outside the mask keeps the walk.
+    g = graph(R"({"format": "omanimgraph", "version": "1.0", "slots": ["walk"], "root": "out",
+      "masks": [{"name": "arm", "entries": [{"joint": "arm"}]}],
+      "nodes": [{"id": "walk", "type": "clip", "slot": "walk"},
+                {"id": "out", "type": "slot", "name": "upper", "source": "walk", "mask": "arm"}]})");
+    inst = cg_instance_create(g, rig, nullptr, nullptr);
+    bind(inst, g, "walk", walk);
+    const int32_t m2 = cg_instance_add_montage(inst, stab);
+    eval(inst, 0.05f);
+    CHECK(cg_instance_montage_play(inst, 0, m2, 1.f, 0.f, 0.f, nullptr) == CG_OK);
+    eval(inst, 0.05f);
+    CHECK(near(rot_y(inst, ARM), 60.f));
+    CHECK(near(rot_y(inst, SPINE), 30.f));
+    cg_instance_destroy(inst);
+    cg_graph_destroy(g);
+    cm_clip_destroy(walk);
+    cm_clip_destroy(stab);
+    cr_rig_destroy(rig);
+}
+
 // ---- montages -----------------------------------------------------------------------------------------
 
 void test_montages() {
@@ -812,6 +859,95 @@ void test_aim_limits() {
     cr_rig_destroy(rig);
 }
 
+// Stonebreak #460: a YXZ limit box is a yaw x pitch rectangle. Inside it the aimed head turns exactly as
+// Ry(yaw) Rx(pitch) (roll limited to 0 keeps it level); outside, each angle clamps on its own.
+const char* kAimLimitYxz = R"({"format": "omanimgraph", "version": "1.0",
+  "slots": ["pose"], "targets": ["look"], "root": "c",
+  "nodes": [{"id": "c", "type": "clip", "slot": "pose"}],
+  "modifiers": [
+    {"type": "aim", "joints": [{"joint": "head", "limit": {"min": [-45, -70, 0], "max": [45, 70, 0], "order": "yxz"}}],
+     "target": "look"}
+  ]})";
+
+void test_aim_limits_yxz() {
+    auto bone = [](int parent, float py, float ey) {
+        cr_joint_desc d{};
+        d.parent = parent;
+        d.kind = CR_JOINT_BONE;
+        d.flags = CR_JOINT_HAS_GEOMETRY;
+        d.pos[1] = py;
+        d.scale[0] = d.scale[1] = d.scale[2] = 1.f;
+        d.endpoint[1] = ey;
+        return d;
+    };
+    cr_joint_desc j[2] = {bone(-1, 1.f, 0.5f), bone(0, 0.f, 0.25f)};
+    const char* names[2] = {"body", "head"};
+    cr_rig* rig = cr_rig_create(j, 2, names, names);
+    cg_graph* g = graph(kAimLimitYxz);
+    cc_bytes* a = cg_graph_write(g);
+    std::string text(reinterpret_cast<const char*>(cc_bytes_data(a)), static_cast<size_t>(cc_bytes_size(a)));
+    CHECK(text.find("\"order\": \"yxz\"") != std::string::npos || text.find("\"order\":\"yxz\"") != std::string::npos);
+    cg_graph* g2 = graph(text);
+    cc_bytes* b = cg_graph_write(g2);
+    CHECK(cc_bytes_size(a) == cc_bytes_size(b) && std::memcmp(cc_bytes_data(a), cc_bytes_data(b), static_cast<size_t>(cc_bytes_size(a))) == 0);
+    cc_bytes_destroy(a);
+    cc_bytes_destroy(b);
+    cg_graph_destroy(g2);
+    std::string bad = kAimLimitYxz;
+    bad.replace(bad.find("\"yxz\""), 5, "\"zyx\"");
+    CHECK(refuse(bad) == CG_ERR_FORMAT);
+
+    cm_clip* rest = cm_clip_create();
+    cm_header h{30.f, 1.f, 1, 0, 0.f, 0.f, 0};
+    cm_clip_header_set(rest, &h);
+    std::vector<float> w(2 * 16);
+    int32_t unresolved = -1;
+    cg_instance* inst = cg_instance_create(g, rig, nullptr, &unresolved);
+    CHECK(unresolved == 0);
+    bind(inst, g, "pose", rest);
+    // Ry(yaw) Rx(pitch), row-major.
+    auto ry_rx = [](double yaw_deg, double pitch_deg, double r[9]) {
+        const double y = yaw_deg * std::numbers::pi / 180.0, x = pitch_deg * std::numbers::pi / 180.0;
+        const double cy = std::cos(y), sy = std::sin(y), cx = std::cos(x), sx = std::sin(x);
+        const double m[9] = {cy, sy * sx, sy * cx, 0.0, cx, -sx, -sy, cy * sx, cy * cx};
+        std::memcpy(r, m, sizeof(m));
+    };
+    // The head's world rotation after looking at (yaw, pitch); the largest difference to Ry(ey) Rx(ex).
+    auto look = [&](double yaw, double pitch, double ey, double ex) {
+        double d[9];
+        ry_rx(yaw, pitch, d);
+        const float target[3] = {static_cast<float>(-d[2] * 10.0), static_cast<float>(1.5 - d[5] * 10.0),
+                                 static_cast<float>(-d[8] * 10.0)};
+        CHECK(cg_instance_set_target(inst, 0, CR_TARGET_MODEL, target, nullptr) == CG_OK);
+        CHECK(cg_instance_evaluate(inst, 1.f / 60.f, nullptr, 0, nullptr, nullptr, w.data(), nullptr) == CG_OK);
+        double e[9];
+        ry_rx(ey, ex, e);
+        double worst = 0.0;
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) worst = std::max(worst, std::fabs(static_cast<double>(w[static_cast<size_t>(16 + c * 4 + r)]) - e[r * 3 + c]));
+        }
+        return worst;
+    };
+    CHECK(look(30, 20, 30, 20) < 1e-4);      // inside: exactly yaw then pitch, no roll
+    CHECK(look(60, 40, 60, 40) < 1e-4);      // a diagonal the XYZ box would clamp (its x reads 59 degrees)
+    CHECK(look(69, 44, 69, 44) < 1e-4);
+    CHECK(look(-45, -40, -45, -40) < 1e-4);
+    CHECK(look(0, 60, 0, 45) < 1e-3);        // pitch alone clamps at 45
+    CHECK(look(100, 0, 70, 0) < 1e-3);       // yaw alone clamps at 70
+    CHECK(look(100, 30, 70, 30) < 1e-3);     // the rectangle: yaw clamps, pitch is kept
+    CHECK(look(20, 60, 20, 45) < 1e-3);
+    CHECK(look(-150, 0, -70, 0) < 1e-3);     // behind: a plain yaw, never a twist
+    CHECK(look(120, -50, 70, -45) < 1e-3);
+    CHECK(look(-150, -70, -70, -45) < 1e-3);  // behind and down: the aim's leftover twist must not pick the branch
+    CHECK(look(-110, -81, -70, -45) < 1e-3);
+    CHECK(look(135, 60, 70, 45) < 1e-3);
+    cg_instance_destroy(inst);
+
+    cm_clip_destroy(rest);
+    cg_graph_destroy(g);
+    cr_rig_destroy(rig);
+}
+
 }  // namespace
 
 // #164: shared nodes (a DAG) are evaluated once per frame: one clip clock, influence summed over the uses.
@@ -944,11 +1080,13 @@ int main() {
     test_blend_spaces();
     test_state_machine();
     test_montages();
+    test_montage_overrides();
     test_layers();
     test_sync_root_motion_notifies_curves();
     test_determinism();
     test_modifiers();
     test_aim_limits();
+    test_aim_limits_yxz();
     if (failures != 0) {
         std::fprintf(stderr, "anim_graph: %d check(s) failed\n", failures);
         return 1;

@@ -513,6 +513,7 @@ int32_t run_ops(cr_poses& p, const cr_pose_op* ops, int32_t count) {
             if (op.object == nullptr) return op_fail(CR_ERR_ARG, k, "SAMPLE needs a clip");
             pose_sample(rig, *static_cast<const cr_clip*>(op.object), op.time, (op.flags & CR_POSE_CLIP_MASK) != 0,
                         dst, p.binding);
+            if ((op.flags & CR_POSE_DRIVE_ALL) != 0) std::fill(dst.driven.begin(), dst.driven.end(), uint8_t{1});
             break;
         case CR_OP_COPY:
             if (bad_slot(p, op.a)) return op_fail(CR_ERR_RANGE, k, "COPY source slot out of range");
