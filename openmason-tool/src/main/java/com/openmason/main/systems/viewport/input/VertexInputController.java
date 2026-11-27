@@ -1,5 +1,6 @@
 package com.openmason.main.systems.viewport.input;
 
+import com.openmason.main.systems.rendering.model.editing.picking.ModelPicking;
 import com.openmason.engine.modeling.EditableModel;
 import com.openmason.main.systems.services.commands.MeshSnapshot;
 import com.openmason.main.systems.services.commands.ModelCommandHistory;
@@ -112,6 +113,11 @@ public class VertexInputController {
 
         // Update vertex hover detection
         updateVertexHover(context);
+        // A click on a GPU readback that is still a frame behind reads it now (#175 F4): the click selects what
+        // is under the cursor, never the previous hover
+        if (context.mouseClicked && context.mouseInBounds && ModelPicking.resolveForClick()) {
+            updateVertexHover(context);
+        }
 
         // Handle ESC key to cancel drag or deselect vertex
         if (KeyCodeTranslator.isKeyPressed(GLFW.GLFW_KEY_ESCAPE)) {

@@ -1,6 +1,7 @@
 package com.openmason.main.systems.rendering.model.editing.subrenders.face;
 
 import com.openmason.engine.rendering.viewer.math.CoordinateSystem;
+import com.openmason.main.systems.rendering.model.editing.picking.ModelPicking;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
@@ -145,6 +146,8 @@ public final class FaceHoverDetector {
      * Detect which triangle (if any) the mouse is hovering over.
      * Uses ray-triangle intersection for hit detection.
      * This variant is for triangle mode (post-subdivision) where faces are individual triangles.
+     * With GPU picking ({@link ModelPicking}, #175 F4) the answer is the hovered FACE's first triangle (visible
+     * surfaces only, whichever side faces the camera), else the CPU ray test's hit triangle.
      *
      * @param mouseX Mouse X coordinate in viewport space
      * @param mouseY Mouse Y coordinate in viewport space
@@ -163,6 +166,30 @@ public final class FaceHoverDetector {
                                             Matrix4f modelMatrix,
                                             float[] trianglePositions,
                                             int triangleCount) {
+        if (viewMatrix != null && projectionMatrix != null && modelMatrix != null && triangleCount > 0
+                && viewportWidth > 0 && viewportHeight > 0) {
+            // GPU ID buffer first (#175 F4): the visible surface under the cursor, on the displayed mesh. Returns
+            // the face's first triangle (callers map triangles to faces).
+            int gpu = ModelPicking.triangle(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix,
+                    projectionMatrix, modelMatrix, triangleCount);
+            if (gpu != ModelPicking.UNAVAILABLE) {
+                return gpu;
+            }
+        }
+        return detectHoveredTriangleCpu(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix, projectionMatrix,
+                modelMatrix, trianglePositions, triangleCount);
+    }
+
+    /**
+     * The CPU ray test (fallback without GPU picking): the nearest triangle the mouse ray crosses, either facing.
+     * Same parameters as {@link #detectHoveredTriangle}; returns the hit triangle itself.
+     */
+    public static int detectHoveredTriangleCpu(float mouseX, float mouseY,
+                                               int viewportWidth, int viewportHeight,
+                                               Matrix4f viewMatrix, Matrix4f projectionMatrix,
+                                               Matrix4f modelMatrix,
+                                               float[] trianglePositions,
+                                               int triangleCount) {
         if (trianglePositions == null || triangleCount <= 0) {
             return -1;
         }

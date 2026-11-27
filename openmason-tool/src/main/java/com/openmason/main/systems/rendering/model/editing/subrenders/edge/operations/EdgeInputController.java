@@ -1,5 +1,6 @@
 package com.openmason.main.systems.rendering.model.editing.subrenders.edge.operations;
 
+import com.openmason.main.systems.rendering.model.editing.picking.ModelPicking;
 import com.openmason.engine.modeling.EditableModel;
 import com.openmason.engine.modeling.topology.MeshEdge;
 import com.openmason.engine.modeling.topology.MeshTopology;
@@ -139,6 +140,11 @@ public class EdgeInputController {
 
         // Update edge hover detection
         updateEdgeHover(context);
+        // A click on a GPU readback that is still a frame behind reads it now (#175 F4): the click selects what
+        // is under the cursor, never the previous hover
+        if (context.mouseClicked && context.mouseInBounds && ModelPicking.resolveForClick()) {
+            updateEdgeHover(context);
+        }
 
         // Handle ESC key to cancel drag or deselect edge
         if (KeyCodeTranslator.isKeyPressed(GLFW.GLFW_KEY_ESCAPE)) {

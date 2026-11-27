@@ -1,13 +1,15 @@
 package com.openmason.main.systems.rendering.model.editing.subrenders.vertex;
 
+import com.openmason.main.systems.rendering.model.editing.picking.ModelPicking;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Detects hovered vertex by projecting positions to screen space
- * and checking distance against the vertex point size.
+ * Detects the hovered vertex: from the viewport's GPU ID buffer when it can answer ({@link ModelPicking}, #175 F4 -
+ * visible vertices only), else by projecting positions to screen space and checking distance against the vertex
+ * point size.
  */
 public final class VertexHoverDetector {
 
@@ -38,6 +40,29 @@ public final class VertexHoverDetector {
                                          Matrix4f modelMatrix,
                                          float[] vertexPositions, int vertexCount,
                                          float pointSize) {
+        if (viewMatrix != null && projectionMatrix != null && modelMatrix != null && vertexCount > 0
+                && viewportWidth > 0 && viewportHeight > 0 && pointSize > 0.0f) {
+            // GPU ID buffer first (#175 F4): occlusion-correct, follows the displayed (skinned / posed) mesh
+            int gpu = ModelPicking.vertex(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix,
+                    projectionMatrix, modelMatrix, vertexCount, pointSize);
+            if (gpu != ModelPicking.UNAVAILABLE) {
+                return gpu;
+            }
+        }
+        return detectHoveredVertexCpu(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix, projectionMatrix,
+                modelMatrix, vertexPositions, vertexCount, pointSize);
+    }
+
+    /**
+     * The CPU test (fallback without GPU picking): every vertex projected, the nearest-depth one whose point radius
+     * covers the mouse. Not occlusion-aware. Same parameters and result as {@link #detectHoveredVertex}.
+     */
+    public static int detectHoveredVertexCpu(float mouseX, float mouseY,
+                                             int viewportWidth, int viewportHeight,
+                                             Matrix4f viewMatrix, Matrix4f projectionMatrix,
+                                             Matrix4f modelMatrix,
+                                             float[] vertexPositions, int vertexCount,
+                                             float pointSize) {
         // Validate inputs
         if (viewMatrix == null || projectionMatrix == null || modelMatrix == null) {
             return -1;

@@ -228,6 +228,7 @@ public class ViewportRenderPipeline implements ViewerPass {
 
         // PASS 2: Render content (block/item/model)
         renderContent(viewportState, renderingState, transformState);
+        com.openmason.main.systems.rendering.model.editing.picking.ModelPicking.afterModelDraw(shaderManager.modelRenderer(), modelRenderer, transformState.getTransformMatrix(), renderingState.getMode() == RenderingMode.BLOCK_MODEL); // #175 F4 ID-buffer picking
 
         // While a part / bone gizmo drag or a preview pose moves the model through its GPU palette (#175 F2),
         // the CPU-side element overlays (and the weight heat map) still hold the baked positions: hide them until
@@ -835,6 +836,7 @@ public class ViewportRenderPipeline implements ViewerPass {
             attachmentPreviewRenderer.cleanup();
         }
         weightHeatRenderer.cleanup();
+        com.openmason.main.systems.rendering.model.editing.picking.ModelPicking.close(); // #175 F4
         logger.debug("ViewportRenderPipeline cleanup complete");
     }
 }

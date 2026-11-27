@@ -178,6 +178,7 @@ public final class ModelRenderer {
                          PartMatrices parts, JointPalette skinPalette, Matrix4f view, Matrix4f projection,
                          ModelLighting lighting, Consumer<ShaderProgram> stateHook, ModelAppearance appearance) {
         if (!initialized || litShader == null || !drawable(mesh, plan)) return;
+        if (mesh == captureMesh) capture.set(mesh, plan, appearance, parts, textures, skinPalette);
         plan = plan.forAppearance(appearance);
         ModelDrawPlan drawPlan = plan;
 
@@ -475,5 +476,80 @@ public final class ModelRenderer {
         litShader = null;
         flatShader = null;
         initialized = false;
+    }
+
+    // ---- Draw capture (OpenMason #175 F4) -----------------------------------------------------------------------
+
+    private ModelGpuMesh captureMesh;
+    private final DrawCapture capture = new DrawCapture();
+
+    /**
+     * Remembers what the lit pass draws of {@code mesh} (null stops capturing): an ID / picking pass replays it
+     * ({@link #capturedDraw}) so a pick sees exactly what is on screen - hidden parts and vertex groups, the skin
+     * palette, shape keys (the camera is the replaying pass's own). Costs one reference compare per draw of any other
+     * mesh.
+     */
+    public void captureDrawsOf(ModelGpuMesh mesh) {
+        if (mesh != captureMesh) {
+            captureMesh = mesh;
+            capture.clear();
+        }
+    }
+
+    /** The last lit draw of the {@link #captureDrawsOf captured} mesh, or null before its first draw. */
+    public DrawCapture capturedDraw() {
+        return capture.mesh != null && capture.mesh == captureMesh ? capture : null;
+    }
+
+    /**
+     * What one lit draw drew. The objects are the draw's own (the plan, the part matrices, the caller's palette that
+     * its next draw refills): replay it before the next draw of the mesh. {@link #serial} counts captures.
+     */
+    public static final class DrawCapture {
+        private ModelGpuMesh mesh;
+        private ModelDrawPlan plan;
+        private ModelDrawPlan basePlan;
+        private PartMatrices parts;
+        private MaterialTextures textures;
+        private JointPalette skinPalette;
+        private float[] morphWeights;
+        private long serial;
+
+        void set(ModelGpuMesh mesh, ModelDrawPlan plan, ModelAppearance appearance, PartMatrices parts,
+                 MaterialTextures textures, JointPalette skinPalette) {
+            this.mesh = mesh;
+            this.basePlan = plan;
+            this.plan = plan.forAppearance(appearance);
+            this.parts = appearance != null ? visibleOnly(parts, appearance) : parts;
+            this.textures = textures;
+            this.skinPalette = skinPalette;
+            this.morphWeights = appearance != null ? appearance.morphWeights() : null;
+            serial++;
+        }
+
+        void clear() {
+            mesh = null;
+            plan = null;
+            basePlan = null;
+            parts = null;
+            textures = null;
+            skinPalette = null;
+            morphWeights = null;
+        }
+
+        public ModelGpuMesh mesh() { return mesh; }
+        /** The plan as drawn (cut down to the appearance's visible vertex groups). */
+        public ModelDrawPlan plan() { return plan; }
+        /** The plan the draw was given, before the appearance's vertex-group mask (an editor's edit cage). */
+        public ModelDrawPlan basePlan() { return basePlan; }
+        /** The parts the draw issued, with their {@code model} matrices (hidden parts left out). */
+        public PartMatrices parts() { return parts; }
+        /** The lit pass's textures: a batch whose texture is negative was not drawn. */
+        public MaterialTextures textures() { return textures; }
+        /** The skin palette the mesh was GPU-skinned with, or null (rigid parts). */
+        public JointPalette skinPalette() { return skinPalette; }
+        /** The shape-key weights (null = the mesh's defaults). */
+        public float[] morphWeights() { return morphWeights; }
+        public long serial() { return serial; }
     }
 }

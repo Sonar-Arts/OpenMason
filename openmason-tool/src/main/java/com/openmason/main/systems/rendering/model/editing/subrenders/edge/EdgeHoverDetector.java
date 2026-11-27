@@ -1,6 +1,7 @@
 package com.openmason.main.systems.rendering.model.editing.subrenders.edge;
 
 import com.openmason.engine.rendering.viewer.math.ScreenProjectionUtil;
+import com.openmason.main.systems.rendering.model.editing.picking.ModelPicking;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
@@ -9,7 +10,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Utility class for detecting edge hover interactions.
- * Mirrors VertexHoverDetector pattern but for line segments.
+ * Mirrors VertexHoverDetector pattern but for line segments: the viewport's GPU ID buffer answers when it can
+ * ({@link ModelPicking}, #175 F4 - visible edges only), else every edge is projected on the CPU.
  */
 public final class EdgeHoverDetector {
 
@@ -61,6 +63,41 @@ public final class EdgeHoverDetector {
                                        Matrix4f modelMatrix,
                                        float[] edgePositions, int edgeCount,
                                        float lineWidth) {
+        int gpu = gpuEdge(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix, projectionMatrix, modelMatrix,
+                edgePositions, edgeCount, lineWidth);
+        if (gpu != ModelPicking.UNAVAILABLE) {
+            return gpu;
+        }
+        return detectHoveredEdgeCpu(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix, projectionMatrix,
+                modelMatrix, edgePositions, edgeCount, lineWidth);
+    }
+
+    /**
+     * The GPU ID buffer's edge (#175 F4): the visible edge pixel nearest the mouse within the hit threshold
+     * ({@code lineWidth * 2}), -1, or {@link ModelPicking#UNAVAILABLE} (then the CPU test runs).
+     */
+    private static int gpuEdge(float mouseX, float mouseY, int viewportWidth, int viewportHeight,
+                               Matrix4f viewMatrix, Matrix4f projectionMatrix, Matrix4f modelMatrix,
+                               float[] edgePositions, int edgeCount, float lineWidth) {
+        if (viewMatrix == null || projectionMatrix == null || modelMatrix == null || edgePositions == null
+                || edgeCount <= 0 || viewportWidth <= 0 || viewportHeight <= 0 || lineWidth <= 0.0f) {
+            return ModelPicking.UNAVAILABLE;
+        }
+        return ModelPicking.edge(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix, projectionMatrix,
+                modelMatrix, edgeCount, lineWidth * 2.0f);
+    }
+
+    /**
+     * The CPU test (fallback without GPU picking): every edge projected, the nearest by screen distance within
+     * {@code lineWidth * 2} (depth breaks near-ties). Not occlusion-aware. Same contract as
+     * {@link #detectHoveredEdge}.
+     */
+    public static int detectHoveredEdgeCpu(float mouseX, float mouseY,
+                                          int viewportWidth, int viewportHeight,
+                                          Matrix4f viewMatrix, Matrix4f projectionMatrix,
+                                          Matrix4f modelMatrix,
+                                          float[] edgePositions, int edgeCount,
+                                          float lineWidth) {
         // Validate inputs
         if (viewMatrix == null || projectionMatrix == null || modelMatrix == null) {
             return -1;
@@ -197,6 +234,49 @@ public final class EdgeHoverDetector {
             return EdgeHitResult.NONE;
         }
         if (viewportWidth <= 0 || viewportHeight <= 0 || lineWidth <= 0.0f) {
+            return EdgeHitResult.NONE;
+        }
+
+        int gpu = gpuEdge(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix, projectionMatrix, modelMatrix,
+                edgePositions, edgeCount, lineWidth);
+        if (gpu != ModelPicking.UNAVAILABLE) {
+            return parameterOf(gpu, mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix, projectionMatrix,
+                    modelMatrix, edgePositions, edgeCount);
+        }
+        return detectHoveredEdgeWithParameterCpu(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix,
+                projectionMatrix, modelMatrix, edgePositions, edgeCount, lineWidth);
+    }
+
+    /** The GPU-picked edge's {@code t} and screen distance: its two endpoints projected (O(1)). */
+    private static EdgeHitResult parameterOf(int edge, float mouseX, float mouseY, int viewportWidth,
+                                             int viewportHeight, Matrix4f viewMatrix, Matrix4f projectionMatrix,
+                                             Matrix4f modelMatrix, float[] edgePositions, int edgeCount) {
+        if (edge < 0 || edge >= edgeCount || edge * 6 + 5 >= edgePositions.length) {
+            return EdgeHitResult.NONE;
+        }
+        Matrix4f mvp = new Matrix4f(projectionMatrix).mul(viewMatrix).mul(modelMatrix);
+        float[] scratch = new float[6];
+        float[] tOut = new float[1];
+        Vector4f clip = new Vector4f();
+        if (!project(edgePositions, edge * 6, mvp, viewportWidth, viewportHeight, clip, scratch, 0)
+                || !project(edgePositions, edge * 6 + 3, mvp, viewportWidth, viewportHeight, clip, scratch, 3)) {
+            return new EdgeHitResult(edge, 0f, 0f);
+        }
+        float distance = pointToSegment(mouseX, mouseY, scratch[0], scratch[1], scratch[3], scratch[4], tOut);
+        return new EdgeHitResult(edge, tOut[0], distance);
+    }
+
+    /** The CPU twin of {@link #detectHoveredEdgeWithParameter} (fallback without GPU picking). */
+    public static EdgeHitResult detectHoveredEdgeWithParameterCpu(
+            float mouseX, float mouseY,
+            int viewportWidth, int viewportHeight,
+            Matrix4f viewMatrix, Matrix4f projectionMatrix,
+            Matrix4f modelMatrix,
+            float[] edgePositions, int edgeCount,
+            float lineWidth) {
+        if (viewMatrix == null || projectionMatrix == null || modelMatrix == null
+                || edgePositions == null || edgeCount == 0
+                || viewportWidth <= 0 || viewportHeight <= 0 || lineWidth <= 0.0f) {
             return EdgeHitResult.NONE;
         }
 

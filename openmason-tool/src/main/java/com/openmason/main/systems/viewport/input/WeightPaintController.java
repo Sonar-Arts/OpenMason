@@ -2,6 +2,7 @@ package com.openmason.main.systems.viewport.input;
 
 import com.openmason.engine.rendering.viewer.math.CoordinateSystem;
 import com.openmason.engine.rendering.viewer.transform.TransformState;
+import com.openmason.main.systems.rendering.model.editing.picking.ModelPicking;
 import com.openmason.main.systems.skeleton.SkinAuthoring;
 import com.openmason.main.systems.skeleton.SkinCommandHistory;
 import com.openmason.main.systems.skeleton.SkinStore;
@@ -14,8 +15,9 @@ import org.slf4j.LoggerFactory;
 import java.util.function.Supplier;
 
 /**
- * Weight-paint brush strokes in the viewport. While weight paint is on: the mouse ray picks the visible
- * mesh (the editor's ray/triangle test, {@link SkinAuthoring#raycast}) to place the brush cursor; a left
+ * Weight-paint brush strokes in the viewport. While weight paint is on: the visible surface under the mouse (the
+ * GPU ID buffer's depth, #175 F4; without it the editor's ray/triangle test, {@link SkinAuthoring#raycast}) places
+ * the brush cursor; a left
  * press ON the mesh starts a stroke (one undo step: snapshot on press, pushed on release), and dragging
  * lays dabs ({@link SkinAuthoring#paint}, native) spaced a fraction of the radius apart. A left press off
  * the mesh, or with Alt held, falls through to the camera, so orbiting still works.
@@ -110,9 +112,34 @@ public final class WeightPaintController {
         strokeBefore = null;
     }
 
-    /** The mouse ray in MODEL space against the visible mesh; null when it misses. */
+    /**
+     * The brush's surface point in MODEL space; null when the cursor is off the visible mesh. From the viewport's GPU
+     * ID buffer + depth when it can answer (#175 F4: no per-frame triangle loop; a press on a stale readback reads
+     * it synchronously), else the CPU ray against every visible triangle.
+     */
     private Vector3f pick(SkinAuthoring skin, InputContext context) {
         if (context.viewportWidth <= 0 || context.viewportHeight <= 0) return null;
+        if (context.viewMatrix != null && context.projectionMatrix != null) {
+            Matrix4f model = transformState != null ? transformState.getTransformMatrix() : new Matrix4f();
+            Vector3f point = new Vector3f();
+            int gpu = gpuSurface(context, model, point);
+            if (gpu != ModelPicking.UNAVAILABLE && context.mouseClicked && ModelPicking.resolveForClick()) {
+                gpu = gpuSurface(context, model, point);
+            }
+            if (gpu != ModelPicking.UNAVAILABLE) {
+                return gpu > 0 ? point : null;
+            }
+        }
+        return pickCpu(skin, context);
+    }
+
+    private static int gpuSurface(InputContext context, Matrix4f model, Vector3f out) {
+        return ModelPicking.surface(context.mouseX, context.mouseY, context.viewportWidth, context.viewportHeight,
+                context.viewMatrix, context.projectionMatrix, model, out);
+    }
+
+    /** The mouse ray in MODEL space against the visible mesh; null when it misses. */
+    private Vector3f pickCpu(SkinAuthoring skin, InputContext context) {
         try {
             CoordinateSystem.Ray ray = CoordinateSystem.createWorldRayFromScreen(context.mouseX, context.mouseY,
                     context.viewportWidth, context.viewportHeight, context.viewMatrix, context.projectionMatrix);
