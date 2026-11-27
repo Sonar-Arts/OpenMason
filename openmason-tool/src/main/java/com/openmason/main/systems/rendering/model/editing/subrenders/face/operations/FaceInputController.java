@@ -252,6 +252,11 @@ public class FaceInputController {
             return;
         }
 
+        // No hover picking while a drag runs: the hovered element is frozen until release (#175)
+        if (translationCoordinator != null && translationCoordinator.isDragging()) {
+            return;
+        }
+
         // Skip hover detection if not in FACE edit mode
         if (!EditModeManager.getInstance().isFaceEditingAllowed()) {
             faceRenderer.clearHover();

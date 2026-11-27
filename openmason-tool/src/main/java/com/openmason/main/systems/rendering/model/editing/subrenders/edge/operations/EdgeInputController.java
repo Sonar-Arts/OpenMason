@@ -348,6 +348,11 @@ public class EdgeInputController {
             return;
         }
 
+        // No hover picking while a drag runs: the hovered element is frozen until release (#175)
+        if (translationCoordinator != null && translationCoordinator.isDragging()) {
+            return;
+        }
+
         // Skip hover detection if not in EDGE edit mode
         if (!EditModeManager.getInstance().isEdgeEditingAllowed()) {
             edgeRenderer.setHoveredEdgeIndex(-1);
@@ -361,36 +366,21 @@ public class EdgeInputController {
             return;
         }
 
-        // Get edge data from renderer
-        float[] edgePositions = edgeRenderer.getEdgePositions();
-        int edgeCount = edgeRenderer.getEdgeCount();
-        float lineWidth = edgeRenderer.getLineWidth();
-
-        if (edgePositions == null || edgeCount == 0) {
-            return;
-        }
-
         // Get model matrix for proper edge transformation
         Matrix4f modelMatrix = (transformState != null)
                 ? transformState.getTransformMatrix()
                 : new Matrix4f(); // Identity if no transform state
 
-        // Detect hovered edge using screen-space point-to-line distance detection
-        int newHoveredEdge = EdgeHoverDetector.detectHoveredEdge(
+        // Screen-space point-to-line detection, skipped while mouse / camera / geometry are unchanged (#175)
+        edgeRenderer.updateHover(
                 context.mouseX,
                 context.mouseY,
-                context.viewportWidth,
-                context.viewportHeight,
                 context.viewMatrix,
                 context.projectionMatrix,
                 modelMatrix,
-                edgePositions,
-                edgeCount,
-                lineWidth
+                context.viewportWidth,
+                context.viewportHeight
         );
-
-        // Update renderer's hover state
-        edgeRenderer.setHoveredEdgeIndex(newHoveredEdge);
     }
 
     /**

@@ -126,7 +126,16 @@ public final class BoneStore {
 
     /** {@link #setBones} as a LOAD (opening a model): no edit notification, so the model stays clean. */
     public void load(List<OMOFormat.BoneEntry> entries) {
-        replace(entries);
+        load(entries, true);
+    }
+
+    /**
+     * {@link #load(List)} that may skip the change callback (the part rebuild): an OMO load restores the bones
+     * BEFORE the parts, whose own rebuild then sees the new skeleton, so the callback's rebuild would only repeat
+     * it (#175).
+     */
+    public void load(List<OMOFormat.BoneEntry> entries, boolean notifyChange) {
+        replace(entries, notifyChange);
     }
 
     /** Replace the entire skeleton. Null or empty clears the skeleton. Pose entries of gone bones drop. */
@@ -137,6 +146,10 @@ public final class BoneStore {
     }
 
     private void replace(List<OMOFormat.BoneEntry> entries) {
+        replace(entries, true);
+    }
+
+    private void replace(List<OMOFormat.BoneEntry> entries, boolean notifyChange) {
         bones.clear();
         byId.clear();
         if (entries != null) {
@@ -148,7 +161,7 @@ public final class BoneStore {
         }
         pose.keySet().retainAll(byId.keySet());
         invalidate();
-        fireOnChange();
+        if (notifyChange) fireOnChange();
     }
 
     /** Add or replace a single bone (by id; a replaced bone keeps its list position). A REST edit. */

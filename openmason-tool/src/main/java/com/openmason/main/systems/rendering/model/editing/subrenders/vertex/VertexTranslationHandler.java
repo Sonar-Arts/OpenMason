@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -136,6 +137,7 @@ public class VertexTranslationHandler extends TranslationHandlerBase {
 
         isDragging = true;
         hasMovedDuringDrag = false;
+        resetDeltaGate();
 
         // Capture mesh state before drag for snapshot-based undo (needed if merge occurs)
         if (commandHistory != null && synchronizer != null) {
@@ -180,28 +182,24 @@ public class VertexTranslationHandler extends TranslationHandlerBase {
             // Mark that actual movement occurred during this drag
             hasMovedDuringDrag = true;
 
+            // Mouse still (same delta as last frame): nothing to do (#175)
+            if (!deltaChanged(modelSpaceDelta)) {
+                return;
+            }
+
             // Get all selected vertex indices
             Set<Integer> selectedIndices = selectionState.getSelectedVertexIndices();
 
-            // Compute new position for each vertex from original + delta,
-            // then push directly to the renderer (single source of truth)
-            Map<Integer, Vector3f> newPositions = new HashMap<>();
+            // Compute new position for each vertex from original + delta
+            Map<Integer, Vector3f> newPositions = new LinkedHashMap<>();
             for (int vertexIndex : selectedIndices) {
                 Vector3f original = selectionState.getOriginalPosition(vertexIndex);
                 if (original == null) continue;
-
-                Vector3f newPos = new Vector3f(original).add(modelSpaceDelta);
-                newPositions.put(vertexIndex, newPos);
-
-                // Update visual preview (model space for VBO)
-                vertexRenderer.updateVertexPosition(vertexIndex, newPos);
-
-                // Update connected edge endpoints using INDEX-BASED matching (model space for VBO)
-                edgeRenderer.updateEdgesConnectedToVertexByIndex(vertexIndex, newPos);
+                newPositions.put(vertexIndex, new Vector3f(original).add(modelSpaceDelta));
             }
 
-            // REALTIME VISUAL UPDATE: commit moved corners to the
-            // EditableModel (single source of truth) during the drag
+            // REALTIME VISUAL UPDATE: positions-only move of the EditableModel (single source of truth); the
+            // vertex / edge / face overlays follow through the model's batched mesh listener
             pushVertexPositionsToModel(modelRenderer, faceRenderer, newPositions);
 
             logger.trace("Dragging {} vertices by delta ({}, {}, {})",
@@ -219,23 +217,17 @@ public class VertexTranslationHandler extends TranslationHandlerBase {
         }
 
         // The EditableModel already holds the final positions — every
-        // mouse move committed them via pushVertexPositionsToModel().
+        // mouse move pushed them via pushVertexPositionsToModel(); the
+        // position refresh deferred during the drag runs once now.
+        resetDeltaGate();
+        if (hasMovedDuringDrag) {
+            commitVertexPositions(modelRenderer);
+        }
 
         // Sync partGeometry so edits survive a subsequent part transform
         // rebuild. Must run BEFORE any merge (merged vertices lose corners).
         if (hasMovedDuringDrag && modelRenderer != null) {
-            com.openmason.engine.modeling.parts.ModelPartManager pm =
-                    modelRenderer.getPartManager();
-            if (pm != null) {
-                for (int ui : selectionState.getSelectedVertexIndices()) {
-                    int[] mis = modelRenderer.getMeshIndicesForUniqueVertex(ui);
-                    if (mis == null) continue;
-                    for (int mi : mis) {
-                        Vector3f p = modelRenderer.getVertexPosition(mi);
-                        if (p != null) pm.syncPartVertexFromWorldPos(mi, p);
-                    }
-                }
-            }
+            syncPartVertices(modelRenderer, selectionState.getSelectedVertexIndices());
         }
 
         // TRUE MERGE: dragged vertices resting on a stationary vertex are
@@ -321,24 +313,24 @@ public class VertexTranslationHandler extends TranslationHandlerBase {
         Set<Integer> selectedIndices = selectionState.getSelectedVertexIndices();
 
         // Revert each selected vertex to original position from selection state
-        Map<Integer, Vector3f> originalPositions = new HashMap<>();
+        Map<Integer, Vector3f> originalPositions = new LinkedHashMap<>();
         for (int vertexIndex : selectedIndices) {
             Vector3f originalPosition = selectionState.getOriginalPosition(vertexIndex);
-
             if (originalPosition != null) {
                 originalPositions.put(vertexIndex, originalPosition);
-                vertexRenderer.updateVertexPosition(vertexIndex, originalPosition);
-
-                // Revert connected edges using INDEX-BASED matching
-                edgeRenderer.updateEdgesConnectedToVertexByIndex(vertexIndex, originalPosition);
             }
         }
 
         // Clear drag state in selection
         selectionState.cancelDrag();
 
-        // REVERT: push the original positions back to the ModelRenderer
+        // REVERT: push the original positions back to the model (overlays follow its listener), then the
+        // deferred position refresh
         pushVertexPositionsToModel(modelRenderer, faceRenderer, originalPositions);
+        if (hasMovedDuringDrag) {
+            commitVertexPositions(modelRenderer);
+        }
+        resetDeltaGate();
 
         isDragging = false;
         preDragSnapshot = null;

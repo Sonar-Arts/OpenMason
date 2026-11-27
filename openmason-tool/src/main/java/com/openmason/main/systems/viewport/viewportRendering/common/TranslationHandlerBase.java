@@ -327,15 +327,35 @@ public abstract class TranslationHandlerBase implements ITranslationHandler {
         initialDragHitPoint = null;
     }
 
+    // Last model-space delta pushed to the model in this drag (null = nothing pushed yet).
+    private Vector3f lastAppliedDelta;
+
     /**
-     * Push a set of moved unique-vertex positions into the EditableModel
-     * (the single source of truth) as one bulk update, then rebuild the face
-     * overlay. Shared commit path for vertex/edge drags: the current corner
-     * array is fetched fresh from the model, the dragged vertices' corners are
-     * overwritten, and the whole array is pushed back.
+     * Per-frame gate (#175): true when {@code modelDelta} differs from the delta last pushed in this drag (and
+     * records it). The handlers call their mouse-move work every frame; with the mouse still the delta repeats
+     * and there is nothing to do.
+     */
+    protected boolean deltaChanged(Vector3f modelDelta) {
+        if (lastAppliedDelta != null && lastAppliedDelta.equals(modelDelta)) {
+            return false;
+        }
+        lastAppliedDelta = new Vector3f(modelDelta);
+        return true;
+    }
+
+    /** Forget the last pushed delta (drag start / end / cancel). */
+    protected void resetDeltaGate() {
+        lastAppliedDelta = null;
+    }
+
+    /**
+     * Push a set of moved unique-vertex positions into the EditableModel (the single source of truth) through
+     * the positions-only path (#175): one {@link EditableModel#moveVertices} call - the model writes each vertex
+     * and its corners once and tells the vertex / edge / face overlays once (batched listener). Topology, UV
+     * re-projection and the index re-sort wait for {@link #commitVertexPositions} at drag release.
      *
      * @param gmr          The model renderer (single source of truth)
-     * @param faceRenderer The face overlay renderer to rebuild afterwards
+     * @param faceRenderer Unused since #175 (the face overlay follows through its mesh listener); kept for callers
      * @param newPositions Moved unique vertex id → new model-space position
      */
     protected static void pushVertexPositionsToModel(EditableModel gmr,
@@ -344,29 +364,68 @@ public abstract class TranslationHandlerBase implements ITranslationHandler {
         if (gmr == null || newPositions == null || newPositions.isEmpty()) {
             return;
         }
-        float[] meshVertices = gmr.getAllMeshVertexPositions();
-        if (meshVertices == null) {
+        int[] ids = new int[newPositions.size()];
+        float[] positions = new float[ids.length * 3];
+        int i = 0;
+        for (Map.Entry<Integer, Vector3f> entry : newPositions.entrySet()) {
+            Vector3f pos = entry.getValue();
+            ids[i] = entry.getKey();
+            positions[i * 3] = pos.x;
+            positions[i * 3 + 1] = pos.y;
+            positions[i * 3 + 2] = pos.z;
+            i++;
+        }
+        gmr.moveVertices(ids, positions);
+    }
+
+    /** Ends a positions-only drag: one model position refresh (UVs, triangulation, topology, overlays). */
+    protected static void commitVertexPositions(EditableModel gmr) {
+        if (gmr != null) {
+            gmr.commitVertexPositions();
+        }
+    }
+
+    /**
+     * Back-propagate the current positions of the given unique vertices into the part geometry (so the edit
+     * survives a later part rebuild) in one batch: every render corner of every vertex, one pass per part.
+     */
+    protected static void syncPartVertices(EditableModel gmr, Iterable<Integer> uniqueVertexIds) {
+        if (gmr == null || gmr.getPartManager() == null) {
             return;
         }
-        for (Map.Entry<Integer, Vector3f> entry : newPositions.entrySet()) {
-            int[] corners = gmr.getMeshIndicesForUniqueVertex(entry.getKey());
-            if (corners == null) {
-                continue;
-            }
-            Vector3f pos = entry.getValue();
-            for (int corner : corners) {
-                int offset = corner * 3;
-                if (offset + 2 < meshVertices.length) {
-                    meshVertices[offset] = pos.x;
-                    meshVertices[offset + 1] = pos.y;
-                    meshVertices[offset + 2] = pos.z;
-                }
+        int[] corners = new int[16];
+        int n = 0;
+        for (int ui : uniqueVertexIds) {
+            int[] mis = gmr.getMeshIndicesForUniqueVertex(ui);
+            if (mis == null) continue;
+            for (int mi : mis) {
+                if (n == corners.length) corners = java.util.Arrays.copyOf(corners, n * 2);
+                corners[n++] = mi;
             }
         }
-        gmr.updateVertexPositions(meshVertices);
-        if (faceRenderer != null) {
-            faceRenderer.rebuildFromEditableModel();
+        syncPartCorners(gmr, java.util.Arrays.copyOf(corners, n));
+    }
+
+    /** Back-propagate the current positions of the given render corners into the part geometry (one batch). */
+    protected static void syncPartCorners(EditableModel gmr, int[] corners) {
+        if (gmr == null || gmr.getPartManager() == null || corners == null || corners.length == 0) {
+            return;
         }
+        float[] all = gmr.meshVertexPositionsView();
+        if (all == null) {
+            return;
+        }
+        int[] valid = new int[corners.length];
+        float[] positions = new float[corners.length * 3];
+        int n = 0;
+        for (int mi : corners) {
+            if (mi < 0 || mi * 3 + 2 >= all.length) continue;
+            valid[n] = mi;
+            System.arraycopy(all, mi * 3, positions, n * 3, 3);
+            n++;
+        }
+        gmr.getPartManager().syncPartVerticesFromWorldPos(
+                java.util.Arrays.copyOf(valid, n), java.util.Arrays.copyOf(positions, n * 3));
     }
 
     /**
@@ -380,6 +439,10 @@ public abstract class TranslationHandlerBase implements ITranslationHandler {
      * <p>Call after the final positions are committed to the model. A merge is
      * a structural change: the model fires a geometry rebuild, so callers must
      * clear stale selections afterwards.
+     *
+     * <p>The nearest-target search runs over a {@link com.openmason.engine.modeling.core.PointGrid} of the
+     * stationary live vertices built once (#175), not a scan of every vertex per dragged vertex; the choice is
+     * the same (nearest within epsilon, the higher vertex id on a tie).
      *
      * @param gmr              The model renderer (single source of truth)
      * @param draggedVertexIds Unique vertex ids that were dragged
@@ -397,33 +460,37 @@ public abstract class TranslationHandlerBase implements ITranslationHandler {
         int vertexCount = positions.length / 3;
         float epsilonSq = ModelingConstants.POSITION_MATCH_EPSILON * ModelingConstants.POSITION_MATCH_EPSILON;
 
+        // Stationary vertices, indexed once (liveness is checked only for candidates within epsilon).
+        int[] stationary = new int[vertexCount];
+        int count = 0;
+        for (int v = 0; v < vertexCount; v++) {
+            if (!draggedVertexIds.contains(v)) {
+                stationary[count++] = v;
+            }
+        }
+        com.openmason.engine.modeling.core.PointGrid grid = new com.openmason.engine.modeling.core.PointGrid(
+                positions, java.util.Arrays.copyOf(stationary, count), ModelingConstants.POSITION_MATCH_EPSILON);
+
         // Dragged vertex → nearest coincident stationary vertex, grouped by target.
         Map<Integer, List<Integer>> mergedByTarget = new LinkedHashMap<>();
+        int[] best = new int[1];
+        float[] bestDistSq = new float[1];
         for (int dragged : draggedVertexIds) {
             if (dragged < 0 || dragged >= vertexCount) {
                 continue;
             }
-            float dx0 = positions[dragged * 3];
-            float dy0 = positions[dragged * 3 + 1];
-            float dz0 = positions[dragged * 3 + 2];
-
-            int target = -1;
-            float bestDistSq = epsilonSq;
-            for (int v = 0; v < vertexCount; v++) {
-                if (v == dragged || draggedVertexIds.contains(v)) {
-                    continue;
-                }
-                float dx = positions[v * 3] - dx0;
-                float dy = positions[v * 3 + 1] - dy0;
-                float dz = positions[v * 3 + 2] - dz0;
-                float distSq = dx * dx + dy * dy + dz * dz;
-                if (distSq <= bestDistSq && isLiveVertex(gmr, v)) {
-                    target = v;
-                    bestDistSq = distSq;
-                }
-            }
-            if (target >= 0) {
-                mergedByTarget.computeIfAbsent(target, k -> new ArrayList<>()).add(dragged);
+            best[0] = -1;
+            bestDistSq[0] = epsilonSq;
+            grid.query(positions[dragged * 3], positions[dragged * 3 + 1], positions[dragged * 3 + 2], epsilonSq,
+                    (v, distSq) -> {
+                        if ((distSq < bestDistSq[0] || (distSq == bestDistSq[0] && v > best[0]))
+                                && isLiveVertex(gmr, v)) {
+                            best[0] = v;
+                            bestDistSq[0] = distSq;
+                        }
+                    });
+            if (best[0] >= 0) {
+                mergedByTarget.computeIfAbsent(best[0], k -> new ArrayList<>()).add(dragged);
             }
         }
 

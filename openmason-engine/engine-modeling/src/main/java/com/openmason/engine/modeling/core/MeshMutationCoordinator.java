@@ -93,6 +93,53 @@ public class MeshMutationCoordinator implements IMeshMutationCoordinator {
     }
 
     /**
+     * Positions-only move of several editable vertices at once (an interactive drag frame, an undo step, #175):
+     * each vertex's editable position and every corner copy are written once, the GPU positions are marked stale
+     * and listeners get ONE batched notification. Like {@link #updateVertexPosition}, the derived data that
+     * depends on positions (projected UVs, re-triangulation of non-planar polygons, topology face geometry) is
+     * left for {@link #commitVertexPositions()} - call it when the interaction ends.
+     *
+     * @param vertexIds editable vertex ids (duplicates allowed: the last position wins)
+     * @param positions {@code x,y,z} per id
+     */
+    public void moveVertices(int[] vertexIds, float[] positions) {
+        if (vertexIds == null || positions == null || vertexIds.length == 0) {
+            return;
+        }
+        EditableMesh mesh = mesh();
+        int n = Math.min(vertexIds.length, positions.length / 3);
+        int[][] corners = new int[n][];
+        Vector3f p = new Vector3f();
+        int vertexCount = mesh.vertexCount();
+        for (int i = 0; i < n; i++) {
+            int id = vertexIds[i];
+            p.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+            if (id < 0 || id >= vertexCount) {
+                corners[i] = new int[0];
+                continue;
+            }
+            mesh.setPosition(id, p);
+            int[] c = uniqueMapper.getMeshIndicesForUniqueVertex(id);
+            corners[i] = c != null ? c : new int[0];
+            vertexManager.updateVertexPositions(corners[i], p);
+        }
+        gpuSync.positionsChanged();
+        if (changeNotifier.getListenerCount() > 0) {
+            int[] ids = n == vertexIds.length ? vertexIds : java.util.Arrays.copyOf(vertexIds, n);
+            changeNotifier.notifyVertexPositionsChanged(ids, positions, corners);
+        }
+    }
+
+    /**
+     * Ends an interactive position edit made through {@link #moveVertices} / {@link #updateVertexPosition}: one
+     * position refresh re-derives what follows positions (projected UVs, triangulation, topology) and tells the
+     * listeners the geometry was rebuilt. The draw batches stay valid unless the triangles changed.
+     */
+    public void commitVertexPositions() {
+        rebuildPipeline.refreshPositionsFromEditable();
+    }
+
+    /**
      * Bulk position update. Input is corner-parallel: triple {@code i} is the
      * new position for the vertex currently rendered at corner {@code i}.
      * Arrays captured BEFORE a structural change are stale (corner indices

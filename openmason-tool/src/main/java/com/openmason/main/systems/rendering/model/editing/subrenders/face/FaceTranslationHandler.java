@@ -169,6 +169,7 @@ public class FaceTranslationHandler extends TranslationHandlerBase {
 
         isDragging = true;
         hasMovedDuringDrag = false;
+        resetDeltaGate();
 
         // Find ALL unique vertices in VertexRenderer for wireframe sync
         java.util.Set<Integer> uniqueIndicesSet = new java.util.LinkedHashSet<>();
@@ -239,31 +240,17 @@ public class FaceTranslationHandler extends TranslationHandlerBase {
             // Convert delta to model space
             Vector3f modelSpaceDelta = worldToModelSpaceDelta(delta);
 
+            // Mouse still (same delta as last frame): nothing to do (#175)
+            if (!deltaChanged(modelSpaceDelta)) {
+                return;
+            }
+
             // Update selection state with delta
             selectionState.updatePosition(modelSpaceDelta);
 
-            // Apply delta to ALL vertices from ALL selected faces via EditableModel
-            for (int vertIdx : currentVertexIndices) {
-                Vector3f originalPos = vertexOriginalPositions.get(vertIdx);
-                if (originalPos != null) {
-                    Vector3f newPos = new Vector3f(originalPos).add(modelSpaceDelta);
-                    modelRenderer.updateVertexPosition(vertIdx, newPos);
-                }
-            }
-
-            // Update wireframe (VertexRenderer + EdgeRenderer) to stay in sync
-            if (wireframeVertexIndices != null && wireframeOriginalPositions != null) {
-                for (int i = 0; i < wireframeVertexIndices.length; i++) {
-                    if (wireframeOriginalPositions[i] != null) {
-                        Vector3f newPos = new Vector3f(wireframeOriginalPositions[i]).add(modelSpaceDelta);
-                        vertexRenderer.updateVertexPosition(wireframeVertexIndices[i], newPos);
-                        edgeRenderer.updateEdgesConnectedToVertexByIndex(wireframeVertexIndices[i], newPos);
-                    }
-                }
-            }
-
-            // Rebuild face overlay from EditableModel
-            faceRenderer.rebuildFromEditableModel();
+            // Move every vertex of the selected faces ONCE (positions-only, one batched listener call): the
+            // model writes all corners of each vertex, and the vertex / edge / face overlays follow (#175)
+            moveWireframeVertices(modelSpaceDelta);
 
             dragStartDelta.set(modelSpaceDelta);
 
@@ -282,20 +269,19 @@ public class FaceTranslationHandler extends TranslationHandlerBase {
             return;
         }
 
-        // EditableModel already has updated positions — rebuild face overlay to sync
-        faceRenderer.rebuildFromEditableModel();
+        // EditableModel already has the moved positions: the position refresh deferred during the drag runs
+        // once now (UVs, triangulation, topology; the overlays rebuild through the model's listener)
+        resetDeltaGate();
+        if (hasMovedDuringDrag) {
+            commitVertexPositions(modelRenderer);
+        } else {
+            faceRenderer.rebuildFromEditableModel();
+        }
         logger.debug("Committed face drag");
 
         // Sync partGeometry so edits survive a subsequent part transform rebuild
         if (hasMovedDuringDrag && modelRenderer != null && currentVertexIndices != null) {
-            com.openmason.engine.modeling.parts.ModelPartManager pm =
-                    modelRenderer.getPartManager();
-            if (pm != null) {
-                for (int vertIdx : currentVertexIndices) {
-                    Vector3f p = modelRenderer.getVertexPosition(vertIdx);
-                    if (p != null) pm.syncPartVertexFromWorldPos(vertIdx, p);
-                }
-            }
+            syncPartCorners(modelRenderer, currentVertexIndices);
         }
 
         // Record undo command before clearing state (need original positions)
@@ -346,25 +332,15 @@ public class FaceTranslationHandler extends TranslationHandlerBase {
         // Revert to original position in selection state
         selectionState.cancelDrag();
 
-        // Revert ALL vertices to their original positions in EditableModel
-        for (int vertIdx : currentVertexIndices) {
-            Vector3f originalPos = vertexOriginalPositions.get(vertIdx);
-            if (originalPos != null) {
-                modelRenderer.updateVertexPosition(vertIdx, originalPos);
-            }
+        // Revert ALL vertices to their original positions (model + overlays through its listener), then the
+        // deferred position refresh
+        moveWireframeVertices(new Vector3f());
+        if (hasMovedDuringDrag) {
+            commitVertexPositions(modelRenderer);
+        } else {
+            faceRenderer.rebuildFromEditableModel();
         }
-
-        // Revert wireframe to original positions
-        if (wireframeVertexIndices != null && wireframeOriginalPositions != null) {
-            for (int i = 0; i < wireframeVertexIndices.length; i++) {
-                if (wireframeOriginalPositions[i] != null) {
-                    vertexRenderer.updateVertexPosition(wireframeVertexIndices[i], wireframeOriginalPositions[i]);
-                    edgeRenderer.updateEdgesConnectedToVertexByIndex(wireframeVertexIndices[i], wireframeOriginalPositions[i]);
-                }
-            }
-        }
-
-        faceRenderer.rebuildFromEditableModel();
+        resetDeltaGate();
         logger.debug("Reverted {} vertices (cancel)", currentVertexIndices.length);
 
         isDragging = false;
@@ -373,6 +349,29 @@ public class FaceTranslationHandler extends TranslationHandlerBase {
         wireframeVertexIndices = null;
         wireframeOriginalPositions = null;
         logger.debug("Cancelled face drag, reverted all changes to original positions");
+    }
+
+    /**
+     * Moves every unique vertex of the dragged faces to its drag-start position plus {@code modelDelta} in one
+     * positions-only model call ({@link EditableModel#moveVertices}).
+     */
+    private void moveWireframeVertices(Vector3f modelDelta) {
+        if (wireframeVertexIndices == null || wireframeOriginalPositions == null) {
+            return;
+        }
+        int[] ids = new int[wireframeVertexIndices.length];
+        float[] positions = new float[ids.length * 3];
+        int n = 0;
+        for (int i = 0; i < wireframeVertexIndices.length; i++) {
+            Vector3f original = wireframeOriginalPositions[i];
+            if (original == null) continue;
+            ids[n] = wireframeVertexIndices[i];
+            positions[n * 3] = original.x + modelDelta.x;
+            positions[n * 3 + 1] = original.y + modelDelta.y;
+            positions[n * 3 + 2] = original.z + modelDelta.z;
+            n++;
+        }
+        modelRenderer.moveVertices(java.util.Arrays.copyOf(ids, n), java.util.Arrays.copyOf(positions, n * 3));
     }
 
     /**

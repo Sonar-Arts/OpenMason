@@ -40,30 +40,60 @@ public final class VertexMoveCommand implements ModelCommand {
 
     @Override
     public void execute() {
-        for (VertexDelta delta : deltas.values()) {
-            gmr.updateVertexPosition(delta.index(), new Vector3f(delta.newPos()));
-        }
-        ModelPartManager pm = gmr.getPartManager();
-        if (pm != null) {
-            for (VertexDelta delta : deltas.values()) {
-                pm.syncPartVertexFromWorldPos(delta.index(), delta.newPos());
-            }
-        }
-        synchronizer.synchronize();
+        apply(true);
     }
 
     @Override
     public void undo() {
+        apply(false);
+    }
+
+    /**
+     * Moves every affected vertex ONCE (#175): the deltas are keyed by render corner and a vertex has several,
+     * so they are folded to editable vertices and sent as one positions-only move (one batched overlay update),
+     * then one position refresh and one batched part-geometry sync.
+     */
+    private void apply(boolean forward) {
+        Map<Integer, Vector3f> byVertex = new java.util.LinkedHashMap<>();
         for (VertexDelta delta : deltas.values()) {
-            gmr.updateVertexPosition(delta.index(), new Vector3f(delta.oldPos()));
-        }
-        ModelPartManager pm = gmr.getPartManager();
-        if (pm != null) {
-            for (VertexDelta delta : deltas.values()) {
-                pm.syncPartVertexFromWorldPos(delta.index(), delta.oldPos());
+            int vertex = gmr.getUniqueIndexForMeshVertex(delta.index());
+            if (vertex >= 0) {
+                byVertex.put(vertex, forward ? delta.newPos() : delta.oldPos());
             }
         }
+        int[] ids = new int[byVertex.size()];
+        float[] positions = new float[ids.length * 3];
+        int i = 0;
+        for (Map.Entry<Integer, Vector3f> e : byVertex.entrySet()) {
+            ids[i] = e.getKey();
+            positions[i * 3] = e.getValue().x;
+            positions[i * 3 + 1] = e.getValue().y;
+            positions[i * 3 + 2] = e.getValue().z;
+            i++;
+        }
+        gmr.moveVertices(ids, positions);
+        gmr.commitVertexPositions();
+        ModelPartManager pm = gmr.getPartManager();
+        if (pm != null) {
+            syncParts(pm, deltas.values(), forward);
+        }
         synchronizer.synchronize();
+    }
+
+    /** Back-propagates the deltas' new (or old) positions into the part geometry in one batch. */
+    public static void syncParts(ModelPartManager pm, java.util.Collection<VertexDelta> deltas, boolean newPositions) {
+        int[] corners = new int[deltas.size()];
+        float[] positions = new float[corners.length * 3];
+        int i = 0;
+        for (VertexDelta delta : deltas) {
+            Vector3f p = newPositions ? delta.newPos() : delta.oldPos();
+            corners[i] = delta.index();
+            positions[i * 3] = p.x;
+            positions[i * 3 + 1] = p.y;
+            positions[i * 3 + 2] = p.z;
+            i++;
+        }
+        pm.syncPartVerticesFromWorldPos(corners, positions);
     }
 
     @Override

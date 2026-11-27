@@ -162,11 +162,47 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
      * Shared derivation. {@code structural} marks the whole GPU copy stale
      * (loop/face changes); otherwise only the vertex data (positions + UVs).
      */
+    // Deferred derivation (#175): while > 0, derive requests only accumulate; the last end runs one.
+    private int deferDepth;
+    private boolean deferredPending;
+    private boolean deferredStructural;
+
+    /**
+     * Starts coalescing derivations: until the matching {@link #endDeferredDerive()}, rebuild / refresh requests
+     * are recorded instead of run, and the end runs ONE derivation (structural if any request was). For multi-step
+     * loads (parts, then face textures) that would otherwise derive the whole mesh once per step. Derived data
+     * (render mesh, topology, overlays) is stale in between - only touch the editable mesh, parts and face
+     * texture state inside the bracket. Nests.
+     */
+    public void beginDeferredDerive() {
+        deferDepth++;
+    }
+
+    /** Ends a {@link #beginDeferredDerive()} bracket; the outermost end runs the pending derivation, if any. */
+    public void endDeferredDerive() {
+        if (deferDepth == 0) return;
+        if (--deferDepth == 0 && deferredPending) {
+            boolean structural = deferredStructural;
+            deferredPending = false;
+            deferredStructural = false;
+            derive(structural);
+        }
+    }
+
     private void derive(boolean structural) {
+        if (deferDepth > 0) {
+            deferredPending = true;
+            deferredStructural |= structural;
+            return;
+        }
+        long span = EditCostStats.begin();
         beforeDerive.run();
         invalidateBounds();
 
+        RenderMesh previous = lastRenderMesh;
+        long t = EditCostStats.begin();
         RenderMesh rm = RenderMeshBuilder.build(editableMesh, faceTextureManager);
+        EditCostStats.end(EditCostStats.Span.RENDER_MESH, t);
         this.lastRenderMesh = rm;
 
         // Write the render-facing caches (GPU sync, extractors and serialization
@@ -180,20 +216,36 @@ public class MeshRebuildPipeline implements IMeshRebuildPipeline {
         vertexMapper.update(editableMesh, rm);
 
         // Topology from authoritative loops — winding is never reconstructed.
+        t = EditCostStats.begin();
         this.topology = MeshTopologyBuilder.build(editableMesh, rm);
+        EditCostStats.end(EditCostStats.Span.TOPOLOGY, t);
 
         if (structural) {
             gpuSync.structureChanged();
         } else {
             gpuSync.verticesChanged();
         }
-        drawBatchesDirty = true;
+        // The material-sorted index buffer only goes stale when the triangles (or their faces) changed: a
+        // position refresh can re-triangulate a non-planar polygon, so compare instead of assuming.
+        if (structural || !sameTriangles(previous, rm)) {
+            drawBatchesDirty = true;
+        }
 
         afterDerive.run();
 
         // Notify listeners
+        t = EditCostStats.begin();
         changeNotifier.notifyTopologyRebuilt(topology);
         changeNotifier.notifyGeometryRebuilt();
+        EditCostStats.end(EditCostStats.Span.OVERLAY_REBUILD, t);
+        EditCostStats.end(EditCostStats.Span.DERIVE, span);
+    }
+
+    /** Same triangles in the same order with the same faces (the draw batches stay valid). */
+    private static boolean sameTriangles(RenderMesh a, RenderMesh b) {
+        return a != null && b != null
+            && java.util.Arrays.equals(a.indices(), b.indices())
+            && java.util.Arrays.equals(a.triangleToFaceId(), b.triangleToFaceId());
     }
 
     // ── Shared state ────────────────────────────────────────────────────────

@@ -31,6 +31,22 @@ public interface MeshChangeListener {
     void onVertexPositionChanged(int uniqueIndex, Vector3f newPosition, int[] affectedMeshIndices);
 
     /**
+     * Called once when several vertices moved together (a drag frame, an undo step). Parallel arrays: vertex
+     * {@code i} is {@code uniqueIndices[i]}, its new position {@code positions[3i..3i+2]}, its corners
+     * {@code affectedMeshIndices[i]}. The arrays are only valid during the call.
+     *
+     * <p>The default forwards each vertex to {@link #onVertexPositionChanged}; overlays override it to update
+     * their buffers once per batch.
+     */
+    default void onVertexPositionsChanged(int[] uniqueIndices, float[] positions, int[][] affectedMeshIndices) {
+        Vector3f p = new Vector3f();
+        for (int i = 0; i < uniqueIndices.length; i++) {
+            p.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+            onVertexPositionChanged(uniqueIndices[i], p, affectedMeshIndices[i]);
+        }
+    }
+
+    /**
      * Called when the entire geometry has been rebuilt.
      * This occurs after:
      * <ul>

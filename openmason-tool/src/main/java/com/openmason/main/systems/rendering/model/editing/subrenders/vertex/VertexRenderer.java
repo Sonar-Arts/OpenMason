@@ -2,6 +2,9 @@ package com.openmason.main.systems.rendering.model.editing.subrenders.vertex;
 
 import com.openmason.engine.modeling.EditableModel;
 import com.openmason.engine.modeling.MeshChangeListener;
+import com.openmason.engine.modeling.core.EditCostStats;
+import com.openmason.main.systems.rendering.model.editing.subrenders.DirtySpans;
+import com.openmason.main.systems.rendering.model.editing.subrenders.HoverQueryGate;
 import com.openmason.main.systems.rendering.model.editing.subrenders.MeshOverlayTheme;
 import com.openmason.main.systems.viewport.state.EditModeManager;
 import com.openmason.engine.rendering.viewer.ViewerRenderContext;
@@ -20,21 +23,26 @@ import static org.lwjgl.opengl.GL30.*;
 
 /**
  * Renders model vertices as colored points, similar to Blender's vertex display mode.
- * Vertex positions are extracted by MeshVertexExtractor; this class handles rendering.
  * Colors follow Blender's edit-mode convention ({@link MeshOverlayTheme}): black default,
  * orange selected, white for the active (last-selected) vertex.
  *
  * <p>Implements MeshChangeListener to receive notifications from EditableModel
- * when vertex positions change or geometry is rebuilt. This replaces position-based
- * matching with index-based updates for robust synchronization.
+ * when vertex positions change or geometry is rebuilt.
+ *
+ * <p>Cost model (#175): the interleaved VBO has a CPU mirror; moves and selection / hover changes write the mirror
+ * and mark dirty ranges that each frame flushes in a few uploads. The selected set is redrawn larger from one
+ * element list built when the selection changes, so a frame is three draw calls at most.
  */
 public class VertexRenderer implements MeshChangeListener {
 
     private static final Logger logger = LoggerFactory.getLogger(VertexRenderer.class);
 
+    private static final int FLOATS_PER_VERTEX = 6;
+
     // OpenGL resources
     private int vao = 0;
     private int vbo = 0;
+    private int selectedEbo = 0;
     private int vertexCount = 0;
     private boolean initialized = false;
 
@@ -60,6 +68,18 @@ public class VertexRenderer implements MeshChangeListener {
     private int activeVertexIndex = -1; // Last-selected vertex, rendered white
     private Set<Integer> modifiedVertices = new HashSet<>(); // Indices of modified vertices
 
+    // CPU mirror of the VBO + what is baked into it
+    private float[] vboData = null;
+    private final DirtySpans dirty = new DirtySpans();
+    private int[] bakedSelection = new int[0];
+    private int bakedHover = -1;
+    private int bakedActive = -1;
+    private boolean selectionDirty = false;
+    private boolean hoverDirty = false;
+    private int selectedElementCount = 0;
+
+    private final HoverQueryGate hoverGate = new HoverQueryGate();
+
     // Reference to EditableModel for observer pattern
     private EditableModel modelRenderer;
 
@@ -70,17 +90,14 @@ public class VertexRenderer implements MeshChangeListener {
      * @param renderer The EditableModel to observe, or null to disconnect
      */
     public void setModelRenderer(EditableModel renderer) {
-        // Unregister from previous renderer
         if (this.modelRenderer != null) {
             this.modelRenderer.removeMeshChangeListener(this);
         }
 
         this.modelRenderer = renderer;
 
-        // Register with new renderer
         if (renderer != null) {
             renderer.addMeshChangeListener(this);
-            // Initial sync from model
             rebuildFromModel();
         }
 
@@ -97,41 +114,32 @@ public class VertexRenderer implements MeshChangeListener {
         return modelRenderer;
     }
 
-    /**
-     * Initialize the vertex renderer.
-     */
     public void initialize() {
         if (initialized) {
             return;
         }
 
         try {
-            // Generate VAO and VBO
             vao = glGenVertexArrays();
             vbo = glGenBuffers();
+            selectedEbo = glGenBuffers();
 
-            // Bind VAO
             glBindVertexArray(vao);
-
-            // Create empty VBO (will be populated when model is set)
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
             glBufferData(GL_ARRAY_BUFFER, 0, GL_DYNAMIC_DRAW);
 
-            // Configure vertex attributes (interleaved: position + color)
-            // Stride = 6 floats (3 for position, 3 for color)
-            int stride = 6 * Float.BYTES;
-
-            // Position attribute (location = 0)
+            // Interleaved position(3) + color(3)
+            int stride = FLOATS_PER_VERTEX * Float.BYTES;
             glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
             glEnableVertexAttribArray(0);
-
-            // Color attribute (location = 1)
             glVertexAttribPointer(1, 3, GL_FLOAT, false, stride, 3 * Float.BYTES);
             glEnableVertexAttribArray(1);
 
-            // Unbind
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            // Selected-vertex element list (VAO state)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, selectedEbo);
+
             glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
 
             initialized = true;
 
@@ -143,9 +151,7 @@ public class VertexRenderer implements MeshChangeListener {
     }
 
     /**
-     * Update vertex data from EditableModel (EditableModel is single source of truth).
-     * Gets vertex data directly from EditableModel instead of extracting from ModelDefinition.
-     * EditableModel provides the authoritative mesh topology after any subdivisions or modifications.
+     * Re-read every unique vertex from the EditableModel and re-upload the buffer.
      */
     public void updateVertexDataFromModel() {
         if (!initialized) {
@@ -161,64 +167,29 @@ public class VertexRenderer implements MeshChangeListener {
         }
 
         try {
-            // Extract UNIQUE vertices from EditableModel (e.g., 8 for cube) for rendering
             float[] uniquePositions = modelRenderer.getAllUniqueVertexPositions();
-
-            // Store unique positions for hit testing
             vertexPositions = uniquePositions;
-            vertexCount = uniquePositions.length / 3;
-
-            // Create interleaved vertex data (position + color) using UNIQUE vertices
-            // Color varies based on state: selected (white), modified (yellow), default (orange)
-            float[] vertexData = new float[vertexCount * 6]; // 3 for position, 3 for color
-
-            for (int i = 0; i < vertexCount; i++) {
-                int posIndex = i * 3;
-                int dataIndex = i * 6;
-
-                // Copy position from unique vertices
-                vertexData[dataIndex] = uniquePositions[posIndex];
-                vertexData[dataIndex + 1] = uniquePositions[posIndex + 1];
-                vertexData[dataIndex + 2] = uniquePositions[posIndex + 2];
-
-                // Determine color based on state (active > selected > modified > default)
-                Vector3f color = resolveVertexColor(i);
-
-                // Apply color
-                vertexData[dataIndex + 3] = color.x;
-                vertexData[dataIndex + 4] = color.y;
-                vertexData[dataIndex + 5] = color.z;
-            }
-
-            // Upload to GPU
-            glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glBufferData(GL_ARRAY_BUFFER, vertexData, GL_DYNAMIC_DRAW);
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
-
+            vertexCount = uniquePositions != null ? uniquePositions.length / 3 : 0;
+            rebuildVBO();
             logger.debug("Updated vertex data from EditableModel: {} vertices", vertexCount);
-
         } catch (Exception e) {
             logger.error("Error updating vertex data from EditableModel", e);
         }
     }
 
-
-    /**
-     * Handle mouse movement for vertex hover detection.
-     * Follows the same pattern as GizmoRenderer.handleMouseMove().
-     * Only processes hover when EditMode is VERTEX.
-     */
     public void handleMouseMove(float mouseX, float mouseY,
                                Matrix4f viewMatrix, Matrix4f projectionMatrix,
                                Matrix4f modelMatrix,
                                int viewportWidth, int viewportHeight) {
         if (!initialized || !enabled) {
+            hoverGate.invalidate();
             return;
         }
 
         // Skip hover detection if not in VERTEX edit mode
         if (!EditModeManager.getInstance().isVertexEditingAllowed()) {
-            hoveredVertexIndex = -1;
+            setHovered(-1);
+            hoverGate.invalidate();
             return;
         }
 
@@ -226,35 +197,39 @@ public class VertexRenderer implements MeshChangeListener {
             return;
         }
 
-        // Detect hovered vertex using screen-space point size detection
-        // Pass model matrix so vertices in model space are properly transformed
-        int newHoveredVertex = VertexHoverDetector.detectHoveredVertex(
-            mouseX, mouseY,
-            viewportWidth, viewportHeight,
-            viewMatrix, projectionMatrix, modelMatrix,
-            vertexPositions,
-            vertexCount,
-            pointSize  // Use actual vertex point size for accurate detection
-        );
+        // Same mouse, camera, model and geometry as the last pick: the answer stands (#175)
+        if (!hoverGate.shouldPick(mouseX, mouseY, viewMatrix, projectionMatrix, modelMatrix,
+                viewportWidth, viewportHeight)) {
+            return;
+        }
 
-        // Update hover state if changed (same pattern as gizmo)
-        if (newHoveredVertex != hoveredVertexIndex) {
+        long span = EditCostStats.begin();
+        try {
+            // Detect hovered vertex using screen-space point size detection
+            int newHoveredVertex = VertexHoverDetector.detectHoveredVertex(
+                mouseX, mouseY,
+                viewportWidth, viewportHeight,
+                viewMatrix, projectionMatrix, modelMatrix,
+                vertexPositions,
+                vertexCount,
+                pointSize  // Use actual vertex point size for accurate detection
+            );
+            setHovered(newHoveredVertex);
+        } finally {
+            EditCostStats.end(EditCostStats.Span.HOVER, span);
+        }
+    }
+
+    private void setHovered(int index) {
+        if (index != hoveredVertexIndex) {
             int previousHover = hoveredVertexIndex;
-            hoveredVertexIndex = newHoveredVertex;
-
+            hoveredVertexIndex = index;
+            hoverDirty = true;
             logger.debug("Vertex hover changed: {} -> {} (total vertices: {})",
                         previousHover, hoveredVertexIndex, vertexCount);
         }
     }
 
-    /**
-     * Render vertices as points.
-     * KISS: Simple, focused rendering logic.
-     *
-     * @param shader The shader program to use
-     * @param context The render context
-     * @param modelMatrix The model transformation matrix (for gizmo transforms)
-     */
     public void render(ShaderProgram shader, ViewerRenderContext context, Matrix4f modelMatrix) {
         if (!initialized) {
             logger.warn("VertexRenderer not initialized");
@@ -270,6 +245,13 @@ public class VertexRenderer implements MeshChangeListener {
         }
 
         try {
+            if (selectionDirty) {
+                applySelection();
+            } else if (hoverDirty) {
+                applyHover();
+            }
+            dirty.flush(vbo, vboData);
+
             shader.use();
 
             Matrix4f viewMatrix = context.getCamera().getViewMatrix();
@@ -288,30 +270,27 @@ public class VertexRenderer implements MeshChangeListener {
             glBindVertexArray(vao);
 
             // Flat Blender-style dots: state colors are baked into the VBO
-            // (black default, orange selected, white active), no glow
+            // (black default, orange selected, white active, hover pre-highlight), no glow
             shader.setFloat("uIntensity", 1.0f);
 
             // Base pass: every vertex in one draw call
             shader.setFloat("uPointSize", pointSize);
             glDrawArrays(GL_POINTS, 0, vertexCount);
+            EditCostStats.count(EditCostStats.Counter.DRAW_CALLS, 1);
 
-            // Selected vertices redrawn slightly larger on top
-            if (!selectedVertexIndices.isEmpty()) {
+            // Selected vertices redrawn slightly larger on top (one element draw)
+            if (selectedElementCount > 0) {
                 shader.setFloat("uPointSize", selectedPointSize);
-                for (int selectedIndex : selectedVertexIndices) {
-                    if (selectedIndex >= 0 && selectedIndex < vertexCount) {
-                        glDrawArrays(GL_POINTS, selectedIndex, 1);
-                    }
-                }
+                glDrawElements(GL_POINTS, selectedElementCount, GL_UNSIGNED_INT, 0L);
+                EditCostStats.count(EditCostStats.Counter.DRAW_CALLS, 1);
             }
 
-            // Hovered vertex: transient pre-highlight color, restored after the draw
+            // Hovered vertex: pre-highlight color (baked), drawn larger
             if (hoveredVertexIndex >= 0 && hoveredVertexIndex < vertexCount
                     && !selectedVertexIndices.contains(hoveredVertexIndex)) {
-                writeVertexColorToBuffer(hoveredVertexIndex, hoverVertexColor);
                 shader.setFloat("uPointSize", pointSize + 2.0f);
                 glDrawArrays(GL_POINTS, hoveredVertexIndex, 1);
-                updateVertexColorInBuffer(hoveredVertexIndex);
+                EditCostStats.count(EditCostStats.Counter.DRAW_CALLS, 1);
             }
 
             glBindVertexArray(0);
@@ -326,11 +305,7 @@ public class VertexRenderer implements MeshChangeListener {
         }
     }
 
-    /**
-     * Clean up OpenGL resources.
-     */
     public void cleanup() {
-        // Unregister from model renderer
         if (modelRenderer != null) {
             modelRenderer.removeMeshChangeListener(this);
             modelRenderer = null;
@@ -344,7 +319,15 @@ public class VertexRenderer implements MeshChangeListener {
             glDeleteBuffers(vbo);
             vbo = 0;
         }
+        if (selectedEbo != 0) {
+            glDeleteBuffers(selectedEbo);
+            selectedEbo = 0;
+        }
         vertexCount = 0;
+        vboData = null;
+        dirty.clear();
+        selectedElementCount = 0;
+        hoverGate.invalidate();
         initialized = false;
     }
 
@@ -355,52 +338,60 @@ public class VertexRenderer implements MeshChangeListener {
     /**
      * Called when a vertex position has been updated in EditableModel.
      * Updates the vertex directly by unique index - no position search needed.
-     *
-     * @param uniqueIndex The unique vertex index (maps directly to our vertex array)
-     * @param newPosition The new position of the vertex
-     * @param affectedMeshIndices All mesh vertex indices that were updated (for reference)
      */
     @Override
     public void onVertexPositionChanged(int uniqueIndex, Vector3f newPosition, int[] affectedMeshIndices) {
-        if (!initialized || vertexPositions == null) {
-            return;
+        long span = EditCostStats.begin();
+        try {
+            if (!initialized || vertexPositions == null) {
+                return;
+            }
+            if (uniqueIndex < 0 || uniqueIndex >= vertexCount) {
+                logger.warn("onVertexPositionChanged: uniqueIndex {} out of bounds (vertexCount={})",
+                    uniqueIndex, vertexCount);
+                return;
+            }
+            writePosition(uniqueIndex, newPosition.x, newPosition.y, newPosition.z);
+        } finally {
+            EditCostStats.end(EditCostStats.Span.OVERLAY_MOVE, span);
         }
-
-        // Validate index bounds
-        if (uniqueIndex < 0 || uniqueIndex >= vertexCount) {
-            logger.warn("onVertexPositionChanged: uniqueIndex {} out of bounds (vertexCount={})",
-                uniqueIndex, vertexCount);
-            return;
-        }
-
-        // Update the position directly by index (no position search!)
-        int posIndex = uniqueIndex * 3;
-        vertexPositions[posIndex] = newPosition.x;
-        vertexPositions[posIndex + 1] = newPosition.y;
-        vertexPositions[posIndex + 2] = newPosition.z;
-
-        // Update the VBO for this vertex
-        updateVertexInBuffer(uniqueIndex, newPosition);
-
-        logger.trace("VertexRenderer received vertex update: unique {} -> ({}, {}, {})",
-            uniqueIndex, newPosition.x, newPosition.y, newPosition.z);
     }
 
-    /**
-     * Called when the entire geometry has been rebuilt in EditableModel.
-     * Triggers a full rebuild of our vertex data from the model.
-     */
+    /** Batched vertex moves (#175): mirror writes only, one flush in {@link #render}. */
+    @Override
+    public void onVertexPositionsChanged(int[] uniqueIndices, float[] positions, int[][] affectedMeshIndices) {
+        long span = EditCostStats.begin();
+        try {
+            if (!initialized || vertexPositions == null) {
+                return;
+            }
+            for (int i = 0; i < uniqueIndices.length; i++) {
+                int u = uniqueIndices[i];
+                if (u >= 0 && u < vertexCount) {
+                    writePosition(u, positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                }
+            }
+        } finally {
+            EditCostStats.end(EditCostStats.Span.OVERLAY_MOVE, span);
+        }
+    }
+
     @Override
     public void onGeometryRebuilt() {
         logger.debug("VertexRenderer received geometry rebuild notification");
         rebuildFromModel();
     }
 
-    /**
-     * Rebuild vertex data from the associated EditableModel.
-     * Called when initially connected or when geometry is rebuilt.
-     */
     private void rebuildFromModel() {
+        long span = EditCostStats.begin();
+        try {
+            rebuildFromModelNow();
+        } finally {
+            EditCostStats.end(EditCostStats.Span.VERTEX_OVERLAY, span);
+        }
+    }
+
+    private void rebuildFromModelNow() {
         if (modelRenderer == null) {
             return;
         }
@@ -410,65 +401,42 @@ public class VertexRenderer implements MeshChangeListener {
             return;
         }
 
-        // Get unique vertex positions from EditableModel
         float[] uniquePositions = modelRenderer.getAllUniqueVertexPositions();
         if (uniquePositions == null || uniquePositions.length == 0) {
             vertexCount = 0;
             vertexPositions = null;
+            vboData = null;
             return;
         }
 
-        // Update our vertex data
-        int newVertexCount = uniquePositions.length / 3;
         vertexPositions = uniquePositions;
-        vertexCount = newVertexCount;
+        vertexCount = uniquePositions.length / 3;
 
-        // Rebuild VBO
         rebuildVBO();
 
         logger.debug("VertexRenderer rebuilt from model: {} unique vertices", vertexCount);
     }
 
-    /**
-     * Update a single vertex in the GPU buffer.
-     * Used for incremental updates when positions change.
-     *
-     * @param uniqueIndex The unique vertex index
-     * @param position The new position
-     */
-    private void updateVertexInBuffer(int uniqueIndex, Vector3f position) {
-        if (!initialized || uniqueIndex < 0 || uniqueIndex >= vertexCount) {
-            return;
+    /** Writes a moved vertex into the hit-test array and the mirror (flushed at the next render). */
+    private void writePosition(int index, float x, float y, float z) {
+        int posIndex = index * 3;
+        vertexPositions[posIndex] = x;
+        vertexPositions[posIndex + 1] = y;
+        vertexPositions[posIndex + 2] = z;
+        if (vboData != null) {
+            int o = index * FLOATS_PER_VERTEX;
+            vboData[o] = x;
+            vboData[o + 1] = y;
+            vboData[o + 2] = z;
+            dirty.mark(o, o + 3);
         }
-
-        // Calculate offset in interleaved buffer (6 floats per vertex: pos + color)
-        int bufferOffset = uniqueIndex * 6 * Float.BYTES;
-
-        // Create position data
-        float[] posData = new float[] { position.x, position.y, position.z };
-
-        // Update just the position portion of this vertex in the VBO
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, bufferOffset, posData);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        hoverGate.invalidate();
     }
 
-    /**
-     * Update the color portion of the VBO for a specific vertex.
-     * Determines correct color based on current selection and modification state.
-     * Used to keep VBO colors in sync when selection state changes.
-     *
-     * @param index The unique vertex index to update
-     */
-    private void updateVertexColorInBuffer(int index) {
-        writeVertexColorToBuffer(index, resolveVertexColor(index));
-    }
-
-    /**
-     * Resolve the persistent color for a vertex: active > selected > modified > default.
-     * Matches Blender's edit-mode convention (white active, orange selected, black default).
-     */
     private Vector3f resolveVertexColor(int index) {
+        if (index == hoveredVertexIndex && !selectedVertexIndices.contains(index)) {
+            return hoverVertexColor;
+        }
         if (index == activeVertexIndex && selectedVertexIndices.contains(index)) {
             return activeVertexColor;
         }
@@ -481,68 +449,74 @@ public class VertexRenderer implements MeshChangeListener {
         return defaultVertexColor;
     }
 
-    /**
-     * Write an explicit color into the VBO for one vertex. Also used to paint the
-     * transient hover highlight, which is restored via {@link #updateVertexColorInBuffer}.
-     */
-    private void writeVertexColorToBuffer(int index, Vector3f color) {
-        if (!initialized || index < 0 || index >= vertexCount) {
-            return;
+    /** Re-writes a vertex's colour into the mirror when its state colour changed. */
+    private void bake(int index) {
+        if (vboData == null || index < 0 || index >= vertexCount) return;
+        Vector3f c = resolveVertexColor(index);
+        int o = index * FLOATS_PER_VERTEX + 3;
+        if (vboData[o] != c.x || vboData[o + 1] != c.y || vboData[o + 2] != c.z) {
+            vboData[o] = c.x;
+            vboData[o + 1] = c.y;
+            vboData[o + 2] = c.z;
+            dirty.mark(o, o + 3);
         }
-
-        // Color starts at offset 3 within each vertex's 6-float block
-        int bufferOffset = (index * 6 + 3) * Float.BYTES;
-        float[] colorData = new float[] { color.x, color.y, color.z };
-
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, bufferOffset, colorData);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
-    /**
-     * Set the selected vertex index (single selection - replaces any existing selection).
-     * @param index Vertex index to select, or -1 to clear selection
-     */
+    /** Re-bakes the colours of the vertices whose state changed and rebuilds the selected element list. */
+    private void applySelection() {
+        for (int v : bakedSelection) bake(v);
+        bake(bakedHover);
+        bake(bakedActive);
+        int[] next = new int[selectedVertexIndices.size()];
+        int n = 0;
+        for (int v : selectedVertexIndices) {
+            if (v >= 0 && v < vertexCount) {
+                next[n++] = v;
+                bake(v);
+            }
+        }
+        bakedSelection = Arrays.copyOf(next, n);
+        bake(hoveredVertexIndex);
+        bakedHover = hoveredVertexIndex;
+        bakedActive = activeVertexIndex;
+
+        int[] elements = Arrays.copyOf(next, n);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, selectedEbo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, elements, GL_DYNAMIC_DRAW);
+        EditCostStats.count(EditCostStats.Counter.BUFFER_UPLOADS, 1);
+        glBindVertexArray(0);
+        selectedElementCount = n;
+        selectionDirty = false;
+        hoverDirty = false;
+    }
+
+    private void applyHover() {
+        int previous = bakedHover;
+        bakedHover = hoveredVertexIndex;
+        bake(previous);
+        bake(hoveredVertexIndex);
+        hoverDirty = false;
+    }
+
     public void setSelectedVertex(int index) {
         if (index < -1 || (index >= 0 && index >= vertexCount)) {
             logger.warn("Invalid vertex index for selection: {} (max: {})", index, vertexCount - 1);
             return;
         }
 
-        // Capture previously selected indices before clearing
-        Set<Integer> previouslySelected = new HashSet<>(selectedVertexIndices);
-
-        // Clear existing and set new single selection
         selectedVertexIndices.clear();
         if (index >= 0) {
             selectedVertexIndices.add(index);
         }
         selectedVertexIndex = index;
         activeVertexIndex = index;
-
-        // Update VBO colors for deselected vertices (revert to default/modified)
-        for (int prev : previouslySelected) {
-            if (!selectedVertexIndices.contains(prev)) {
-                updateVertexColorInBuffer(prev);
-            }
-        }
-        // Update VBO color for newly selected vertex
-        if (index >= 0 && !previouslySelected.contains(index)) {
-            updateVertexColorInBuffer(index);
-        }
+        selectionDirty = true;
 
         logger.debug("Selected vertex set to: {}", index);
     }
 
-    /**
-     * Update the selection with a set of vertex indices (multi-selection).
-     * @param indices Set of vertex indices to select
-     */
     public void updateSelectionSet(Set<Integer> indices) {
-        // Capture previously selected indices before clearing
-        Set<Integer> previouslySelected = new HashSet<>(selectedVertexIndices);
-        int previousActive = activeVertexIndex;
-
         selectedVertexIndices.clear();
         activeVertexIndex = -1;
         if (indices != null) {
@@ -557,73 +531,32 @@ public class VertexRenderer implements MeshChangeListener {
         }
         // Update backward compat field
         selectedVertexIndex = selectedVertexIndices.isEmpty() ? -1 : selectedVertexIndices.iterator().next();
-
-        // Update VBO colors for all affected vertices
-        Set<Integer> allAffected = new HashSet<>(previouslySelected);
-        allAffected.addAll(selectedVertexIndices);
-        if (previousActive >= 0) {
-            allAffected.add(previousActive);
-        }
-        for (int idx : allAffected) {
-            updateVertexColorInBuffer(idx);
-        }
+        selectionDirty = true;
 
         logger.debug("Updated vertex selection set: {} vertices", selectedVertexIndices.size());
     }
 
-    /**
-     * Get the set of selected vertex indices.
-     * @return Copy of the selected vertex indices set
-     */
     public Set<Integer> getSelectedVertexIndices() {
         return new HashSet<>(selectedVertexIndices);
     }
 
-    /**
-     * Check if a specific vertex is selected.
-     * @param index Vertex index to check
-     * @return true if the vertex is selected
-     */
     public boolean isVertexSelected(int index) {
         return selectedVertexIndices.contains(index);
     }
 
-    /**
-     * Get the currently selected vertex index (backward compatibility).
-     * @return First selected vertex index, or -1 if no selection
-     */
     public int getSelectedVertexIndex() {
         return selectedVertexIndex;
     }
 
-    /**
-     * Clear the current selection.
-     */
     public void clearSelection() {
-        // Capture previously selected indices before clearing
-        Set<Integer> previouslySelected = new HashSet<>(selectedVertexIndices);
-
         selectedVertexIndices.clear();
         selectedVertexIndex = -1;
         activeVertexIndex = -1;
-
-        // Update VBO colors for previously selected vertices back to default
-        for (int index : previouslySelected) {
-            updateVertexColorInBuffer(index);
-        }
+        selectionDirty = true;
 
         logger.debug("Vertex selection cleared");
     }
 
-    /**
-     * Update a single UNIQUE vertex position (live preview of the vertex dot
-     * during a drag). Only this renderer's overlay data is touched — the
-     * translation handlers commit the moved corners to the
-     * EditableModel (single source of truth) each mouse move.
-     *
-     * @param uniqueIndex Unique vertex index to update (0-7 for cube)
-     * @param position New position in model space
-     */
     public void updateVertexPosition(int uniqueIndex, Vector3f position) {
         if (!initialized) {
             logger.warn("Cannot update vertex position: renderer not initialized");
@@ -635,28 +568,13 @@ public class VertexRenderer implements MeshChangeListener {
                     uniqueIndex, vertexCount);
             return;
         }
-
-        // Update in-memory positions and the VBO position floats
-        int posIndex = uniqueIndex * 3;
-        vertexPositions[posIndex] = position.x;
-        vertexPositions[posIndex + 1] = position.y;
-        vertexPositions[posIndex + 2] = position.z;
-        updateVertexInBuffer(uniqueIndex, position);
+        writePosition(uniqueIndex, position.x, position.y, position.z);
     }
 
-    /**
-     * Get the hovered vertex index.
-     * @return Hovered vertex index, or -1 if no vertex is hovered
-     */
     public int getHoveredVertexIndex() {
         return hoveredVertexIndex;
     }
 
-    /**
-     * Get the position of a specific vertex by index.
-     * @param index Vertex index
-     * @return Vertex position as Vector3f, or null if invalid index
-     */
     public Vector3f getVertexPosition(int index) {
         if (vertexPositions == null || index < 0 || index >= vertexCount) {
             return null;
@@ -670,57 +588,44 @@ public class VertexRenderer implements MeshChangeListener {
         );
     }
 
-    /**
-     * Get all unique vertex positions as a flat array.
-     * Used for updating the BlockModelRenderer mesh when vertices are dragged.
-     *
-     * @return Array of vertex positions [x0,y0,z0, x1,y1,z1, ...] or null if no vertices
-     */
     public float[] getAllVertexPositions() {
         return vertexPositions;
     }
 
-    /**
-     * Get the current vertex count.
-     *
-     * @return Number of unique vertices
-     */
     public int getVertexCount() {
         return vertexCount;
     }
 
-    /**
-     * Rebuild the VBO with current vertex positions and colors.
-     * Used after merging vertices to update GPU data.
-     */
+    /** Rebuilds the mirror (positions + state colours) and uploads it whole. */
     private void rebuildVBO() {
         if (!initialized || vertexPositions == null || vertexCount == 0) {
             return;
         }
 
-        // Create interleaved vertex data (position + color)
-        float[] vertexData = new float[vertexCount * 6];
-
+        float[] vertexData = new float[vertexCount * FLOATS_PER_VERTEX];
         for (int i = 0; i < vertexCount; i++) {
             int posIndex = i * 3;
-            int dataIndex = i * 6;
-
-            // Copy position
+            int dataIndex = i * FLOATS_PER_VERTEX;
             vertexData[dataIndex] = vertexPositions[posIndex];
             vertexData[dataIndex + 1] = vertexPositions[posIndex + 1];
             vertexData[dataIndex + 2] = vertexPositions[posIndex + 2];
-
-            // Determine color based on state (active > selected > modified > default)
             Vector3f color = resolveVertexColor(i);
-
             vertexData[dataIndex + 3] = color.x;
             vertexData[dataIndex + 4] = color.y;
             vertexData[dataIndex + 5] = color.z;
         }
+        vboData = vertexData;
+        dirty.clear();
+        hoverGate.invalidate();
+        // Selected indices beyond the new count drop out of the element list on the next render
+        bakedSelection = new int[0];
+        bakedHover = -1;
+        bakedActive = -1;
+        selectionDirty = true;
 
-        // Upload to GPU
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, vertexData, GL_DYNAMIC_DRAW);
+        EditCostStats.count(EditCostStats.Counter.BUFFER_UPLOADS, 1);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
         logger.debug("Rebuilt VBO with {} vertices", vertexCount);
@@ -733,12 +638,14 @@ public class VertexRenderer implements MeshChangeListener {
     }
 
     public void setEnabled(boolean enabled) {
+        if (enabled != this.enabled) hoverGate.invalidate();
         this.enabled = enabled;
     }
 
     public void setPointSize(float pointSize) {
         this.pointSize = Math.max(1.0f, Math.min(15.0f, pointSize));
         this.selectedPointSize = this.pointSize + 3.0f;
+        hoverGate.invalidate();
         logger.trace("Point size set to: {}", this.pointSize);
     }
 

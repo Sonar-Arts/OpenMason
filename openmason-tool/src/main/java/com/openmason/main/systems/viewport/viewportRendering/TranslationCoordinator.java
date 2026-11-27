@@ -142,6 +142,15 @@ public class TranslationCoordinator {
      * @param mouseY Current mouse Y position
      */
     public void handleMouseMove(float mouseX, float mouseY) {
+        long editCostSpan = com.openmason.engine.modeling.core.EditCostStats.begin();
+        try {
+            handleMouseMoveNow(mouseX, mouseY);
+        } finally {
+            com.openmason.engine.modeling.core.EditCostStats.end(com.openmason.engine.modeling.core.EditCostStats.Span.DRAG_FRAME, editCostSpan);
+        }
+    }
+
+    private void handleMouseMoveNow(float mouseX, float mouseY) {
         switch (activeHandler) {
             case VERTEX:
                 vertexHandler.handleMouseMove(mouseX, mouseY);
@@ -165,6 +174,15 @@ public class TranslationCoordinator {
      * @param mouseY Mouse Y position
      */
     public void handleMouseRelease(float mouseX, float mouseY) {
+        long editCostSpan = com.openmason.engine.modeling.core.EditCostStats.begin();
+        try {
+            handleMouseReleaseNow(mouseX, mouseY);
+        } finally {
+            com.openmason.engine.modeling.core.EditCostStats.end(com.openmason.engine.modeling.core.EditCostStats.Span.DRAG_COMMIT, editCostSpan);
+        }
+    }
+
+    private void handleMouseReleaseNow(float mouseX, float mouseY) {
         switch (activeHandler) {
             case VERTEX:
                 vertexHandler.handleMouseRelease(mouseX, mouseY);

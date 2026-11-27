@@ -708,6 +708,80 @@ public class ModelPartManager implements IModelPartManager {
         }
     }
 
+    /**
+     * {@link #syncPartVertexFromWorldPos} for many vertices at once (drag release, undo, #175): one pass per part
+     * over its geometry instead of one per moved vertex. Every update reads its part's ORIGINAL position first, so
+     * a vertex dragged onto another moved vertex's old spot does not drag that one along (the one-by-one version
+     * did). Co-located duplicates (UV splits) move together, as in the single version.
+     *
+     * @param globalIndices combined-mesh vertex indices (render corners)
+     * @param worldPositions {@code x,y,z} per index, in combined-mesh (world) space
+     */
+    public void syncPartVerticesFromWorldPos(int[] globalIndices, float[] worldPositions) {
+        if (globalIndices == null || worldPositions == null || globalIndices.length == 0) return;
+        // part id -> updates (old local x,y,z, new local x,y,z), in call order
+        Map<String, float[]> updates = new LinkedHashMap<>();
+        Map<String, Integer> updateCounts = new HashMap<>();
+        Map<String, Matrix4f> inverse = new HashMap<>();
+        Vector4f local = new Vector4f();
+        int n = Math.min(globalIndices.length, worldPositions.length / 3);
+        for (int g = 0; g < n; g++) {
+            java.util.Set<String> syncedParts = new java.util.HashSet<>();
+            for (int soupIndex : combinedVertexResolver.apply(globalIndices[g])) {
+                for (Map.Entry<String, ModelPartDescriptor> entry : parts.entrySet()) {
+                    MeshRange range = entry.getValue().meshRange();
+                    if (range == null || !range.containsVertex(soupIndex)) continue;
+                    String id = entry.getKey();
+                    if (!syncedParts.add(id)) break;
+                    PartMeshRebuilder.PartGeometry geo = partGeometry.get(id);
+                    if (geo == null || geo.vertices() == null) break;
+                    Matrix4f inv = inverse.computeIfAbsent(id, k -> new Matrix4f(getEffectiveWorldMatrix(k)).invert());
+                    local.set(worldPositions[g * 3], worldPositions[g * 3 + 1], worldPositions[g * 3 + 2], 1f);
+                    inv.transform(local);
+                    int li = range.toLocalVertex(soupIndex);
+                    float[] verts = geo.vertices();
+                    int count = updateCounts.getOrDefault(id, 0);
+                    float[] list = updates.get(id);
+                    if (list == null || list.length < (count + 1) * 6) {
+                        list = list == null ? new float[48] : Arrays.copyOf(list, list.length * 2);
+                        updates.put(id, list);
+                    }
+                    int o = count * 6;
+                    list[o] = verts[li * 3];
+                    list[o + 1] = verts[li * 3 + 1];
+                    list[o + 2] = verts[li * 3 + 2];
+                    list[o + 3] = local.x;
+                    list[o + 4] = local.y;
+                    list[o + 5] = local.z;
+                    updateCounts.put(id, count + 1);
+                    break;
+                }
+            }
+        }
+        final float epsSq = ModelingConstants.POSITION_EPSILON_SQ;
+        for (Map.Entry<String, float[]> e : updates.entrySet()) {
+            int count = updateCounts.get(e.getKey());
+            float[] list = e.getValue();
+            float[] olds = new float[count * 3];
+            for (int u = 0; u < count; u++) System.arraycopy(list, u * 6, olds, u * 3, 3);
+            com.openmason.engine.modeling.core.PointGrid grid = new com.openmason.engine.modeling.core.PointGrid(
+                    olds, null, ModelingConstants.POSITION_EPSILON);
+            float[] verts = partGeometry.get(e.getKey()).vertices();
+            int[] winner = new int[1];
+            for (int i = 0, vc = verts.length / 3; i < vc; i++) {
+                winner[0] = -1;
+                // the last update (call order) whose old position matches wins, as sequential calls would
+                grid.query(verts[i * 3], verts[i * 3 + 1], verts[i * 3 + 2], epsSq - Math.ulp(epsSq),
+                        (u, d) -> winner[0] = Math.max(winner[0], u));
+                if (winner[0] < 0) continue;
+                int o = winner[0] * 6;
+                verts[i * 3] = list[o + 3];
+                verts[i * 3 + 1] = list[o + 4];
+                verts[i * 3 + 2] = list[o + 5];
+            }
+        }
+    }
+
     // ========== Hierarchy ==========
 
     @Override
@@ -948,6 +1022,16 @@ public class ModelPartManager implements IModelPartManager {
      * Rebuild the combined mesh from all visible parts and push to consumer.
      */
     private void rebuildCombinedMesh() {
+        long span = com.openmason.engine.modeling.core.EditCostStats.begin();
+        try {
+            rebuildCombinedMeshNow();
+        } finally {
+            com.openmason.engine.modeling.core.EditCostStats.end(
+                com.openmason.engine.modeling.core.EditCostStats.Span.REBUILD_COMBINED, span);
+        }
+    }
+
+    private void rebuildCombinedMeshNow() {
         // Use ALL parts (visible and hidden) for stable face ID assignment.
         // Hidden parts reserve their face ID range but contribute no geometry.
         // This ensures face IDs never shift on hide/show, only on add/remove.

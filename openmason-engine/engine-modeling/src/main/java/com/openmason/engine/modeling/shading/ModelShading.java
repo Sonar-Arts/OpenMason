@@ -143,6 +143,16 @@ public final class ModelShading {
             baselines.clear();
             return;
         }
+        long span = com.openmason.engine.modeling.core.EditCostStats.begin();
+        try {
+            syncNow(partSpans);
+        } finally {
+            com.openmason.engine.modeling.core.EditCostStats.end(
+                com.openmason.engine.modeling.core.EditCostStats.Span.SHADING, span);
+        }
+    }
+
+    private void syncNow(List<PartSpan> partSpans) {
         RenderMesh rm = mesh.get();
         if (rm == null) return;
         for (Slice slice : slice(rm, partSpans).values()) {
@@ -211,6 +221,16 @@ public final class ModelShading {
     public short[] cornerNormals() {
         if (stores.isEmpty()) return null;
         sync();
+        long span = com.openmason.engine.modeling.core.EditCostStats.begin();
+        try {
+            return cornerNormalsNow();
+        } finally {
+            com.openmason.engine.modeling.core.EditCostStats.end(
+                com.openmason.engine.modeling.core.EditCostStats.Span.SHADING, span);
+        }
+    }
+
+    private short[] cornerNormalsNow() {
         RenderMesh rm = mesh.get();
         if (rm == null || rm.cornerCount() == 0) return null;
         short[] out = null;

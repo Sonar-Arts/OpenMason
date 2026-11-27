@@ -77,9 +77,11 @@ public class MeshSerializationAdapter implements IMeshSerializationAdapter {
         applyUvMode(meshData.uvMode());
         stateManager.clearParts();
 
+        long span = EditCostStats.begin();
         MeshImporter.ImportResult result = MeshImporter.importSoup(
             meshData.vertices(), meshData.texCoords(),
             meshData.indices(), meshData.triangleToFaceId());
+        EditCostStats.end(EditCostStats.Span.IMPORT_SOUP, span);
         rebuildPipeline.setEditableMesh(result.mesh());
         rebuildPipeline.setImportSoupMapping(result.vertexIdToSoupIndices());
         rebuildPipeline.rebuildFromEditable();
@@ -138,8 +140,10 @@ public class MeshSerializationAdapter implements IMeshSerializationAdapter {
             }
         }
 
+        long span = EditCostStats.begin();
         MeshImporter.ImportResult result = MeshImporter.importSoup(
             vertices, texCoords, indices, triangleToFaceId);
+        EditCostStats.end(EditCostStats.Span.IMPORT_SOUP, span);
         rebuildPipeline.setEditableMesh(result.mesh());
         rebuildPipeline.setImportSoupMapping(result.vertexIdToSoupIndices());
         rebuildPipeline.rebuildFromEditable();

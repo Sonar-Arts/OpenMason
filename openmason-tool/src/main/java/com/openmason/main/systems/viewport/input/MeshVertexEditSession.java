@@ -136,34 +136,38 @@ public class MeshVertexEditSession {
      * @param originalToNew Maps original position → new position
      */
     public void apply(UnaryOperator<Vector3f> originalToNew) {
+        if (modelRenderer == null || originalPositions.isEmpty()) {
+            return;
+        }
+        // One positions-only model call for every vertex (#175): each vertex and its corners are written once,
+        // and the vertex / edge / face overlays follow through the model's batched mesh listener.
+        int[] ids = new int[originalPositions.size()];
+        float[] positions = new float[ids.length * 3];
+        int n = 0;
         for (Map.Entry<Integer, Vector3f> entry : originalPositions.entrySet()) {
-            int uniqueIndex = entry.getKey();
             Vector3f newPos = originalToNew.apply(new Vector3f(entry.getValue()));
             if (newPos == null) {
                 continue;
             }
-
-            // Update the solid mesh per mesh index (FaceTranslationHandler recipe)
-            int[] meshIndices = modelRenderer.getMeshIndicesForUniqueVertex(uniqueIndex);
-            if (meshIndices != null) {
-                for (int meshIndex : meshIndices) {
-                    modelRenderer.updateVertexPosition(meshIndex, newPos);
-                }
-            }
-
-            // Keep the wireframe (VertexRenderer + EdgeRenderer) in sync
-            if (vertexRenderer != null) {
-                vertexRenderer.updateVertexPosition(uniqueIndex, newPos);
-            }
-            if (edgeRenderer != null) {
-                edgeRenderer.updateEdgesConnectedToVertexByIndex(uniqueIndex, newPos);
-            }
+            ids[n] = entry.getKey();
+            positions[n * 3] = newPos.x;
+            positions[n * 3 + 1] = newPos.y;
+            positions[n * 3 + 2] = newPos.z;
+            n++;
         }
+        modelRenderer.moveVertices(java.util.Arrays.copyOf(ids, n), java.util.Arrays.copyOf(positions, n * 3));
+        moved = true;
+    }
 
-        // Rebuild face overlay from EditableModel
-        if (faceRenderer != null) {
-            faceRenderer.rebuildFromEditableModel();
+    // True once apply() moved the model: the deferred position refresh is owed at commit / revert.
+    private boolean moved;
+
+    /** The position refresh deferred during the live edit (UVs, triangulation, topology, overlay rebuild). */
+    private void finishPositions() {
+        if (moved && modelRenderer != null) {
+            modelRenderer.commitVertexPositions();
         }
+        moved = false;
     }
 
     /**
@@ -171,6 +175,7 @@ public class MeshVertexEditSession {
      */
     public void revert() {
         apply(original -> original);
+        finishPositions();
         logger.debug("Edit session reverted {} vertices", originalPositions.size());
     }
 
@@ -185,6 +190,7 @@ public class MeshVertexEditSession {
         if (originalPositions.isEmpty() || modelRenderer == null) {
             return;
         }
+        finishPositions();
 
         // Build per-mesh-index deltas (original → current), skipping unmoved vertices
         Map<Integer, VertexMoveCommand.VertexDelta> deltas = new java.util.HashMap<>();
@@ -208,12 +214,10 @@ public class MeshVertexEditSession {
             return;
         }
 
-        // Sync partGeometry so edits survive a subsequent part transform rebuild
+        // Sync partGeometry so edits survive a subsequent part transform rebuild (one batch)
         ModelPartManager pm = modelRenderer.getPartManager();
         if (pm != null) {
-            for (VertexMoveCommand.VertexDelta delta : deltas.values()) {
-                pm.syncPartVertexFromWorldPos(delta.index(), delta.newPos());
-            }
+            VertexMoveCommand.syncParts(pm, deltas.values(), true);
         }
 
         // Record undo command

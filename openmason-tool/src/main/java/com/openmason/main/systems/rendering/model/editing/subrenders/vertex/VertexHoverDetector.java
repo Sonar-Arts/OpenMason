@@ -69,6 +69,7 @@ public final class VertexHoverDetector {
 
             // Test each vertex
             Vector4f modelPos = new Vector4f();
+            Vector4f clipPos = new Vector4f(); // reused: no allocation per vertex (#175)
             for (int i = 0; i < vertexCount; i++) {
                 int posIndex = i * 3;
 
@@ -81,7 +82,6 @@ public final class VertexHoverDetector {
                 );
 
                 // Transform from model space to clip space using MVP matrix
-                Vector4f clipPos = new Vector4f();
                 mvpMatrix.transform(modelPos, clipPos);
 
                 // Check if behind camera

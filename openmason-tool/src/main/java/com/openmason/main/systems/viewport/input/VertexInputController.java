@@ -237,6 +237,11 @@ public class VertexInputController {
             return;
         }
 
+        // No hover picking while a drag runs: the hovered element is frozen until release (#175)
+        if (translationCoordinator != null && translationCoordinator.isDragging()) {
+            return;
+        }
+
         // Get model matrix for proper vertex transformation
         Matrix4f modelMatrix = (transformState != null)
                 ? transformState.getTransformMatrix()

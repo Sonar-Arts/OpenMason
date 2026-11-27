@@ -3,6 +3,7 @@ package com.openmason.main.systems.rendering.model.editing.subrenders.edge;
 import com.openmason.engine.rendering.viewer.math.ScreenProjectionUtil;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import org.joml.Vector4f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +33,6 @@ public final class EdgeHoverDetector {
     /**
      * Internal result from point-to-line-segment distance calculation.
      */
-    private record DistanceResult(float distance, float t) {}
 
     // Private constructor to prevent instantiation (utility class)
     private EdgeHoverDetector() {
@@ -91,38 +91,27 @@ public final class EdgeHoverDetector {
             // Line width threshold (slightly larger for easier selection)
             float thresholdPixels = lineWidth * 2.0f;
 
+            float[] scratch = new float[6];
+            Vector4f clip = new Vector4f();
             for (int i = 0; i < edgeCount; i++) {
                 int posIndex = i * 6; // Each edge has 2 endpoints × 3 coords = 6 floats
 
-                // Project both endpoints from MODEL SPACE to screen space (with NDC depth)
-                Vector3f screenPos1 = ScreenProjectionUtil.projectToScreenWithDepth(
-                    edgePositions[posIndex], edgePositions[posIndex + 1], edgePositions[posIndex + 2],
-                    mvpMatrix, viewportWidth, viewportHeight);
-                Vector3f screenPos2 = ScreenProjectionUtil.projectToScreenWithDepth(
-                    edgePositions[posIndex + 3], edgePositions[posIndex + 4], edgePositions[posIndex + 5],
-                    mvpMatrix, viewportWidth, viewportHeight);
-
-                // Skip if either endpoint is behind camera
-                if (screenPos1 == null || screenPos2 == null) {
-                    continue;
+                // Project both endpoints from MODEL SPACE to screen space (with NDC depth), no allocation
+                if (!project(edgePositions, posIndex, mvpMatrix, viewportWidth, viewportHeight, clip, scratch, 0)
+                        || !project(edgePositions, posIndex + 3, mvpMatrix, viewportWidth, viewportHeight,
+                                clip, scratch, 3)) {
+                    continue; // an endpoint is behind the camera
                 }
 
-                // Calculate point-to-line-segment distance with parameter
-                DistanceResult result = pointToLineSegmentWithParameter(
-                    mouseX, mouseY,
-                    screenPos1.x, screenPos1.y,
-                    screenPos2.x, screenPos2.y
-                );
+                float distance = pointToSegment(mouseX, mouseY, scratch[0], scratch[1], scratch[3], scratch[4],
+                        null);
+                float avgDepth = (scratch[2] + scratch[5]) * 0.5f;
 
-                // Average depth of the edge
-                float avgDepth = (screenPos1.z + screenPos2.z) * 0.5f;
-
-                // Check if mouse is within threshold and this edge is closer
-                if (result.distance() <= thresholdPixels) {
+                if (distance <= thresholdPixels) {
                     // Prefer closer edges when distances are similar
-                    if (result.distance() < closestDistance - 0.5f ||
-                        (Math.abs(result.distance() - closestDistance) < 0.5f && avgDepth < closestDepth)) {
-                        closestDistance = result.distance();
+                    if (distance < closestDistance - 0.5f ||
+                        (Math.abs(distance - closestDistance) < 0.5f && avgDepth < closestDepth)) {
+                        closestDistance = distance;
                         closestDepth = avgDepth;
                         closestEdgeIndex = i;
                     }
@@ -138,41 +127,42 @@ public final class EdgeHoverDetector {
     }
 
     /**
-     * Calculate the shortest distance from a point to a line segment,
-     * returning both the distance and the parametric position along the segment.
+     * Projects one model-space point (3 floats of {@code src} at {@code at}) to (screenX, screenY, ndcDepth) in
+     * {@code out[o..o+2]} with exactly {@link ScreenProjectionUtil#projectToScreenWithDepth}'s math, reusing
+     * {@code clip}. False when the point is behind the camera.
      */
-    private static DistanceResult pointToLineSegmentWithParameter(float px, float py,
-                                                                   float x1, float y1,
-                                                                   float x2, float y2) {
-        // Vector from start to end
+    private static boolean project(float[] src, int at, Matrix4f mvp, int width, int height,
+                                   Vector4f clip, float[] out, int o) {
+        clip.set(src[at], src[at + 1], src[at + 2], 1.0f);
+        mvp.transform(clip);
+        if (clip.w <= 0) {
+            return false;
+        }
+        float ndcX = clip.x / clip.w;
+        float ndcY = clip.y / clip.w;
+        out[o] = (ndcX + 1.0f) * 0.5f * width;
+        out[o + 1] = (1.0f - ndcY) * 0.5f * height;
+        out[o + 2] = clip.z / clip.w;
+        return true;
+    }
+
+    /** Screen distance from (px, py) to the segment, clamped to its ends; {@code tOut[0]} gets the segment parameter if given. */
+    private static float pointToSegment(float px, float py, float x1, float y1, float x2, float y2, float[] tOut) {
         float dx = x2 - x1;
         float dy = y2 - y1;
-
-        // Edge case: zero-length line segment (degenerate edge)
         float lengthSquared = dx * dx + dy * dy;
         if (lengthSquared < 0.0001f) {
-            // Treat as point
             float dpx = px - x1;
             float dpy = py - y1;
-            return new DistanceResult((float) Math.sqrt(dpx * dpx + dpy * dpy), 0f);
+            if (tOut != null) tOut[0] = 0f;
+            return (float) Math.sqrt(dpx * dpx + dpy * dpy);
         }
-
-        // Parameter t (0 to 1) representing position along line segment
-        // t = 0 means at start point, t = 1 means at end point
         float t = ((px - x1) * dx + (py - y1) * dy) / lengthSquared;
-
-        // Clamp t to [0, 1] to stay on line segment
         t = Math.max(0.0f, Math.min(1.0f, t));
-
-        // Find closest point on line segment
-        float closestX = x1 + t * dx;
-        float closestY = y1 + t * dy;
-
-        // Calculate distance from point to closest point on segment
-        float distX = px - closestX;
-        float distY = py - closestY;
-
-        return new DistanceResult((float) Math.sqrt(distX * distX + distY * distY), t);
+        float distX = px - (x1 + t * dx);
+        float distY = py - (y1 + t * dy);
+        if (tOut != null) tOut[0] = t;
+        return (float) Math.sqrt(distX * distX + distY * distY);
     }
 
     /**
@@ -220,35 +210,29 @@ public final class EdgeHoverDetector {
 
             float thresholdPixels = lineWidth * 2.0f;
 
+            float[] scratch = new float[6];
+            float[] tOut = new float[1];
+            Vector4f clip = new Vector4f();
             for (int i = 0; i < edgeCount; i++) {
                 int posIndex = i * 6;
 
-                Vector3f screenPos1 = ScreenProjectionUtil.projectToScreenWithDepth(
-                    edgePositions[posIndex], edgePositions[posIndex + 1], edgePositions[posIndex + 2],
-                    mvpMatrix, viewportWidth, viewportHeight);
-                Vector3f screenPos2 = ScreenProjectionUtil.projectToScreenWithDepth(
-                    edgePositions[posIndex + 3], edgePositions[posIndex + 4], edgePositions[posIndex + 5],
-                    mvpMatrix, viewportWidth, viewportHeight);
-
-                if (screenPos1 == null || screenPos2 == null) {
+                if (!project(edgePositions, posIndex, mvpMatrix, viewportWidth, viewportHeight, clip, scratch, 0)
+                        || !project(edgePositions, posIndex + 3, mvpMatrix, viewportWidth, viewportHeight,
+                                clip, scratch, 3)) {
                     continue;
                 }
 
-                DistanceResult result = pointToLineSegmentWithParameter(
-                    mouseX, mouseY,
-                    screenPos1.x, screenPos1.y,
-                    screenPos2.x, screenPos2.y
-                );
+                float distance = pointToSegment(mouseX, mouseY, scratch[0], scratch[1], scratch[3], scratch[4],
+                        tOut);
+                float avgDepth = (scratch[2] + scratch[5]) * 0.5f;
 
-                float avgDepth = (screenPos1.z + screenPos2.z) * 0.5f;
-
-                if (result.distance() <= thresholdPixels) {
-                    if (result.distance() < closestDistance - 0.5f ||
-                        (Math.abs(result.distance() - closestDistance) < 0.5f && avgDepth < closestDepth)) {
-                        closestDistance = result.distance();
+                if (distance <= thresholdPixels) {
+                    if (distance < closestDistance - 0.5f ||
+                        (Math.abs(distance - closestDistance) < 0.5f && avgDepth < closestDepth)) {
+                        closestDistance = distance;
                         closestDepth = avgDepth;
                         closestEdgeIndex = i;
-                        closestT = result.t();
+                        closestT = tOut[0];
                     }
                 }
             }

@@ -185,52 +185,44 @@ public final class FaceHoverDetector {
                 return -1;
             }
 
-            // Test each triangle for intersection
+            // Test in MODEL space (#175): move the ray once by the inverse model matrix instead of transforming
+            // three vertices per triangle. An affine map keeps the ray parameter t of every hit, so the closest
+            // triangle is the same; no per-triangle allocation.
+            Matrix4f inverseModel = new Matrix4f(modelMatrix).invert();
+            Vector3f origin = inverseModel.transformPosition(new Vector3f(ray.origin()));
+            Vector3f direction = inverseModel.transformDirection(new Vector3f(ray.direction()));
+            float ox = origin.x, oy = origin.y, oz = origin.z;
+            float dx = direction.x, dy = direction.y, dz = direction.z;
+
             int closestTriangleIndex = -1;
             float closestDistance = Float.POSITIVE_INFINITY;
+            final float epsilon = 0.0000001f;
 
             for (int triIdx = 0; triIdx < triangleCount; triIdx++) {
-                int posStart = triIdx * 9; // 9 floats per triangle (3 vertices × 3 coords)
-
-                // Bounds check
-                if (posStart + 8 >= trianglePositions.length) {
+                int p = triIdx * 9; // 9 floats per triangle (3 vertices x 3 coords)
+                if (p + 8 >= trianglePositions.length) {
                     break;
                 }
-
-                // Get 3 vertices of triangle in MODEL SPACE
-                Vector3f v0_model = new Vector3f(
-                    trianglePositions[posStart + 0],
-                    trianglePositions[posStart + 1],
-                    trianglePositions[posStart + 2]
-                );
-                Vector3f v1_model = new Vector3f(
-                    trianglePositions[posStart + 3],
-                    trianglePositions[posStart + 4],
-                    trianglePositions[posStart + 5]
-                );
-                Vector3f v2_model = new Vector3f(
-                    trianglePositions[posStart + 6],
-                    trianglePositions[posStart + 7],
-                    trianglePositions[posStart + 8]
-                );
-
-                // Transform vertices from MODEL SPACE to WORLD SPACE
-                Vector3f v0 = new Vector3f();
-                Vector3f v1 = new Vector3f();
-                Vector3f v2 = new Vector3f();
-                modelMatrix.transformPosition(v0_model, v0);
-                modelMatrix.transformPosition(v1_model, v1);
-                modelMatrix.transformPosition(v2_model, v2);
-
-                float[] outT = new float[1];
-
-                // Test triangle
-                if (intersectRayTriangle(ray.origin(), ray.direction(), v0, v1, v2, outT)) {
-                    float distance = outT[0];
-                    if (distance >= 0 && distance < closestDistance) {
-                        closestDistance = distance;
-                        closestTriangleIndex = triIdx;
-                    }
+                float v0x = trianglePositions[p], v0y = trianglePositions[p + 1], v0z = trianglePositions[p + 2];
+                float e1x = trianglePositions[p + 3] - v0x, e1y = trianglePositions[p + 4] - v0y,
+                        e1z = trianglePositions[p + 5] - v0z;
+                float e2x = trianglePositions[p + 6] - v0x, e2y = trianglePositions[p + 7] - v0y,
+                        e2z = trianglePositions[p + 8] - v0z;
+                // Moller-Trumbore
+                float hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x;
+                float a = e1x * hx + e1y * hy + e1z * hz;
+                if (Math.abs(a) < epsilon) continue;
+                float f = 1.0f / a;
+                float sx = ox - v0x, sy = oy - v0y, sz = oz - v0z;
+                float u = f * (sx * hx + sy * hy + sz * hz);
+                if (u < 0.0f || u > 1.0f) continue;
+                float qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+                float v = f * (dx * qx + dy * qy + dz * qz);
+                if (v < 0.0f || u + v > 1.0f) continue;
+                float t = f * (e2x * qx + e2y * qy + e2z * qz);
+                if (t > epsilon && t < closestDistance) {
+                    closestDistance = t;
+                    closestTriangleIndex = triIdx;
                 }
             }
 

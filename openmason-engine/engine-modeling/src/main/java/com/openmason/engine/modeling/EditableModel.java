@@ -422,6 +422,47 @@ public class EditableModel {
         mutationCoordinator.updateVertexPositions(positions);
     }
 
+    /**
+     * Positions-only move of several vertices (editable vertex ids = unique vertex indices) with one batched
+     * listener notification: the interactive drag path (#175). Call {@link #commitVertexPositions()} when the
+     * interaction ends so projected UVs, triangulation and topology follow.
+     */
+    public void moveVertices(int[] uniqueVertexIds, float[] positions) {
+        mutationCoordinator.moveVertices(uniqueVertexIds, positions);
+    }
+
+    /**
+     * Coalesces the mesh derivations of a multi-step load (parts, face textures, UV refresh) into one, run by
+     * {@link #endDeferredRebuild()} (#175). Inside the bracket only edit parts / face textures; derived data
+     * (render mesh, topology, overlays) is stale until the end. Always pair in try/finally.
+     */
+    public void beginDeferredRebuild() {
+        rebuildPipeline.beginDeferredDerive();
+    }
+
+    /** Ends {@link #beginDeferredRebuild()}: the outermost end runs the one pending derivation. */
+    public void endDeferredRebuild() {
+        rebuildPipeline.endDeferredDerive();
+    }
+
+    /** Ends an interactive position edit ({@link #moveVertices}): one position refresh. */
+    public void commitVertexPositions() {
+        mutationCoordinator.commitVertexPositions();
+    }
+
+    /**
+     * The live triangle index array (render corners, 3 per triangle) WITHOUT a copy - read only, valid until the
+     * next derivation. For per-frame readers that must not copy the whole index buffer.
+     */
+    public int[] triangleIndicesView() {
+        return vertexManager.getIndices();
+    }
+
+    /** The live corner position array ({@code x,y,z} per render corner) WITHOUT a copy - read only. */
+    public float[] meshVertexPositionsView() {
+        return vertexManager.getVertices();
+    }
+
     public Vector3f getVertexPosition(int globalIndex) {
         return vertexManager.getVertexPosition(globalIndex);
     }

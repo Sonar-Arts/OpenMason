@@ -521,11 +521,23 @@ public class ModelOperationService {
                 modelState.setModelSource(ModelState.ModelSource.OMO_FILE); // Mark as .OMO file
 
                 // Load into viewport if available
+                boolean bonesRestored = false;
                 if (viewport != null) {
                     if (meshData != null && meshData.hasCustomGeometry()) {
                         // Load texture via the content loader
                         viewport.loadModel(currentEditableModel);
 
+                        // Skeleton FIRST and quietly (#175): parts parented to bones then bake against the new
+                        // skeleton in the part rebuild below, instead of a second whole-model rebuild afterwards.
+                        viewport.getBoneStore().load(omoDeserializer.getLastLoadedBoneEntries(), false);
+                        bonesRestored = true;
+
+                        // Parts + face textures derive the mesh ONCE, at the end of this bracket (#175)
+                        EditableModel deferred = viewport.getModelRenderer();
+                        if (deferred != null) {
+                            deferred.beginDeferredRebuild();
+                        }
+                        try {
                         // Check for multi-part model (v1.3+)
                         List<OMOFormat.PartEntry> partEntries = omoDeserializer.getLastLoadedPartEntries();
                         Map<Integer, Integer> restoredFaceIds = null;
@@ -554,6 +566,11 @@ public class ModelOperationService {
                         Map<String, byte[]> materialTextures = omoDeserializer.getLastLoadedMaterialTextures();
                         if (faceTextureData != null && !faceTextureData.mappings().isEmpty()) {
                             restoreFaceTextureData(faceTextureData, materialTextures, restoredFaceIds);
+                        }
+                        } finally {
+                            if (deferred != null) {
+                                deferred.endDeferredRebuild();
+                            }
                         }
 
                         // Update statistics with actual counts
@@ -592,10 +609,13 @@ public class ModelOperationService {
                     logger.debug("Restored model-level transform from .OMO");
                 }
 
-                // Restore bone skeleton (v1.6+) — empty/null wipes any prior session skeleton
+                // Restore bone skeleton (v1.6+) — empty/null wipes any prior session skeleton (already restored,
+                // quietly, before the parts when the file has mesh data)
                 if (viewport != null) {
                     List<OMOFormat.BoneEntry> boneEntries = omoDeserializer.getLastLoadedBoneEntries();
-                    viewport.getBoneStore().load(boneEntries);
+                    if (!bonesRestored) {
+                        viewport.getBoneStore().load(boneEntries);
+                    }
                     if (boneEntries != null && !boneEntries.isEmpty()) {
                         logger.info("Loaded {} bone entries", boneEntries.size());
                     }

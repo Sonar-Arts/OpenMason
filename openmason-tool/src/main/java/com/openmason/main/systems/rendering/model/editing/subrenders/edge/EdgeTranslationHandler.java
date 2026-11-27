@@ -137,6 +137,7 @@ public class EdgeTranslationHandler extends TranslationHandlerBase {
 
         isDragging = true;
         hasMovedDuringDrag = false;
+        resetDeltaGate();
 
         // Capture mesh state before drag for snapshot-based undo (needed if merge occurs)
         if (commandHistory != null && synchronizer != null) {
@@ -181,6 +182,11 @@ public class EdgeTranslationHandler extends TranslationHandlerBase {
             // Convert delta to model space
             Vector3f modelSpaceDelta = worldToModelSpaceDelta(delta);
 
+            // Mouse still (same delta as last frame): nothing to do (#175)
+            if (!deltaChanged(modelSpaceDelta)) {
+                return;
+            }
+
             // Update selection state with delta (applies to all selected edges)
             selectionState.updatePosition(modelSpaceDelta);
 
@@ -188,20 +194,17 @@ public class EdgeTranslationHandler extends TranslationHandlerBase {
             Set<Integer> allVertexIndices = selectionState.getAllSelectedVertexIndices();
 
             // Update each unique vertex position
-            Map<Integer, Vector3f> newPositions = new HashMap<>();
+            Map<Integer, Vector3f> newPositions = new java.util.LinkedHashMap<>();
             for (int vertexIndex : allVertexIndices) {
                 // Get the original position for this vertex from any edge that uses it
                 Vector3f originalPos = getOriginalVertexPosition(vertexIndex);
                 if (originalPos != null) {
-                    Vector3f newPos = new Vector3f(originalPos).add(modelSpaceDelta);
-                    newPositions.put(vertexIndex, newPos);
-                    vertexRenderer.updateVertexPosition(vertexIndex, newPos);
-                    edgeRenderer.updateEdgesConnectedToVertexByIndex(vertexIndex, newPos);
+                    newPositions.put(vertexIndex, new Vector3f(originalPos).add(modelSpaceDelta));
                 }
             }
 
-            // REALTIME VISUAL UPDATE: commit moved corners to the
-            // EditableModel (single source of truth) during the drag
+            // REALTIME VISUAL UPDATE: positions-only move of the EditableModel (single source of truth); the
+            // overlays follow through the model's batched mesh listener
             pushVertexPositionsToModel(modelRenderer, faceRenderer, newPositions);
 
             dragStartDelta.set(modelSpaceDelta);
@@ -240,23 +243,17 @@ public class EdgeTranslationHandler extends TranslationHandlerBase {
         }
 
         // The EditableModel already holds the final positions — every
-        // mouse move committed them via pushVertexPositionsToModel().
+        // mouse move pushed them via pushVertexPositionsToModel(); the
+        // position refresh deferred during the drag runs once now.
+        resetDeltaGate();
+        if (hasMovedDuringDrag) {
+            commitVertexPositions(modelRenderer);
+        }
 
         // Sync partGeometry so edits survive a subsequent part transform
         // rebuild. Must run BEFORE any merge (merged vertices lose corners).
         if (hasMovedDuringDrag && modelRenderer != null) {
-            com.openmason.engine.modeling.parts.ModelPartManager pm =
-                    modelRenderer.getPartManager();
-            if (pm != null) {
-                for (int ui : selectionState.getAllSelectedVertexIndices()) {
-                    int[] mis = modelRenderer.getMeshIndicesForUniqueVertex(ui);
-                    if (mis == null) continue;
-                    for (int mi : mis) {
-                        Vector3f p = modelRenderer.getVertexPosition(mi);
-                        if (p != null) pm.syncPartVertexFromWorldPos(mi, p);
-                    }
-                }
-            }
+            syncPartVertices(modelRenderer, selectionState.getAllSelectedVertexIndices());
         }
 
         // TRUE MERGE: dragged vertices resting on a stationary vertex are
@@ -337,17 +334,13 @@ public class EdgeTranslationHandler extends TranslationHandlerBase {
         // Revert to original position in selection state
         selectionState.cancelDrag();
 
-        // Revert each vertex to its original position
-        for (int vertexIndex : allVertexIndices) {
-            Vector3f originalPos = originalPositions.get(vertexIndex);
-            if (originalPos != null) {
-                vertexRenderer.updateVertexPosition(vertexIndex, originalPos);
-                edgeRenderer.updateEdgesConnectedToVertexByIndex(vertexIndex, originalPos);
-            }
-        }
-
-        // REVERT: push the original positions back to the ModelRenderer
+        // REVERT: push the original positions back to the model (overlays follow its listener), then the
+        // deferred position refresh
         pushVertexPositionsToModel(modelRenderer, faceRenderer, originalPositions);
+        if (hasMovedDuringDrag) {
+            commitVertexPositions(modelRenderer);
+        }
+        resetDeltaGate();
 
         isDragging = false;
         preDragSnapshot = null;

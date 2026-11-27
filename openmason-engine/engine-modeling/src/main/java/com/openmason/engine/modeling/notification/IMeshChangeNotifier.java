@@ -34,6 +34,19 @@ public interface IMeshChangeNotifier {
     void notifyVertexPositionChanged(int uniqueIndex, Vector3f newPosition, int[] affectedMeshIndices);
 
     /**
+     * Notify all listeners that several vertices moved at once (one drag frame / one undo step): one call per
+     * listener instead of one per vertex. Parallel arrays: vertex {@code i} is {@code uniqueIndices[i]}, its new
+     * position {@code positions[3i..3i+2]}, its corners {@code affectedMeshIndices[i]}.
+     */
+    default void notifyVertexPositionsChanged(int[] uniqueIndices, float[] positions, int[][] affectedMeshIndices) {
+        Vector3f p = new Vector3f();
+        for (int i = 0; i < uniqueIndices.length; i++) {
+            p.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+            notifyVertexPositionChanged(uniqueIndices[i], p, affectedMeshIndices[i]);
+        }
+    }
+
+    /**
      * Notify all listeners that geometry has been rebuilt.
      * Called after subdivision, UV mode change, or model loading.
      */

@@ -50,6 +50,18 @@ public class MeshChangeNotifier implements IMeshChangeNotifier {
     }
 
     @Override
+    public void notifyVertexPositionsChanged(int[] uniqueIndices, float[] positions, int[][] affectedMeshIndices) {
+        for (MeshChangeListener listener : listeners) {
+            try {
+                listener.onVertexPositionsChanged(uniqueIndices, positions, affectedMeshIndices);
+            } catch (Exception e) {
+                logger.error("Error notifying listener {} of vertex changes",
+                    listener.getClass().getSimpleName(), e);
+            }
+        }
+    }
+
+    @Override
     public void notifyGeometryRebuilt() {
         for (MeshChangeListener listener : listeners) {
             try {
