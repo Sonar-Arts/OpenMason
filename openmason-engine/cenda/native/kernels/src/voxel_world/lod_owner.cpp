@@ -288,7 +288,13 @@ void o_emit(cv_lod* L) {
         }
     }
     for (const auto& [f, was_on] : fbs) {
-        if (!was_on && L->drawn.count(f) != 0) push_event(L, CV_LOD_EV_FALLBACK_ON, -1, f.level, f.x, 0, f.z);
+        // ON only when the footprint ENDS the tick as a fallback: one that went fallback and was then replaced by a
+        // stack in the same tick is drawn (as a stack) but not a fallback - announcing it ON left the host with a
+        // fallback it never hears OFF for, and the next real ON arrived twice (voxel_lod concurrency, 2026-11-26).
+        auto it = L->drawn.find(f);
+        if (!was_on && it != L->drawn.end() && it->second.fallback) {
+            push_event(L, CV_LOD_EV_FALLBACK_ON, -1, f.level, f.x, 0, f.z);
+        }
     }
     for (const auto& [k, t] : nodes) {
         auto it = L->node_mesh.find(k);
