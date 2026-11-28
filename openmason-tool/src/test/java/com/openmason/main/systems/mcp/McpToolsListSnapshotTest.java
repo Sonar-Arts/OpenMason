@@ -60,10 +60,13 @@ class McpToolsListSnapshotTest {
      * Graph workspace, ~3.4k) — measured 99.8k at the raise. Raised 102k ->
      * 103k for the 5 morph_* / vgroup_* tools (2026-11-27, OM #171 / #172
      * shape keys + vertex groups, ~2.1k after trimming; reorder and preview
-     * members left to the rigging pane) — measured 102.3k at the raise; growing
-     * past the budget must stay a conscious decision, not drift.
+     * members left to the rigging pane) — measured 102.3k at the raise. Raised
+     * 103k -> 107k for the 5 view-only viewport tools (2026-11-27, user request:
+     * viewport_camera_get/set/frame/reset + viewport_gizmo, ~4.0k with the axis
+     * conventions written once on viewport_camera_get) - measured 106.3k at the
+     * raise; growing past the budget must stay a conscious decision, not drift.
      */
-    private static final int TOOLS_LIST_BYTE_BUDGET = 103_000;
+    private static final int TOOLS_LIST_BYTE_BUDGET = 107_000;
 
     private static McpToolRegistry buildRealRegistry() {
         ObjectMapper mapper = new ObjectMapper();

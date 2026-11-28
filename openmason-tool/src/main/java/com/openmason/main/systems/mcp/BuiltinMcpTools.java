@@ -57,7 +57,8 @@ public final class BuiltinMcpTools {
             c -> new AttachmentToolDefinitions(McpSharedServices.of(c).attachments(), c.mapper()).registerAll(c.registry()));
 
     public static final McpToolContribution VIEWPORT = new McpToolContribution("core.viewport",
-            c -> new ViewportToolDefinitions(new ViewportCaptureService(McpSharedServices.of(c).editor()), c.mapper())
+            c -> new ViewportToolDefinitions(new ViewportCaptureService(McpSharedServices.of(c).editor()),
+                    new ViewportViewService(McpSharedServices.of(c).editor()), c.mapper())
                     .registerAll(c.registry()));
 
     public static final McpToolContribution SCENE = new McpToolContribution("core.scene",

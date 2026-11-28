@@ -19,7 +19,10 @@ public final class ToolAccessPolicy {
     /** Read-only tools that name-heuristics miss. */
     private static final Set<String> READ_ONLY_EXPLICIT = Set.of(
             "model_summary", "describe_api", "knowledge", "knowledge_search",
-            "viewport_capture", "canvas_capture", "part_mesh", "tex_editor_status",
+            "viewport_capture", "canvas_capture",
+            // View-only viewport controls: move the camera / show the gizmo, never the model (no undo, no dirty).
+            "viewport_camera_get", "viewport_camera_set", "viewport_camera_frame", "viewport_camera_reset",
+            "viewport_gizmo", "part_mesh", "tex_editor_status",
             "validate_model_ops", "script_list", "script_read",
             "asset_list", "asset_manifest", "asset_mesh_summary", "asset_face_data",
             "asset_texture_describe", "asset_texture_export", "asset_check_winding",

@@ -22,7 +22,10 @@ and skinned vertices), per-vertex **skin weights**, and **attachment sockets**
    One call = one undo entry, atomic rollback on failure.
 3. Single tweaks: the per-domain tools (`part_transform`, `scale_faces`, ...).
    Mutations return terse acks; pass `verbose:true` when you need full state.
-4. `viewport_capture` — see the model (select a part first to frame it).
+4. `viewport_capture` - see the model. Aim first with `viewport_camera_frame`
+   (parts/bone/box/point + view preset front/back/left/right/top/bottom/
+   three_quarter; models face -Z) or `viewport_camera_set`; hide the gizmo
+   with `viewport_gizmo {visible:false}`. All view-only (no undo).
    No vision? `model_face_describe` / `tex_describe` render pixels as a
    glyph grid with legend + symmetry/orphan stats.
 
