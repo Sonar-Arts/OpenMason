@@ -309,6 +309,15 @@ public final class AnimationSession implements AutoCloseable {
         return locals;
     }
 
+    /**
+     * The last posed locals ({@link #poseAt}) posed again under {@code base} into {@code out} (the Eyes preview's
+     * first-person pose); null before the first pose.
+     */
+    public JointPalette poseWith(org.joml.Matrix4fc base, JointPalette out) {
+        if (locals == null) return null;
+        return poser.poseLocals(model.rig(), locals, new Matrix4f(base), out);
+    }
+
     // ------------------------------------------------------------------------------------------------
     // Shape keys (OpenMason #171): the clip's morph tracks over the model's shape keys
 

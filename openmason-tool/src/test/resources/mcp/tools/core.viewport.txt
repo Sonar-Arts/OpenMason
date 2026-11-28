@@ -3,4 +3,5 @@ viewport_camera_get
 viewport_camera_reset
 viewport_camera_set
 viewport_capture
+viewport_eyes
 viewport_gizmo

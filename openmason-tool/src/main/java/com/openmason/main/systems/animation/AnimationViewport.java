@@ -30,6 +30,14 @@ final class AnimationViewport implements AutoCloseable {
     boolean showMesh = true;
     boolean showSkeleton = true;
     boolean xray = true;
+    /** The Eyes preview: the character seen by itself in first person (see {@link EyesView}). */
+    boolean eyes;
+    final EyesView eyesView = new EyesView();
+    private String eyesProblem;
+
+    /** What the Eyes preview needs beside the shown pose. */
+    record EyesInput(com.openmason.engine.rig.Rig rig, com.openmason.engine.character.CharacterDefinition character,
+                     org.joml.Matrix4fc modelBase, EyesView.Poser poser) {}
 
     private final ModelRenderer renderer = new ModelRenderer();
     private final PreviewGround ground = new PreviewGround();
@@ -91,14 +99,51 @@ final class AnimationViewport implements AutoCloseable {
             new com.openmason.engine.rendering.model.draw.ModelAppearance();
 
     int render(EntityGeometry geometry, JointPalette palette, int w, int h, float[] morphWeights) {
+        return render(geometry, palette, w, h, morphWeights, null);
+    }
+
+    /** Why the Eyes preview could not draw the last frame (null when it drew, or is off). */
+    String eyesProblem() {
+        return eyesProblem;
+    }
+
+    /** Whether the last frame was drawn from the character's eyes. */
+    boolean drewEyes() {
+        return eyes && eyesProblem == null;
+    }
+
+    int width() {
+        return width;
+    }
+
+    int height() {
+        return height;
+    }
+
+    int render(EntityGeometry geometry, JointPalette palette, int w, int h, float[] morphWeights, EyesInput eyesInput) {
         if (w < 8 || h < 8) return colorTex;
         appearance.setMorphWeights(morphWeights);
         ensureTarget(w, h);
-        eye.set((float) (Math.sin(yaw) * Math.cos(pitch)), (float) Math.sin(pitch), (float) (Math.cos(yaw) * Math.cos(pitch)))
-                .mul(distance).add(target);
-        view.setLookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, 0f, 1f, 0f);
-        projection.setPerspective(FOV, w / (float) h, 0.02f, 400f);
+        boolean firstPerson = false;
+        eyesProblem = null;
+        if (eyes) {
+            firstPerson = eyesInput != null && eyesView.update(eyesInput.rig(), eyesInput.character(), palette,
+                    eyesInput.modelBase(), eyesInput.poser(), w, h);
+            if (!firstPerson) eyesProblem = eyesInput == null ? "no character" : eyesView.problem();
+        }
+        if (firstPerson) {
+            view.set(eyesView.view());
+            projection.set(eyesView.worldProjection());
+            eye.set(eyesView.eyes());
+        } else {
+            eye.set((float) (Math.sin(yaw) * Math.cos(pitch)), (float) Math.sin(pitch), (float) (Math.cos(yaw) * Math.cos(pitch)))
+                    .mul(distance).add(target);
+            view.setLookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, 0f, 1f, 0f);
+            projection.setPerspective(FOV, w / (float) h, 0.02f, 400f);
+        }
         projection.mul(view, viewProjection);
+        JointPalette drawPalette = firstPerson ? eyesView.palette() : palette;
+        Matrix4f drawProjection = firstPerson ? eyesView.projection() : projection;
         int prevFbo = glGetInteger(GL_FRAMEBUFFER_BINDING);
         int[] vp = new int[4];
         float[] clear = new float[4];
@@ -123,16 +168,18 @@ final class AnimationViewport implements AutoCloseable {
                     uploadedFor = geometry;
                 }
                 if (geometry.materials().isEmpty()) {
-                    renderer.drawFlat(gpu.mesh(), gpu.plan(), palette, view, projection, flat, appearance);
+                    renderer.drawFlat(gpu.mesh(), gpu.plan(), drawPalette, view, drawProjection, flat, appearance);
                 } else {
-                    renderer.drawLit(gpu.mesh(), gpu.plan(), gpu, palette, view, projection, ModelLighting.preview(view),
-                            null, appearance);
+                    renderer.drawLit(gpu.mesh(), gpu.plan(), gpu, drawPalette, view, drawProjection,
+                            ModelLighting.preview(view), null, appearance);
                 }
             }
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            if (xray) glDisable(GL_DEPTH_TEST);
-            lines.draw(viewProjection);
+            if (!firstPerson) {
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                if (xray) glDisable(GL_DEPTH_TEST);
+                lines.draw(viewProjection);
+            }
         } finally {
             glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
             glViewport(vp[0], vp[1], vp[2], vp[3]);
@@ -198,6 +245,7 @@ final class AnimationViewport implements AutoCloseable {
 
     @Override
     public void close() {
+        eyesView.close();
         releaseTarget();
         if (gpu != null) gpu.close();
         gpu = null;

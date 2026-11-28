@@ -56,10 +56,24 @@ public final class BuiltinMcpTools {
     public static final McpToolContribution ATTACHMENTS = new McpToolContribution("core.attachments",
             c -> new AttachmentToolDefinitions(McpSharedServices.of(c).attachments(), c.mapper()).registerAll(c.registry()));
 
-    public static final McpToolContribution VIEWPORT = new McpToolContribution("core.viewport",
-            c -> new ViewportToolDefinitions(new ViewportCaptureService(McpSharedServices.of(c).editor()),
-                    new ViewportViewService(McpSharedServices.of(c).editor()), c.mapper())
-                    .registerAll(c.registry()));
+    public static final McpToolContribution VIEWPORT = new McpToolContribution("core.viewport", c -> {
+        // The tab previews (Animation, Animation Graph) for viewport_capture {view} and viewport_eyes.
+        java.util.function.Function<String, PreviewViewport> previews = name -> {
+            Class<? extends PreviewViewport> cls = switch (name) {
+                case "animation" -> com.openmason.main.systems.animation.AnimationWorkspace.class;
+                case "animgraph" -> com.openmason.main.systems.animgraph.AnimGraphWorkspace.class;
+                default -> null;
+            };
+            if (cls == null) return null;
+            var editor = McpSharedServices.of(c).editor();
+            return (editor != null ? editor.registry().find(cls).map(PreviewViewport.class::cast)
+                    : java.util.Optional.<PreviewViewport>empty())
+                    .or(() -> c.services().find(cls).map(PreviewViewport.class::cast)).orElse(null);
+        };
+        new ViewportToolDefinitions(new ViewportCaptureService(McpSharedServices.of(c).editor(), previews),
+                new ViewportViewService(McpSharedServices.of(c).editor()), c.mapper(), previews)
+                .registerAll(c.registry());
+    });
 
     public static final McpToolContribution SCENE = new McpToolContribution("core.scene",
             c -> new SceneToolDefinitions(new SceneEditingService(McpSharedServices.of(c).editor()),

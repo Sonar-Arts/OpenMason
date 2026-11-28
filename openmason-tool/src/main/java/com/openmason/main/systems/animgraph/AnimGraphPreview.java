@@ -41,6 +41,14 @@ final class AnimGraphPreview implements AutoCloseable {
     private int depthRb;
     private int width;
     private int height;
+    /** The Eyes preview (the graph's first-person view from the character's eyes). */
+    boolean eyes;
+    final com.openmason.main.systems.animation.EyesView eyesView = new com.openmason.main.systems.animation.EyesView();
+    private String eyesProblem;
+
+    /** What the Eyes preview needs beside the body pose. */
+    record EyesInput(com.openmason.engine.rig.Rig rig, com.openmason.engine.character.CharacterDefinition character,
+                     com.openmason.main.systems.animation.EyesView.Poser poser) {}
 
     AnimGraphPreview() {
         renderer.initialize();
@@ -64,13 +72,44 @@ final class AnimGraphPreview implements AutoCloseable {
 
     /** Draws the geometry posed by the palette (null palette = nothing to draw: the floor only). */
     int render(EntityGeometry geometry, JointPalette palette, int w, int h) {
+        return render(geometry, palette, w, h, null);
+    }
+
+    String eyesProblem() {
+        return eyesProblem;
+    }
+
+    int width() {
+        return width;
+    }
+
+    int height() {
+        return height;
+    }
+
+    /** As {@link #render(EntityGeometry, JointPalette, int, int)}; from the character's eyes while {@link #eyes}. */
+    int render(EntityGeometry geometry, JointPalette palette, int w, int h, EyesInput eyesInput) {
         if (w < 8 || h < 8) return colorTex;
         ensureTarget(w, h);
-        eye.set((float) (Math.sin(yaw) * Math.cos(pitch)), (float) Math.sin(pitch), (float) (Math.cos(yaw) * Math.cos(pitch)))
-                .mul(distance).add(target);
-        view.setLookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, 0f, 1f, 0f);
-        projection.setPerspective(FOV, w / (float) h, 0.02f, 400f);
+        boolean firstPerson = false;
+        eyesProblem = null;
+        if (eyes) {
+            firstPerson = eyesInput != null && palette != null && eyesView.update(eyesInput.rig(), eyesInput.character(),
+                    palette, new Matrix4f(), eyesInput.poser(), w, h);
+            if (!firstPerson) eyesProblem = eyesInput == null || palette == null ? "no preview" : eyesView.problem();
+        }
+        if (firstPerson) {
+            view.set(eyesView.view());
+            projection.set(eyesView.worldProjection());
+        } else {
+            eye.set((float) (Math.sin(yaw) * Math.cos(pitch)), (float) Math.sin(pitch), (float) (Math.cos(yaw) * Math.cos(pitch)))
+                    .mul(distance).add(target);
+            view.setLookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, 0f, 1f, 0f);
+            projection.setPerspective(FOV, w / (float) h, 0.02f, 400f);
+        }
         projection.mul(view, viewProjection);
+        JointPalette drawPalette = firstPerson ? eyesView.palette() : palette;
+        Matrix4f drawProjection = firstPerson ? eyesView.projection() : projection;
         int prevFbo = glGetInteger(GL_FRAMEBUFFER_BINDING);
         int[] vp = new int[4];
         float[] clear = new float[4];
@@ -96,9 +135,10 @@ final class AnimGraphPreview implements AutoCloseable {
                     uploadedFor = geometry;
                 }
                 if (geometry.materials().isEmpty()) {
-                    renderer.drawFlat(gpu.mesh(), gpu.plan(), palette, view, projection, flat);
+                    renderer.drawFlat(gpu.mesh(), gpu.plan(), drawPalette, view, drawProjection, flat);
                 } else {
-                    renderer.drawLit(gpu.mesh(), gpu.plan(), gpu, palette, view, projection, ModelLighting.preview(view), null);
+                    renderer.drawLit(gpu.mesh(), gpu.plan(), gpu, drawPalette, view, drawProjection,
+                            ModelLighting.preview(view), null);
                 }
             }
         } finally {

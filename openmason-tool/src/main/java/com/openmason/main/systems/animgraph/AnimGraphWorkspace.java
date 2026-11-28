@@ -28,7 +28,7 @@ import java.util.List;
  * curves) and the problems list. Thin ImGui over the native editable graph ({@code cg_doc}, one undo step per edit,
  * shared with the {@code animgraph_*} MCP tools through {@link AnimGraphSessions}) and the native runtime. ASCII only.
  */
-public final class AnimGraphWorkspace implements WorkspaceDock {
+public final class AnimGraphWorkspace implements WorkspaceDock, com.openmason.main.systems.mcp.PreviewViewport {
 
     private static final Logger logger = LoggerFactory.getLogger(AnimGraphWorkspace.class);
 
@@ -272,14 +272,102 @@ public final class AnimGraphWorkspace implements WorkspaceDock {
             preview.frame(character.boundsMin(), character.boundsMax());
             framedFor = character;
         }
+        if (ImGui.checkbox("Eyes", preview.eyes)) {
+            preview.eyes = !preview.eyes;
+            s.setEyes(preview.eyes);
+        }
+        if (ImGui.isItemHovered()) {
+            ImGui.setTooltip("First person from the character's eyes: the graph's first-person view layer, arms only");
+        }
+        if (preview.eyes) {
+            ImGui.sameLine();
+            String eyesProblem = preview.eyesProblem();
+            ImGui.textDisabled(eyesProblem != null ? "Eyes: " + eyesProblem : String.format(
+                    "LMB: look (yaw %.0f, pitch %.0f)  wheel: FOV %.0f", preview.eyesView.yaw(), preview.eyesView.pitch(),
+                    preview.eyesView.fov()));
+        }
         float w = ImGui.getContentRegionAvailX(), h = Math.max(100, ImGui.getContentRegionAvailY());
-        int tex = preview.render(character == null ? null : character.geometry(), problem == null ? s.palette() : null, (int) w, (int) h);
+        int tex = renderPreviewFrame(s, (int) w, (int) h);
         float x = ImGui.getCursorScreenPosX(), y = ImGui.getCursorScreenPosY();
         ImGui.image(tex, w, h, 0, 1, 1, 0);
         ImGui.setCursorScreenPos(x, y);
         ImGui.invisibleButton("##graphPreview", w, h);
-        if (ImGui.isItemActive() && ImGui.isMouseDragging(0)) preview.orbit(ImGui.getIO().getMouseDeltaX(), ImGui.getIO().getMouseDeltaY());
-        if (ImGui.isItemHovered() && ImGui.getIO().getMouseWheel() != 0) preview.zoom(ImGui.getIO().getMouseWheel());
+        var io = ImGui.getIO();
+        if (preview.eyes) {
+            if (ImGui.isItemActive() && ImGui.isMouseDragging(0, 1f)) preview.eyesView.drag(io.getMouseDeltaX(), io.getMouseDeltaY());
+            if (ImGui.isItemHovered() && io.getMouseWheel() != 0) preview.eyesView.setFov(preview.eyesView.fov() - io.getMouseWheel() * 2f);
+            return;
+        }
+        if (ImGui.isItemActive() && ImGui.isMouseDragging(0)) preview.orbit(io.getMouseDeltaX(), io.getMouseDeltaY());
+        if (ImGui.isItemHovered() && io.getMouseWheel() != 0) preview.zoom(io.getMouseWheel());
+    }
+
+    /** One preview frame into the preview's texture (also what an MCP capture renders); 0 when there is no preview. */
+    int renderPreviewFrame(AnimGraphSession s, int w, int h) {
+        if (preview == null) return 0;
+        s.setEyes(preview.eyes);  // a newly opened graph follows the preview's Eyes switch
+        var character = s.character();
+        String problem = s.previewProblem();
+        AnimGraphPreview.EyesInput eyesInput = null;
+        if (character != null) {
+            try {
+                eyesInput = new AnimGraphPreview.EyesInput(character.rig(), character.definition(), s::composeFirstPerson);
+            } catch (RuntimeException e) {
+                eyesInput = null;
+            }
+        }
+        return preview.render(character == null ? null : character.geometry(), problem == null ? s.palette() : null,
+                w, h, eyesInput);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // MCP: capture + Eyes (PreviewViewport)
+
+    @Override
+    public String viewName() {
+        return "animgraph";
+    }
+
+    @Override
+    public int[] renderFrame(int width, int height) {
+        AnimGraphSession s = sessions.current().orElse(null);
+        if (s == null || preview() == null) return null;
+        var character = s.character();
+        if (character != null && framedFor != character) {
+            preview.frame(character.boundsMin(), character.boundsMax());
+            framedFor = character;
+        }
+        s.step(0f);  // builds the instance and poses the current frame; no time passes
+        int w = width > 0 ? width : preview.width() > 0 ? preview.width() : 1024;
+        int h = height > 0 ? height : preview.height() > 0 ? preview.height() : 576;
+        int tex = renderPreviewFrame(s, w, h);
+        return new int[] {tex, preview.width(), preview.height()};
+    }
+
+    @Override
+    public java.util.Map<String, Object> eyes(Boolean enabled, Float yaw, Float pitch, Float fov, Boolean armsFollowLook,
+                                              boolean reset) {
+        if (preview() == null) throw new IllegalStateException("the graph preview is unavailable");
+        if (enabled != null) {
+            preview.eyes = enabled;
+            sessions.current().ifPresent(s -> s.setEyes(enabled));
+        }
+        com.openmason.main.systems.mcp.PreviewViewport.applyEyes(preview.eyesView, yaw, pitch, fov, armsFollowLook, reset);
+        if (preview.eyes && sessions.current().isPresent()) renderFrame(0, 0);
+        return com.openmason.main.systems.mcp.PreviewViewport.eyesState(preview.eyes, preview.eyesView,
+                preview.eyes ? preview.eyesProblem() : null);
+    }
+
+    /** The preview viewport, created on first use (null when it cannot be). */
+    AnimGraphPreview preview() {
+        if (preview == null) {
+            try {
+                preview = new AnimGraphPreview();
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }
+        return preview;
     }
 
     private void setCharacter(AnimGraphSession s, String path) {

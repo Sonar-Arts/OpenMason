@@ -321,6 +321,78 @@ public final class AnimGraphSession implements AutoCloseable {
         return palette;
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // Eyes preview: the graph's first-person view layers
+
+    private boolean eyes;
+
+    /**
+     * Turns the Eyes preview on or off: while on, every first-person view layer's {@code weightParam} is driven to its
+     * full value (not stored as a preview parameter; turning off re-applies the stored one, else zero).
+     */
+    public void setEyes(boolean on) {
+        if (eyes == on) return;
+        eyes = on;
+        ensureBuilt();
+        if (instance != null) applyEyes();
+    }
+
+    public boolean eyes() {
+        return eyes;
+    }
+
+    private void applyEyes() {
+        for (String name : firstPersonWeightParams()) {
+            Object stored = paramValues.get(name);
+            applyParam(name, eyes ? fullValue(name) : stored != null ? stored : fullValueOff(name));
+        }
+    }
+
+    private Object fullValue(String name) {
+        for (AnimGraph.Param p : graph.params()) {
+            if (p.name().equals(name)) {
+                return switch (p.type()) {
+                    case BOOL -> Boolean.TRUE;
+                    case INT -> 1;
+                    default -> 1f;
+                };
+            }
+        }
+        return 1f;
+    }
+
+    private Object fullValueOff(String name) {
+        Object on = fullValue(name);
+        return on instanceof Boolean ? Boolean.FALSE : on instanceof Integer ? 0 : 0f;
+    }
+
+    /** The weight parameters of the graph's first-person view layers ({@code "view": "firstPerson"}), from its JSON. */
+    public List<String> firstPersonWeightParams() {
+        List<String> out = new java.util.ArrayList<>();
+        try {
+            for (JsonNode node : JSON.readTree(doc.json()).path("nodes")) {
+                for (JsonNode layer : node.path("layers")) {
+                    if ("firstPerson".equals(layer.path("view").asText()) && layer.hasNonNull("weightParam")) {
+                        out.add(layer.get("weightParam").asText());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            return List.of();
+        }
+        return out;
+    }
+
+    /**
+     * The current frame's first-person view ({@code composeView(VIEW_FIRST_PERSON)}, no time passes) under
+     * {@code base} into {@code out}; null when the preview cannot run.
+     */
+    public JointPalette composeFirstPerson(org.joml.Matrix4fc base, JointPalette out) {
+        ensureBuilt();
+        if (instance == null) return null;
+        return instance.composeView(AnimGraphInstance.VIEW_FIRST_PERSON, new Matrix4f(base), out);
+    }
+
     private void ensureBuilt() {
         long rev = doc.revision();
         if (rev == builtRevision) return;
@@ -356,6 +428,7 @@ public final class AnimGraphSession implements AutoCloseable {
         }
         bindInto(graph, instance, boundSlots);
         paramValues.forEach(this::applyParam);
+        if (eyes) applyEyes();
         for (AnimGraph.Node n : graph.nodes()) {
             String s = machineStates.get(n.id());
             if (s != null && n.type() == AnimGraph.NodeType.STATE_MACHINE) {

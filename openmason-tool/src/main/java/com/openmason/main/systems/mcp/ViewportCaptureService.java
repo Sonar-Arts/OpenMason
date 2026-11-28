@@ -43,16 +43,42 @@ public final class ViewportCaptureService {
     private static final int MAX_SIZE = 2048;
 
     private final EditorServices editorServices;
+    /** The tab previews by capture name ("animation", "animgraph"); null = Scene only. */
+    private final java.util.function.Function<String, PreviewViewport> previews;
 
     public ViewportCaptureService(EditorServices editorServices) {
+        this(editorServices, null);
+    }
+
+    public ViewportCaptureService(EditorServices editorServices,
+                                  java.util.function.Function<String, PreviewViewport> previews) {
         this.editorServices = editorServices;
+        this.previews = previews;
     }
 
     public McpImageContent capture(int maxSize) {
+        return capture(maxSize, null);
+    }
+
+    /**
+     * Captures {@code view}: "scene" (default; the Scene viewport's last frame) or a tab preview ("animation",
+     * "animgraph"), which is rendered NOW at the size it was last shown at, so a hidden tab never returns a stale frame.
+     */
+    public McpImageContent capture(int maxSize, String view) {
         int target = Math.clamp(maxSize, MIN_SIZE, MAX_SIZE);
-        BufferedImage frame = await(MainThreadExecutor.submit(this::readFramebuffer));
+        BufferedImage frame = await(MainThreadExecutor.submit(() -> view == null || view.equals("scene")
+                ? readFramebuffer() : readPreview(view)));
         BufferedImage scaled = McpImageCodec.downscale(frame, target);
         return new McpImageContent(McpImageCodec.encodePngBase64(scaled), "image/png");
+    }
+
+    /** A tab preview's frame, rendered now (GL thread). */
+    private BufferedImage readPreview(String view) {
+        PreviewViewport preview = previews == null ? null : previews.apply(view);
+        if (preview == null) throw new IllegalArgumentException("unknown view '" + view + "' (scene, animation, animgraph)");
+        int[] frame = preview.renderFrame(0, 0);
+        if (frame == null) throw new IllegalStateException("nothing open in the " + view + " tab");
+        return readTexture(frame[0], frame[1], frame[2]);
     }
 
     /** Read the viewport FBO color texture into a BufferedImage (must run on the GL thread). */
@@ -61,9 +87,11 @@ public final class ViewportCaptureService {
         if (vp == null || !vp.isInitialized()) {
             throw new IllegalStateException("Viewport not initialized");
         }
-        int textureId = vp.getColorTexture();
-        int width = vp.getFramebufferWidth();
-        int height = vp.getFramebufferHeight();
+        return readTexture(vp.getColorTexture(), vp.getFramebufferWidth(), vp.getFramebufferHeight());
+    }
+
+    /** An RGBA8 color texture into a BufferedImage, rows flipped (GL thread). */
+    static BufferedImage readTexture(int textureId, int width, int height) {
         if (textureId <= 0 || width <= 0 || height <= 0) {
             throw new IllegalStateException("Viewport framebuffer not ready — has a frame been rendered yet?");
         }

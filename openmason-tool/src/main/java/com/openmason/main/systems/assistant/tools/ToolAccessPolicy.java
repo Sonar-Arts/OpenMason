@@ -22,7 +22,7 @@ public final class ToolAccessPolicy {
             "viewport_capture", "canvas_capture",
             // View-only viewport controls: move the camera / show the gizmo, never the model (no undo, no dirty).
             "viewport_camera_get", "viewport_camera_set", "viewport_camera_frame", "viewport_camera_reset",
-            "viewport_gizmo", "part_mesh", "tex_editor_status",
+            "viewport_gizmo", "viewport_eyes", "part_mesh", "tex_editor_status",
             "validate_model_ops", "script_list", "script_read",
             "asset_list", "asset_manifest", "asset_mesh_summary", "asset_face_data",
             "asset_texture_describe", "asset_texture_export", "asset_check_winding",

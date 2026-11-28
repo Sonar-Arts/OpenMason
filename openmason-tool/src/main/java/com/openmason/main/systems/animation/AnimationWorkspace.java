@@ -45,7 +45,7 @@ import java.util.function.Supplier;
  * The open clip is shared with the {@code anim_*} MCP tools ({@link AnimationSessions}). Ends only on the user's
  * close, which asks about unsaved changes. ASCII strings only.
  */
-public final class AnimationWorkspace implements WorkspaceDock {
+public final class AnimationWorkspace implements WorkspaceDock, com.openmason.main.systems.mcp.PreviewViewport {
 
     private static final Logger logger = LoggerFactory.getLogger(AnimationWorkspace.class);
 
@@ -421,7 +421,7 @@ public final class AnimationWorkspace implements WorkspaceDock {
         int texture;
         try {
             texture = viewport.render(doc.model().geometry(), palette, (int) width, (int) height,
-                    doc.morphWeights(doc.time()));
+                    doc.morphWeights(doc.time()), eyesInput(doc, base));
         } catch (RuntimeException e) {
             ImGui.textWrapped("Viewport: " + e.getMessage());
             return;
@@ -432,6 +432,17 @@ public final class AnimationWorkspace implements WorkspaceDock {
         ImGui.invisibleButton("##animationViewport", width, height);
         var io = ImGui.getIO();
         float mx = io.getMousePosX() - x, my = io.getMousePosY() - y;
+        if (viewport.eyes) {
+            // Eyes preview: drag looks around (the arms follow), the wheel sets the lens FOV; no picking or handles.
+            if (ImGui.isItemActive() && ImGui.isMouseDragging(0, 1f)) {
+                viewport.eyesView.drag(io.getMouseDeltaX(), io.getMouseDeltaY());
+            }
+            if (ImGui.isItemHovered() && io.getMouseWheel() != 0f) {
+                viewport.eyesView.setFov(viewport.eyesView.fov() - io.getMouseWheel() * 2f);
+            }
+            renderViewportToggles();
+            return;
+        }
         if (ImGui.isItemActivated()) {
             pressX = io.getMousePosX();
             pressY = io.getMousePosY();
@@ -461,13 +472,89 @@ public final class AnimationWorkspace implements WorkspaceDock {
                 }
             }
         }
+        renderViewportToggles();
+    }
+
+    /** The viewport's display toggles, Eyes included. */
+    private void renderViewportToggles() {
         if (ImGui.checkbox("Mesh", viewport.showMesh)) viewport.showMesh = !viewport.showMesh;
         ImGui.sameLine();
         if (ImGui.checkbox("Skeleton", viewport.showSkeleton)) viewport.showSkeleton = !viewport.showSkeleton;
         ImGui.sameLine();
         if (ImGui.checkbox("X-ray", viewport.xray)) viewport.xray = !viewport.xray;
         ImGui.sameLine();
-        ImGui.textDisabled("LMB: pick / drag IK targets / orbit  RMB/MMB: pan  wheel: zoom");
+        if (ImGui.checkbox("Eyes", viewport.eyes)) viewport.eyes = !viewport.eyes;
+        if (ImGui.isItemHovered()) {
+            ImGui.setTooltip("First person from the character's eyes: its arms through the first-person lens");
+        }
+        ImGui.sameLine();
+        if (viewport.eyes) {
+            String problem = viewport.eyesProblem();
+            if (problem != null) {
+                ImGui.textDisabled("Eyes: " + problem);
+            } else {
+                ImGui.textDisabled(String.format("LMB: look (yaw %.0f, pitch %.0f)  wheel: FOV %.0f",
+                        viewport.eyesView.yaw(), viewport.eyesView.pitch(), viewport.eyesView.fov()));
+            }
+        } else {
+            ImGui.textDisabled("LMB: pick / drag IK targets / orbit  RMB/MMB: pan  wheel: zoom");
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // MCP: capture + Eyes (PreviewViewport)
+
+    @Override
+    public String viewName() {
+        return "animation";
+    }
+
+    @Override
+    public int[] renderFrame(int width, int height) {
+        AnimationSession doc = sessions.current().orElse(null);
+        if (doc == null) return null;
+        if (viewport == null) viewport = new AnimationViewport();
+        if (framedFor != doc) {
+            viewport.frame(doc.model().boundsMin(), doc.model().boundsMax());
+            framedFor = doc;
+        }
+        int w = width > 0 ? width : viewport.width() > 0 ? viewport.width() : 1024;
+        int h = height > 0 ? height : viewport.height() > 0 ? viewport.height() : 576;
+        JointPalette palette = doc.poseAt(doc.time());
+        Matrix4f base = doc.baseMatrix(doc.time());
+        CharacterOverlay overlay;
+        try {
+            overlay = doc.overlay();
+        } catch (RuntimeException e) {
+            overlay = null;
+        }
+        fillOverlay(doc, overlay, base);
+        int tex = viewport.render(doc.model().geometry(), palette, w, h, doc.morphWeights(doc.time()),
+                eyesInput(doc, base));
+        return new int[] {tex, viewport.width(), viewport.height()};
+    }
+
+    @Override
+    public java.util.Map<String, Object> eyes(Boolean enabled, Float yaw, Float pitch, Float fov, Boolean armsFollowLook,
+                                              boolean reset) {
+        if (viewport == null) viewport = new AnimationViewport();
+        if (enabled != null) viewport.eyes = enabled;
+        com.openmason.main.systems.mcp.PreviewViewport.applyEyes(viewport.eyesView, yaw, pitch, fov, armsFollowLook, reset);
+        if (viewport.eyes && sessions.current().isPresent()) renderFrame(0, 0);
+        return com.openmason.main.systems.mcp.PreviewViewport.eyesState(viewport.eyes, viewport.eyesView,
+                viewport.eyes ? viewport.eyesProblem() : null);
+    }
+
+    /** What the Eyes preview re-poses with: the session's last locals under the eye-anchored base. */
+    private static AnimationViewport.EyesInput eyesInput(AnimationSession doc, Matrix4f base) {
+        com.openmason.main.systems.character.CharacterDocument model = doc.model();
+        com.openmason.engine.character.CharacterDefinition character;
+        try {
+            character = model.definition();
+        } catch (RuntimeException e) {
+            return null;
+        }
+        return new AnimationViewport.EyesInput(model.rig(), character, base, doc::poseWith);
     }
 
     private void fillOverlay(AnimationSession doc, CharacterOverlay overlay, Matrix4f base) {
