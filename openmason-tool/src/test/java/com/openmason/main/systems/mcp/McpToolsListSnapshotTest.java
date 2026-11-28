@@ -64,9 +64,11 @@ class McpToolsListSnapshotTest {
      * 103k -> 107k for the 5 view-only viewport tools (2026-11-27, user request:
      * viewport_camera_get/set/frame/reset + viewport_gizmo, ~4.0k with the axis
      * conventions written once on viewport_camera_get) - measured 106.3k at the
-     * raise; growing past the budget must stay a conscious decision, not drift.
+     * raise. Raised 107k -> 108k for viewport_eyes + viewport_capture {view} (2026-11-28, user request: the
+     * Eyes first-person preview of the Animation / Animation Graph tabs, ~0.9k after trimming both descriptions)
+     * - measured 107.1k at the raise; growing past the budget must stay a conscious decision, not drift.
      */
-    private static final int TOOLS_LIST_BYTE_BUDGET = 107_000;
+    private static final int TOOLS_LIST_BYTE_BUDGET = 108_000;
 
     private static McpToolRegistry buildRealRegistry() {
         ObjectMapper mapper = new ObjectMapper();

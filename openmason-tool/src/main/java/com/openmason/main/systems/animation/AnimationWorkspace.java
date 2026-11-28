@@ -398,6 +398,7 @@ public final class AnimationWorkspace implements WorkspaceDock, com.openmason.ma
         if (viewport == null) {
             try {
                 viewport = new AnimationViewport();
+                viewport.held = held;
             } catch (RuntimeException e) {
                 ImGui.textWrapped("Viewport unavailable: " + e.getMessage());
                 return;
@@ -475,8 +476,28 @@ public final class AnimationWorkspace implements WorkspaceDock, com.openmason.ma
         renderViewportToggles();
     }
 
+    /** The held item shown on the character (a game's HeldItemProvider), shared with MCP. */
+    private final HeldItemPreview held = new HeldItemPreview(() -> this.heldProviders.get());
+    private java.util.function.Supplier<java.util.List<com.openmason.api.viewport.HeldItemProvider>> heldProviders =
+            java.util.List::of;
+
+    /** Where the held-item providers come from (the editor registries; set at start-up). */
+    public void setHeldItemProviders(
+            java.util.function.Supplier<java.util.List<com.openmason.api.viewport.HeldItemProvider>> providers) {
+        heldProviders = providers == null ? java.util.List::of : providers;
+    }
+
+    @Override
+    public java.util.Map<String, Object> held(boolean set, String item, boolean list) {
+        if (set) held.select(item);
+        if (set && held.active() && sessions.current().isPresent()) renderFrame(0, 0);
+        return com.openmason.main.systems.mcp.PreviewViewport.heldState(held, list);
+    }
+
     /** The viewport's display toggles, Eyes included. */
     private void renderViewportToggles() {
+        held.renderCombo("animation");
+        if (!held.providers().isEmpty()) ImGui.sameLine();
         if (ImGui.checkbox("Mesh", viewport.showMesh)) viewport.showMesh = !viewport.showMesh;
         ImGui.sameLine();
         if (ImGui.checkbox("Skeleton", viewport.showSkeleton)) viewport.showSkeleton = !viewport.showSkeleton;
@@ -513,7 +534,10 @@ public final class AnimationWorkspace implements WorkspaceDock, com.openmason.ma
     public int[] renderFrame(int width, int height) {
         AnimationSession doc = sessions.current().orElse(null);
         if (doc == null) return null;
-        if (viewport == null) viewport = new AnimationViewport();
+        if (viewport == null) {
+            viewport = new AnimationViewport();
+            viewport.held = held;
+        }
         if (framedFor != doc) {
             viewport.frame(doc.model().boundsMin(), doc.model().boundsMax());
             framedFor = doc;
@@ -537,7 +561,10 @@ public final class AnimationWorkspace implements WorkspaceDock, com.openmason.ma
     @Override
     public java.util.Map<String, Object> eyes(Boolean enabled, Float yaw, Float pitch, Float fov, Boolean armsFollowLook,
                                               boolean reset) {
-        if (viewport == null) viewport = new AnimationViewport();
+        if (viewport == null) {
+            viewport = new AnimationViewport();
+            viewport.held = held;
+        }
         if (enabled != null) viewport.eyes = enabled;
         com.openmason.main.systems.mcp.PreviewViewport.applyEyes(viewport.eyesView, yaw, pitch, fov, armsFollowLook, reset);
         if (viewport.eyes && sessions.current().isPresent()) renderFrame(0, 0);

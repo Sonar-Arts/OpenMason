@@ -15,7 +15,7 @@ class ToolAccessPolicyTest {
         assertEquals(ToolCategory.READ_ONLY, ToolAccessPolicy.categorize("list_parts"));
         assertEquals(ToolCategory.READ_ONLY, ToolAccessPolicy.categorize("knowledge"));
         for (String view : new String[]{"viewport_capture", "viewport_camera_get", "viewport_camera_set",
-                "viewport_camera_frame", "viewport_camera_reset", "viewport_gizmo", "viewport_eyes"}) {
+                "viewport_camera_frame", "viewport_camera_reset", "viewport_gizmo", "viewport_eyes", "viewport_held"}) {
             assertEquals(ToolCategory.READ_ONLY, ToolAccessPolicy.categorize(view), view + " is view-only");
         }
         assertEquals(ToolCategory.MUTATING, ToolAccessPolicy.categorize("create_part"));

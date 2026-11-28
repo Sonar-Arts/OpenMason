@@ -262,6 +262,7 @@ public final class AnimGraphWorkspace implements WorkspaceDock, com.openmason.ma
         if (preview == null) {
             try {
                 preview = new AnimGraphPreview();
+                preview.held = held;
             } catch (RuntimeException e) {
                 ImGui.textWrapped("Preview unavailable: " + e.getMessage());
                 return;
@@ -272,6 +273,8 @@ public final class AnimGraphWorkspace implements WorkspaceDock, com.openmason.ma
             preview.frame(character.boundsMin(), character.boundsMax());
             framedFor = character;
         }
+        held.renderCombo("animgraph");
+        if (!held.providers().isEmpty()) ImGui.sameLine();
         if (ImGui.checkbox("Eyes", preview.eyes)) {
             preview.eyes = !preview.eyes;
             s.setEyes(preview.eyes);
@@ -358,11 +361,31 @@ public final class AnimGraphWorkspace implements WorkspaceDock, com.openmason.ma
                 preview.eyes ? preview.eyesProblem() : null);
     }
 
+    /** The held item shown on the preview character (a game's HeldItemProvider), shared with MCP. */
+    private final com.openmason.main.systems.animation.HeldItemPreview held =
+            new com.openmason.main.systems.animation.HeldItemPreview(() -> this.heldProviders.get());
+    private java.util.function.Supplier<java.util.List<com.openmason.api.viewport.HeldItemProvider>> heldProviders =
+            java.util.List::of;
+
+    /** Where the held-item providers come from (the editor registries; set at start-up). */
+    public void setHeldItemProviders(
+            java.util.function.Supplier<java.util.List<com.openmason.api.viewport.HeldItemProvider>> providers) {
+        heldProviders = providers == null ? java.util.List::of : providers;
+    }
+
+    @Override
+    public java.util.Map<String, Object> held(boolean set, String item, boolean list) {
+        if (set) held.select(item);
+        if (set && held.active() && sessions.current().isPresent()) renderFrame(0, 0);
+        return com.openmason.main.systems.mcp.PreviewViewport.heldState(held, list);
+    }
+
     /** The preview viewport, created on first use (null when it cannot be). */
     AnimGraphPreview preview() {
         if (preview == null) {
             try {
                 preview = new AnimGraphPreview();
+                preview.held = held;
             } catch (RuntimeException e) {
                 return null;
             }

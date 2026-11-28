@@ -83,6 +83,9 @@ public interface PluginContext {
     /** Non-model content for the Model Editor viewport. */
     Registrar<ViewportContentProvider> viewportContent();
 
+    /** Items a character can hold in the Animation / Animation Graph previews (on its sockets, Eyes view too). */
+    Registrar<com.openmason.api.viewport.HeldItemProvider> heldItems();
+
     /** Project Hub templates. */
     Registrar<ProjectTemplate> templates();
 

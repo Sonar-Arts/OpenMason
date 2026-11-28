@@ -45,6 +45,8 @@ final class AnimGraphPreview implements AutoCloseable {
     boolean eyes;
     final com.openmason.main.systems.animation.EyesView eyesView = new com.openmason.main.systems.animation.EyesView();
     private String eyesProblem;
+    /** The held item (a game's {@code HeldItemProvider}); set by the workspace, null = none. */
+    com.openmason.main.systems.animation.HeldItemPreview held;
 
     /** What the Eyes preview needs beside the body pose. */
     record EyesInput(com.openmason.engine.rig.Rig rig, com.openmason.engine.character.CharacterDefinition character,
@@ -140,6 +142,10 @@ final class AnimGraphPreview implements AutoCloseable {
                     renderer.drawLit(gpu.mesh(), gpu.plan(), gpu, drawPalette, view, drawProjection,
                             ModelLighting.preview(view), null);
                 }
+                if (held != null && held.active()) {
+                    held.draw(geometry, eyesInput != null ? eyesInput.character() : null, drawPalette, view,
+                            drawProjection);
+                }
             }
         } finally {
             glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
@@ -183,6 +189,8 @@ final class AnimGraphPreview implements AutoCloseable {
 
     @Override
     public void close() {
+        eyesView.close();
+        if (held != null) held.close();
         releaseTarget();
         if (gpu != null) gpu.close();
         gpu = null;

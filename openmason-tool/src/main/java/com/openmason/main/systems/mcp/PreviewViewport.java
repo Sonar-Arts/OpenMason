@@ -24,6 +24,26 @@ public interface PreviewViewport {
      */
     Map<String, Object> eyes(Boolean enabled, Float yaw, Float pitch, Float fov, Boolean armsFollowLook, boolean reset);
 
+    /**
+     * Holds {@code item} ("providerId:itemId" or a bare id; blank = empty hands) when {@code set}, else only reads;
+     * returns {item, label, socket, problem} plus {@code items} (every holdable "providerId:itemId") when
+     * {@code list}.
+     */
+    Map<String, Object> held(boolean set, String item, boolean list);
+
+    /** The held-item map shared by the implementations. */
+    static Map<String, Object> heldState(com.openmason.main.systems.animation.HeldItemPreview held, boolean list) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>(held.state());
+        if (list) {
+            java.util.List<String> ids = new java.util.ArrayList<>();
+            for (var p : held.providers()) {
+                for (var i : p.items()) ids.add(p.id() + ":" + i.id());
+            }
+            m.put("items", ids);
+        }
+        return m;
+    }
+
     /** The Eyes state map shared by the implementations. */
     static Map<String, Object> eyesState(boolean enabled, com.openmason.main.systems.animation.EyesView view,
                                          String problem) {

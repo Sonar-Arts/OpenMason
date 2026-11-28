@@ -34,6 +34,8 @@ final class AnimationViewport implements AutoCloseable {
     boolean eyes;
     final EyesView eyesView = new EyesView();
     private String eyesProblem;
+    /** The held item (a game's {@code HeldItemProvider}); set by the workspace, null = none. */
+    HeldItemPreview held;
 
     /** What the Eyes preview needs beside the shown pose. */
     record EyesInput(com.openmason.engine.rig.Rig rig, com.openmason.engine.character.CharacterDefinition character,
@@ -173,6 +175,10 @@ final class AnimationViewport implements AutoCloseable {
                     renderer.drawLit(gpu.mesh(), gpu.plan(), gpu, drawPalette, view, drawProjection,
                             ModelLighting.preview(view), null, appearance);
                 }
+                if (held != null && held.active()) {
+                    held.draw(geometry, eyesInput != null ? eyesInput.character() : null, drawPalette, view,
+                            drawProjection);
+                }
             }
             if (!firstPerson) {
                 glEnable(GL_BLEND);
@@ -246,6 +252,7 @@ final class AnimationViewport implements AutoCloseable {
     @Override
     public void close() {
         eyesView.close();
+        if (held != null) held.close();
         releaseTarget();
         if (gpu != null) gpu.close();
         gpu = null;

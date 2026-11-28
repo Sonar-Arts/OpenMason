@@ -59,6 +59,8 @@ public final class EditorRegistries {
             new Contributions<>("FX catalog source", com.openmason.api.fx.FxCatalogSource::id);
     private final Contributions<ViewportContentProvider> viewportContent =
             new Contributions<>("viewport content", ViewportContentProvider::id);
+    private final Contributions<com.openmason.api.viewport.HeldItemProvider> heldItems =
+            new Contributions<>("held item provider", com.openmason.api.viewport.HeldItemProvider::id);
     private final Contributions<ProjectTemplate> templates = new Contributions<>("project template", ProjectTemplate::getId);
     private final Contributions<GameTarget> gameTargets = new Contributions<>("game target", GameTarget::id);
     private final Contributions<ThemeDefinition> themes = new Contributions<>("theme", ThemeDefinition::getId);
@@ -163,6 +165,10 @@ public final class EditorRegistries {
 
     public Contributions<ViewportContentProvider> viewportContent() {
         return viewportContent;
+    }
+
+    public Contributions<com.openmason.api.viewport.HeldItemProvider> heldItems() {
+        return heldItems;
     }
 
     public Contributions<ProjectTemplate> templates() {
@@ -298,6 +304,11 @@ public final class EditorRegistries {
             @Override
             public Registrar<ViewportContentProvider> viewportContent() {
                 return viewportContent.registrar(owner);
+            }
+
+            @Override
+            public Registrar<com.openmason.api.viewport.HeldItemProvider> heldItems() {
+                return heldItems.registrar(owner);
             }
 
             @Override

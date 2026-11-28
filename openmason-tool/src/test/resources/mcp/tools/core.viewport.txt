@@ -5,3 +5,4 @@ viewport_camera_set
 viewport_capture
 viewport_eyes
 viewport_gizmo
+viewport_held

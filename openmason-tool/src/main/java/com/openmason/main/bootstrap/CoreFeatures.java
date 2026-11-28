@@ -305,6 +305,8 @@ public final class CoreFeatures {
             String path = omo != null ? omo : ms.getCurrentModelPath();
             return path == null || path.isBlank() ? null : Path.of(path);
         }).orElse(null));
+        editor.setHeldItemProviders(() -> services.find(com.openmason.main.plugins.EditorRegistries.class)
+                .map(r -> r.heldItems().all()).orElse(java.util.List.of()));
         services.publish(com.openmason.main.systems.animation.AnimationWorkspace.class, editor);
         context.workspaces().register(WorkspaceDescriptor.builder(BuiltinWorkspaces.ANIMATION, "Animation")
                 .description("Animation: author .omanim clips - layers, IK control rig, notifies, curves, retargeting")
@@ -439,6 +441,8 @@ public final class CoreFeatures {
         services.publish(com.openmason.main.systems.animgraph.AnimGraphSessions.class, sessions);
         com.openmason.main.systems.animgraph.AnimGraphWorkspace editor = new com.openmason.main.systems.animgraph.AnimGraphWorkspace(
                 services.require(FileDialogService.class), services.require(StatusService.class), workspaces, sessions);
+        editor.setHeldItemProviders(() -> services.find(com.openmason.main.plugins.EditorRegistries.class)
+                .map(r -> r.heldItems().all()).orElse(java.util.List.of()));
         services.publish(com.openmason.main.systems.animgraph.AnimGraphWorkspace.class, editor);
         context.workspaces().register(WorkspaceDescriptor.builder(BuiltinWorkspaces.ANIMGRAPH, "Animation Graph")
                 .description("Animation Graph: state machines, blend spaces and layers with a live preview and debugger")

@@ -53,35 +53,37 @@ public final class ViewportToolDefinitions {
                         + "use it to visually verify the model between edits. Downscaled so the longest "
                         + "side is max_size (default 1024, range 64-2048); the source resolution is "
                         + "capped by the on-screen viewport panel size. Aim the camera first with "
-                        + "viewport_camera_frame / viewport_camera_set. view: scene (default) or a tab preview - "
-                        + "animation (the Animation tab's clip) / animgraph (the Animation Graph preview), rendered "
-                        + "at capture time even when the tab is hidden (viewport_eyes switches those to first person).",
+                        + "viewport_camera_frame / viewport_camera_set. view: scene, animation or animgraph.",
                 captureSchema(),
                 args -> capture.capture(optInt(args, "max_size", ViewportCaptureService.DEFAULT_MAX_SIZE),
                         optString(args, "view"))));
 
         registry.register(new McpTool(
                 "viewport_eyes",
-                "The Eyes preview of a tab viewport (animation = the Animation tab, animgraph = the Animation Graph "
-                        + "preview): the character seen by itself in first person - camera on its eyes socket, the "
-                        + "engine first-person lens (own FOV, depth slab, pull), only the arm branches drawn; in the "
-                        + "graph tab its first-person view layers (their weight param driven to 1). yaw/pitch = the "
-                        + "look in degrees from the character's facing (+yaw left, +pitch up); arms_follow_look turns "
-                        + "the arms with the look (camera-attached, how a game anchors clips that key the torso at "
-                        + "rest; default on). Omitted fields keep their value; reset restores look 0/0, FOV 70. "
-                        + "View only (no undo). Not the Scene viewport's free-fly first-person camera. Check it with "
-                        + "viewport_capture {view}. Returns {enabled, yaw, pitch, fov, arms_follow_look, problem}.",
+                "First person from the character's eyes in a tab preview (arms only, engine lens). yaw +left, "
+                        + "pitch +up; omitted fields kept. View only; see viewport_capture {view}.",
                 McpSchema.of(mapper)
-                        .enumStr("view", "Which tab preview (required)", "animation", "animgraph")
-                        .bool("enabled", "Eyes on (true) or off (false)")
-                        .num("yaw", "Look yaw, degrees (+ = left)")
-                        .num("pitch", "Look pitch, degrees (+ = up, -89..89)")
-                        .num("fov", "First-person lens FOV, degrees (20-120, default 70)")
-                        .bool("arms_follow_look", "Arms turn with the look (default true)")
-                        .bool("reset", "Restore look 0/0, FOV 70, arms following first")
+                        .enumStr("view", "Tab preview", "animation", "animgraph")
+                        .bool("enabled", "On/off")
+                        .num("yaw", "Degrees")
+                        .num("pitch", "Degrees, -89..89")
+                        .num("fov", "20-120 (70)")
+                        .bool("arms_follow_look", "Default true")
                         .required("view")
                         .build(),
                 args -> eyes(args)));
+
+        registry.register(new McpTool(
+                "viewport_held",
+                "Item in the character's hand in a tab preview (Eyes view too), on its game grip. item: "
+                        + "\"provider:id\" or id, \"\" = empty; omitted = read. list:true adds every holdable id.",
+                McpSchema.of(mapper)
+                        .enumStr("view", "Tab preview", "animation", "animgraph")
+                        .str("item", "Item id")
+                        .bool("list", "Add items")
+                        .required("view")
+                        .build(),
+                args -> held(args)));
 
         registry.register(new McpTool(
                 "viewport_camera_get",
@@ -157,10 +159,29 @@ public final class ViewportToolDefinitions {
                         optBool(args, "uniform_scale"))));
     }
 
+    /** viewport_held on the GL thread. */
+    private Object held(JsonNode args) {
+        String name = optString(args, "view");
+        PreviewViewport preview = previews == null || name == null ? null : previews.apply(name);
+        if (preview == null) throw new IllegalArgumentException("view must be animation or animgraph");
+        boolean set = args.has("item");
+        String item = set && !args.get("item").isNull() ? args.get("item").asText() : null;
+        boolean list = Boolean.TRUE.equals(optBool(args, "list"));
+        try {
+            return com.openmason.main.systems.threading.MainThreadExecutor.submit(
+                    () -> preview.held(set, item, list)).get(10, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException e) {
+            if (e.getCause() instanceof RuntimeException re) throw re;
+            throw new RuntimeException(e.getCause());
+        } catch (Exception e) {
+            throw new RuntimeException("viewport_held: " + e.getMessage(), e);
+        }
+    }
+
     private JsonNode captureSchema() {
         return McpSchema.of(mapper)
                 .intg("max_size", "Longest-side pixel cap, 64-2048 (default 1024)")
-                .enumStr("view", "What to capture (default scene)", "scene", "animation", "animgraph")
+                .enumStr("view", "Default scene", "scene", "animation", "animgraph")
                 .build();
     }
 
